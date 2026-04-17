@@ -96,6 +96,23 @@ interface Props {
 	leftTitle?: string;
 	/** 左栏描述段落 */
 	leftDescription?: string;
+	/**
+	 * 是否在左栏默认显示 LabMark 视觉装置(ASCII 几何矩阵 + 宣言)
+	 * ----------------------------------------------------------------------
+	 * 设计决策(2026-04):
+	 *   - 最初 LabMark 作为 `left-visual` slot 的 fallback,所有页面未自定义
+	 *     时都会显示。但实际品牌诉求是:LabMark 是"实验室主视觉宣言装置",
+	 *     只应在首页出现,作为品牌入口;其它页面(项目/AUR/博客/关于)应
+	 *     聚焦该页自身的 meta 信息,不重复品牌装置。
+	 *   - 因此改为显式 opt-in:默认 false,首页显式传 showLabMark={true},
+	 *     其它页面(或传入自定义 `left-visual` slot)则不显示。
+	 *
+	 * 优先级:
+	 *   1. 如果页面传了 `left-visual` slot → 用页面自定义内容(最高优先级)
+	 *   2. 如果未传且 showLabMark=true → 渲染 <LabMark />
+	 *   3. 其它情况 → 左栏不渲染任何视觉装置(md 以上的空间让给正文)
+	 */
+	showLabMark?: boolean;
 
 	// ---------- 杂项 ----------
 	/** 右栏主内容容器是否启用默认左右内边距(默认 true;完全自定义布局可设为 false) */
@@ -122,6 +139,7 @@ const {
 	eyebrowIcon,
 	leftTitle,
 	leftDescription,
+	showLabMark = false,
 
 	padded = true,
 	maxContentWidth,
@@ -136,6 +154,8 @@ const htmlLang = languageTags[lang];
 const hasCustomLeft = Astro.slots.has("left");
 // 检测左栏内部各 slot
 const hasLeftMeta = Astro.slots.has("left-meta");
+// 是否由页面层自定义了 left-visual slot(覆盖默认装置)
+const hasLeftVisual = Astro.slots.has("left-visual");
 // ----------------------------------------------------------------------------
 // 注意:不再使用 `Astro.slots.has()` + `{flag && <Fragment slot="xxx">...}` 的
 // 条件透传模式。原因:当 flag=false 时,表达式返回 false 会被 Astro 作为
@@ -204,11 +224,26 @@ const hasLeftMeta = Astro.slots.has("left-meta");
 						 * 这样页面只需选择性地传入 left-visual,未传则自动显示 LabMark,
 						 * 完全避免了 Astro.slots.has() 的 false 值污染问题。
 						 */}
-						<Fragment slot="visual">
-							<slot name="left-visual">
+						{/*
+						 * 视觉装置槽位(重构后):
+						 *   - 页面传了 left-visual slot → 透传页面自定义内容
+						 *   - 未传 + showLabMark=true(如首页)→ 渲染默认 LabMark
+						 *   - 未传 + showLabMark=false(默认)→ 不渲染任何内容,
+						 *     LeftPane 的 visual slot 为空,md+ 的装置区自然折叠
+						 *
+						 * 注意:只有在 visual slot 被"实际填充"时才给 LeftPane
+						 * 传内容。如果两个条件都不满足,完全不写 slot="visual",
+						 * 避免 Astro 把空 Fragment 当作"已填充"导致空白块占位。
+						 */}
+						{hasLeftVisual ? (
+							<Fragment slot="visual">
+								<slot name="left-visual" />
+							</Fragment>
+						) : showLabMark ? (
+							<Fragment slot="visual">
 								<LabMark />
-							</slot>
-						</Fragment>
+							</Fragment>
+						) : null}
 						<slot name="left-actions" slot="actions" />
 						<slot name="left-social" slot="social" />
 						<slot name="left-meta" slot="meta" />

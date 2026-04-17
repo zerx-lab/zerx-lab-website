@@ -1,0 +1,243 @@
+---
+/**
+ * ============================================================================
+ * BlogCategoryTabs - 博客分类快速切换条
+ * ----------------------------------------------------------------------------
+ * 交互:
+ *   - 一排横向"标签"(ALL / 工程 / 发布 / 笔记 / 关于),点击跳转 URL
+ *   - 激活项:字色加深 + 虚线下划线
+ *   - 每个标签右上角显示该分类的文章数(小数字,mono 风格)
+ *
+ * 架构选择:
+ *   - 纯 <a> 链接,无 JS:SSR 直出,middleware 缓存语义与搜索/分页一致
+ *   - URL 约定:?cat=<slug>,第 1 个分类(ALL)不带 cat 参数,保持 URL 干净
+ *   - 切换分类会清空 ?page(从第 1 页开始),保留 ?q(搜索词跨分类有效)
+ *
+ * 视觉约束:
+ *   - 继承 SectionHeader 下方的节奏:11px mono-label + 虚线
+ *   - 标签之间用 "·" 分隔(编辑派风格,避免引入 border/按钮感)
+ *   - 小屏(<sm)下允许横向滚动,不换行,保证主体列表位置稳定
+ *
+ * 数据:
+ *   - categories:静态类目列表(调用方传入,通常来自 FALLBACK_CATEGORIES)
+ *   - counts:每个 slug 的文章数,"__all__" 键保留给 "ALL" 计数
+ *     若某 slug 未给 count,隐藏数字(不渲染 0,也不渲染 "—")
+ * ============================================================================
+ */
+
+import { getLangFromUrl } from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+
+/**
+ * 分类展示形态:slug + 已本地化的 name。
+ * 不直接依赖 FallbackCategory —— 上游可以传 Directus 真实分类(经 listCategories 展平)
+ * 或 FALLBACK_CATEGORIES 的降级数据,本组件只关心最小渲染所需字段。
+ */
+export interface CategoryTabItem {
+	readonly slug: string;
+	readonly name: string;
+}
+
+interface Props {
+	/** 列表页路径(已做 lang 前缀处理,例如 "/blog" 或 "/en/blog") */
+	listPath: string;
+	/** 分类列表(顺序即展示顺序,已按 lang 解包 name) */
+	categories: readonly CategoryTabItem[];
+	/** 当前激活的分类 slug;空串 / "all" 视为 ALL */
+	activeSlug: string;
+	/**
+	 * 每分类文章数。key = category.slug;"ALL" 计数用特殊键 "__all__"。
+	 * 未提供某 slug → 不显示数字(分类存在但可能聚合查询失败)。
+	 */
+	counts?: Readonly<Record<string, number>> | undefined;
+	/**
+	 * 当前搜索词(来自 URL ?q=)。切换分类时保留,不会丢失用户正在进行的搜索。
+	 * 空串表示没有搜索。
+	 */
+	currentQuery?: string;
+	/** 额外类名 */
+	class?: string;
+}
+
+const {
+	listPath,
+	categories,
+	activeSlug,
+	counts,
+	currentQuery = "",
+	class: className = "",
+} = Astro.props;
+
+const lang = getLangFromUrl(Astro.url) as Lang;
+
+/* ----------------------------------------------------------------------------
+ * 文案(本组件专属,未进 i18n 字典)
+ * -------------------------------------------------------------------------- */
+const COPY = {
+	zh: {
+		all: "全部",
+		eyebrow: "分类",
+		ariaLabel: "按分类筛选文章",
+	},
+	en: {
+		all: "All",
+		eyebrow: "Categories",
+		ariaLabel: "Filter posts by category",
+	},
+} as const;
+const C = COPY[lang] ?? COPY.zh;
+
+/* ----------------------------------------------------------------------------
+ * URL 构造
+ * ----------------------------------------------------------------------------
+ * 规则:
+ *   - ALL → listPath [+ ?q=xxx]
+ *   - 某分类 → listPath?cat=<slug> [&q=xxx]
+ *   - 切换分类一律不带 page(回到第 1 页)
+ *
+ * 用 URLSearchParams 统一构造,避免手拼 &/? 出错。
+ * -------------------------------------------------------------------------- */
+function buildHref(slug: string): string {
+	const params = new URLSearchParams();
+	if (slug && slug !== "all") params.set("cat", slug);
+	if (currentQuery) params.set("q", currentQuery);
+	const qs = params.toString();
+	return qs ? `${listPath}?${qs}` : listPath;
+}
+
+/* ----------------------------------------------------------------------------
+ * 归一化激活态
+ * ----------------------------------------------------------------------------
+ * 上游传入的 activeSlug 可能是 "" / "all" / 实际 slug,这里一次性转成
+ * "" 表示 ALL,其余保留。
+ * -------------------------------------------------------------------------- */
+const normalizedActive =
+	!activeSlug || activeSlug.toLowerCase() === "all"
+		? ""
+		: activeSlug.toLowerCase();
+
+/* ----------------------------------------------------------------------------
+ * 渲染用的标签列表(ALL + 所有分类)
+ * -------------------------------------------------------------------------- */
+interface TabItem {
+	readonly slug: string; // "" 表示 ALL
+	readonly label: string;
+	readonly count: number | null;
+	readonly href: string;
+	readonly active: boolean;
+}
+
+const ALL_KEY = "__all__";
+
+const items: readonly TabItem[] = [
+	{
+		slug: "",
+		label: C.all,
+		count: counts && ALL_KEY in counts ? counts[ALL_KEY]! : null,
+		href: buildHref(""),
+		active: normalizedActive === "",
+	},
+	...categories.map((cat: CategoryTabItem): TabItem => ({
+		slug: cat.slug,
+		label: cat.name,
+		count: counts && cat.slug in counts ? counts[cat.slug]! : null,
+		href: buildHref(cat.slug),
+		active: normalizedActive === cat.slug,
+	})),
+];
+---
+
+<nav
+	aria-label={C.ariaLabel}
+	class:list={[
+		"blog-category-tabs",
+		// 横向滚动:无论在顶行 flex 容器中(flex-1 min-w-0)还是独立使用,
+		// 超出宽度时都走横向滚动,绝不换行、绝不挤压兄弟元素
+		"min-w-0 overflow-x-auto",
+		className,
+	]}
+>
+	<ul
+		class:list={[
+			"flex items-center",
+			"gap-x-3 sm:gap-x-4",
+			// 不换行,超出则横向滚动
+			"flex-nowrap whitespace-nowrap",
+			"font-[var(--font-mono)]",
+			"text-[11px] sm:text-[11.5px]",
+			"leading-none",
+			"tracking-[var(--tracking-wide)]",
+		]}
+	>
+		{
+			items.map((item, idx) => (
+				<li class="flex items-center gap-x-3 sm:gap-x-4">
+					{idx > 0 && (
+						<span
+							aria-hidden="true"
+							class="text-[color:var(--color-ink-muted)] select-none"
+						>
+							·
+						</span>
+					)}
+					<a
+						href={item.href}
+						aria-current={item.active ? "page" : undefined}
+						class:list={[
+							"inline-flex items-baseline gap-1.5",
+							"py-1",
+							"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							item.active
+								? [
+										"text-[color:var(--color-ink-primary)]",
+										"underline decoration-dashed underline-offset-[6px]",
+										"decoration-[color:var(--color-ink-primary)]",
+									]
+								: [
+										"text-[color:var(--color-ink-tertiary)]",
+										"hover:text-[color:var(--color-ink-primary)]",
+										"hover:underline hover:decoration-dashed hover:underline-offset-[6px]",
+										"hover:decoration-[color:var(--color-hairline-strong)]",
+									],
+						]}
+					>
+						<span class="uppercase">{item.label}</span>
+						{item.count !== null && (
+							<span
+								aria-hidden="true"
+								class:list={[
+									"text-[10px]",
+									"text-[color:var(--color-ink-muted)]",
+									"tabular-nums",
+								]}
+							>
+								{item.count}
+							</span>
+						)}
+					</a>
+				</li>
+			))
+		}
+	</ul>
+</nav>
+
+<style>
+	/* 隐藏横向滚动条(编辑派风格,不做可见滚动条) */
+	.blog-category-tabs {
+		scrollbar-width: none;
+		/* 渐变蒙版:两端 8px 内透明度由 0 → 1,暗示"此处内容可横向滚动"。
+		   仅当内容超出时蒙版才视觉可见(内容不溢出时,两端本来就是纯背景色)。
+		   注意:mask-image 是 CSS 标准属性,Safari 12+ / Chrome 120+ / FF 53+ 都已原生支持,
+		   本项目无需 -webkit- 前缀兜底(package.json 里 browserslist 未列老浏览器)。 */
+		mask-image: linear-gradient(
+			to right,
+			transparent 0,
+			#000 8px,
+			#000 calc(100% - 8px),
+			transparent 100%
+		);
+	}
+	.blog-category-tabs::-webkit-scrollbar {
+		display: none;
+	}
+</style>

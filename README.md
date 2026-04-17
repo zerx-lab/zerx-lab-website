@@ -114,7 +114,7 @@ bun dev            # http://localhost:4321
 | `DIRECTUS_READ_TOKEN`     | 运行时读数据用的受限 token                 | ✅            |
 | `SITE_URL`                | 站点 canonical 域名（RSS/sitemap 绝对 URL） | ✅（默认 `https://zerx.dev`） |
 | `DIRECTUS_ADMIN_TOKEN`    | 仅 `bootstrap` / `seed` / `typegen` 需要   | 脚本场景      |
-| `DIRECTUS_AI_WRITER_TOKEN`| bootstrap 每次轮换生成，供 MCP 写作身份用  | 自动产出      |
+| `DIRECTUS_AI_WRITER_TOKEN`| bootstrap 每次轮换生成，供 MCP 写作身份 + 每日资讯 workflow 发布用 | 自动产出 |
 | `HOST` / `PORT`           | Node 监听地址（镜像默认 `0.0.0.0:4321`）   | 可选          |
 
 ---
@@ -157,6 +157,58 @@ docker compose down
 
 - **Reader 角色**：只读，绑定 `DIRECTUS_READ_TOKEN`，给前端 SSR 使用
 - **AI Blog Writer 角色**：受限写权限（仅 `posts` / `posts_translations`），绑定专用用户与 token，配套 system prompt 通过 MCP 供 AI 写作
+
+---
+
+## 每日技术资讯自动发布（MCP 直发）
+
+仓库内置一条 GitHub Actions 工作流 `.github/workflows/daily-tech-news.yml`，每天北京时间 07:00（UTC 23:00）自动运行。Claude Code 通过 **Directus MCP 一步到位** 搜集全球技术资讯并直接发布到 Directus，全程不经任何中转文件或脚本。
+
+**流程：**
+
+1. Claude Code Action 加载 `.claude/skills/daily-tech-news/SKILL.md` 技能
+2. **Phase 0**：通过 `mcp__directus__items` 查近 7 天已发文章建立去重基线，查出 `ai` 作者 / `news` 分类 / tags 的 id
+3. **Phase 1-4**：WebSearch + WebFetch 多源搜集 → 交叉验证 → 重要性评分 → Top 3 深度分析 → 双语正文撰写
+4. **Phase 5**：`mcp__directus__items` 一次性 `create`（带嵌套 translations + tags）或 `update` 已有文章到 `posts` 集合，`status=published`
+
+**身份与权限：**
+
+- Directus MCP 用 `DIRECTUS_AI_WRITER_TOKEN` 鉴权（走 AI Writer policy）
+- `bootstrap-directus.ts` 已放宽该 policy：允许 posts 任意 status，允许 create 新 author / category / tag（不能修改/删除已有），仍禁止 delete 与其它集合的写入
+- Directus `settings.mcp_system_prompt` 写入了软约束：交互式 MCP 对话用 `draft`，自动化脚本调度（本 workflow）用 `published`
+- 固定作者 `slug=ai`，固定分类 `slug=news`，均由 `seed-directus.ts` 预置
+
+**GitHub Secrets（仓库需配置）：**
+
+| Secret                      | 说明                                       |
+| :-------------------------- | :----------------------------------------- |
+| `CLAUDE_CODE_OAUTH_TOKEN`   | Claude Code Action 授权（本地 `claude setup-token` 生成） |
+| `DIRECTUS_URL`              | Directus 实例地址（如 `https://directus.zerx.dev`） |
+| `DIRECTUS_AI_WRITER_TOKEN`  | 与本地 `.env` 同名的 token，Directus MCP 鉴权用 |
+
+**首次启用前需跑一次：**
+
+```sh
+bun bootstrap    # 同步放宽后的 AI Writer policy + 更新 system prompt
+bun seed         # 预置 ai 作者、news 分类、daily-news 等新 tags
+```
+
+**手动触发 / 指定日期：**
+
+在 GitHub Actions 页面点 "Run workflow"，可选填 `date` 参数（`YYYY-MM-DD`），留空则用北京时间昨天。Claude 最终会输出 `PUBLISHED: daily-tech-news-YYYY-MM-DD` 作为成功标志，发布后前端立即可访问 `https://zerx.dev/blog/daily-tech-news-YYYY-MM-DD`。
+
+**MCP endpoint 验证：**
+
+```sh
+# 握手测试(需把 <TOKEN> 替换为 DIRECTUS_AI_WRITER_TOKEN)
+curl -X POST https://directus.zerx.dev/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+```
+
+返回 `serverInfo.name === "directus-mcp"` 即表示 MCP 可用。
 
 ---
 

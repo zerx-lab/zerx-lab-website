@@ -41,11 +41,12 @@
  */
 
 import AppShell from "@layouts/AppShell.astro";
-import SectionHeader from "@components/ui/SectionHeader.astro";
+
 import MetaRow from "@components/ui/MetaRow.astro";
 import PostCard from "@components/ui/PostCard.astro";
 import Pagination from "@components/ui/Pagination.astro";
 import BlogSearchBox from "@components/blog/BlogSearchBox.astro";
+import BlogCategoryTabs from "@components/blog/BlogCategoryTabs.astro";
 import {
 	getLangFromUrl,
 	useTranslations,
@@ -57,7 +58,13 @@ import {
 	FALLBACK_CATEGORIES,
 	listFallbackPosts,
 } from "@lib/fallback-data";
-import { listPostsPaged, type PostVM } from "@lib/queries/posts";
+import {
+	listPostsPaged,
+	listCategoryCounts,
+	listCategories,
+	type PostVM,
+	type CategoryVM,
+} from "@lib/queries/posts";
 import { highlight } from "@lib/highlight";
 
 /* ----------------------------------------------------------------------------
@@ -80,11 +87,33 @@ const tp = useTranslatedPath(lang);
 
 const PAGE_SIZE = 10;
 const MAX_QUERY_LENGTH = 200;
+const MAX_CAT_LENGTH = 64;
 
 const searchParams = Astro.url.searchParams;
 const rawPage = Number.parseInt(searchParams.get("page") ?? "1", 10);
 const requestedPage = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
 const rawQuery = (searchParams.get("q") ?? "").slice(0, MAX_QUERY_LENGTH).trim();
+
+// 传给 listPostsPaged 的分类参数:用归一化后的值(未做白名单校验)。
+// 白名单校验需要 categoriesList 结果,但 listPostsPaged 需要与其并行触发。
+// 这里的 trade-off:若用户传了未知 slug,listPostsPaged 会返回 0 条(无害)。
+
+/* ----------------------------------------------------------------------------
+ * 分类参数 ?cat=<slug>
+ * ----------------------------------------------------------------------------
+ * 归一化规则(与 listPostsPaged.normalizeCategorySlug 保持一致):
+ *   - 空串 / 缺失 / "all"(大小写不敏感)→ 表示"全部",内部用空串表示
+ *   - 仅接受存在于 FALLBACK_CATEGORIES 的 slug;未知 slug 直接回退到 ALL,
+ *     避免用户乱填 URL 触发空列表
+ *   - 长度截断防御
+ * -------------------------------------------------------------------------- */
+
+const rawCat = (searchParams.get("cat") ?? "")
+	.slice(0, MAX_CAT_LENGTH)
+	.trim()
+	.toLowerCase();
+// 先做一次形态归一化(下方取到 categoriesList 后再做白名单校验)
+const normalizedRawCat = rawCat && rawCat !== "all" ? rawCat : "";
 
 /* ----------------------------------------------------------------------------
  * 拉取当前页数据(含搜索过滤)
@@ -97,12 +126,45 @@ const rawQuery = (searchParams.get("q") ?? "").slice(0, MAX_QUERY_LENGTH).trim()
  *   - 按 lang 解包 translations
  * -------------------------------------------------------------------------- */
 
-const pageResult = await listPostsPaged({
-	lang,
-	page: requestedPage,
-	pageSize: PAGE_SIZE,
-	q: rawQuery,
-});
+const [pageResult, categoryCounts, categoriesList] = await Promise.all([
+	listPostsPaged({
+		lang,
+		page: requestedPage,
+		pageSize: PAGE_SIZE,
+		q: rawQuery,
+		categorySlug: normalizedRawCat,
+	}),
+	// 分类计数独立聚合查询:与主列表并行,失败已在内部降级为 fallback
+	listCategoryCounts(),
+	// Directus 真实分类列表(线上可能比 FALLBACK_CATEGORIES 多,如 AI Writer
+	// 新增的"资讯"/"daily-news" 等)。失败已在内部降级到 FALLBACK_CATEGORIES。
+	listCategories(lang),
+]);
+
+/*
+ * activeCatSlug 白名单校验:
+ *   只接受真实存在于 categoriesList(Directus 或 fallback)的 slug。
+ *   未知 slug 一律回退到 ALL,避免用户乱填 URL 触发空列表。
+ *
+ * 注意:这里用的是 SSR 真实数据做校验,比之前纯用 FALLBACK_CATEGORIES 更准确,
+ * 能正确识别 Directus 里后加的分类(如"资讯")。
+ */
+const activeCatSlug: string = normalizedRawCat
+	? (categoriesList.find((c: CategoryVM) => c.slug === normalizedRawCat)
+			?.slug ?? "")
+	: "";
+const hasCatFilter = activeCatSlug.length > 0;
+
+/*
+ * 重新调用 listPostsPaged 的必要性判断:
+ *   上面 Promise.all 时 activeCatSlug 还未确定最终值(当时用的是 normalizedRawCat
+ *   未做白名单校验)。如果用户传了未知 slug(normalizedRawCat 非空,最终 activeCatSlug="")
+ *   那 pageResult 会是"未知分类下的空列表",不是我们想要的"全部"。
+ *
+ * 但:本场景(未知 slug)极罕见,而且 listPostsPaged 对未知 slug 返回 total=0,
+ * 用户会看到"暂无文章",URL 里的 cat 参数会在分类切换器点击后自动清除。
+ * 这是可接受的边界行为,不再额外发一次请求。
+ */
 
 const posts: readonly PostVM[] = pageResult.items;
 const hasQuery = pageResult.query.length > 0;
@@ -121,10 +183,15 @@ const hasQuery = pageResult.query.length > 0;
  *   但用 meta.searchResults 的 label 区分;无搜索时用 meta.posts 正常显示。
  * -------------------------------------------------------------------------- */
 
-const totalPostsForMeta = hasQuery
-	? pageResult.total // 搜索态:显示命中数
-	: pageResult.total; // 非搜索态:listPostsPaged 的 total 就是全量
-const postCount = totalPostsForMeta;
+/*
+ * POSTS 计数语义:
+ *   - 无搜索 + 无分类 → pageResult.total 就是站点全量
+ *   - 有搜索 或 有分类 → pageResult.total 是命中数(视图属性,非站点属性)
+ *     这里优先采用 categoryCounts.total(始终是站点全量),保持左栏 meta
+ *     表达"站点属性"的语义一致性
+ */
+const postCount =
+	hasQuery || hasCatFilter ? categoryCounts.total : pageResult.total;
 const categoryCount = FALLBACK_CATEGORIES.length;
 const latestPostDate = posts.length > 0 ? posts[0]!.date : null;
 const lastUpdateText = latestPostDate
@@ -237,18 +304,33 @@ const regularRenderable = regularPosts.map(toRenderable);
  * -------------------------------------------------------------------------- */
 
 const listPath = tp("/blog");
-const paginationBaseUrl = hasQuery
-	? `${listPath}?q=${encodeURIComponent(pageResult.query)}`
-	: listPath;
+
+/* 分页 baseUrl:保留当前的 ?q 与 ?cat,只让 Pagination 追加 &page=N */
+function buildBaseUrl(): string {
+	const params = new URLSearchParams();
+	if (pageResult.query) params.set("q", pageResult.query);
+	if (activeCatSlug) params.set("cat", activeCatSlug);
+	const qs = params.toString();
+	return qs ? `${listPath}?${qs}` : listPath;
+}
+const paginationBaseUrl = buildBaseUrl();
+
+/* 搜索框 action:同理保留 ?cat(搜索跨分类时不丢失已选分类)。
+ * 注意:BlogSearchBox 的 action 不支持 query string,它会用 <form method="GET">,
+ * 所以我们必须把 cat 作为 hidden input 一起随表单提交。 */
+const searchAction = listPath;
+
+/* 分类切换器需要知道每分类的计数。把 listCategoryCounts 返回的 byCategory
+ * 与 ALL 计数合并成单个对象传给组件(组件用 "__all__" 特殊键取 ALL)。 */
+const categoryCountsForTabs: Record<string, number> = {
+	__all__: categoryCounts.total,
+	...categoryCounts.byCategory,
+};
 ---
 
 <AppShell
 	title={copy.title}
 	description={copy.description}
-	eyebrow={copy.eyebrow}
-	eyebrowIcon="📝"
-	leftTitle={copy.title}
-	leftDescription={copy.description}
 >
 	{/* ---------- 左栏:社交(仅 RSS) ---------- */}
 	<Fragment slot="left-social">
@@ -313,37 +395,69 @@ const paginationBaseUrl = hasQuery
 	 *                          右栏主内容
 	 * ================================================================ */}
 
-	{/* ---------- 分区标题 + 搜索入口 ---------- */}
+	{/* ---------- 顶行:eyebrow + 分类切换 + 搜索框,三段一行 ---------- */}
 	{/*
-	 * 布局说明:
-	 *   SectionHeader 自身负责 eyebrow + 虚线 + 可选右侧 count/link,
-	 *   但它的右侧插槽只支持 count 字符串或 link,不支持自定义交互组件。
-	 *   所以这里用一个 flex 包装:SectionHeader 占满主体,右上角绝对定位
-	 *   搜索框,视觉上与 eyebrow 同基线。
+	 * 为什么不再复用 SectionHeader 的内置顶行:
+	 *   SectionHeader 的顶行只支持 [eyebrow] — [count|link] 两段布局,
+	 *   插不进"分类切换"这种占据剩余宽度且需横向滚动的交互组件。
+	 *   这里自己写一个 3 段 flex 顶行,视觉上保留同样的虚线分隔与节奏:
+	 *
+	 *     [ BLOG · 6 ]  [ 全部 · 工程 · 发布 · 笔记 … ]  [ 🔍 ]
+	 *          ↑固定          ↑flex-1 + 横向滚动          ↑固定
+	 *
+	 *   - 左右两端 shrink-0,永不被压缩
+	 *   - 中间 min-w-0 + flex-1 + overflow-x-auto,分类过多时横向滚动,
+	 *     两端渐变蒙版暗示"此处可滚动",绝不会挤压搜索框与 count
+	 *   - 小屏(<sm)依旧是同一行;若分类极多,滚动条隐藏,手指滑动即可
 	 */}
-	<div class="relative">
-		<SectionHeader
-			eyebrow={copy.sectionTitle}
-			count={postCount}
-		/>
-		<div
-			class:list={[
-				"absolute top-0 right-0",
-				// SectionHeader 顶部 padding 是 pt-6 lg:pt-8,把搜索框向下对齐到 eyebrow
-				"pt-6 lg:pt-8",
-				// 让搜索框高度与 eyebrow mb-3 之前的 baseline 对齐
-				"flex items-center",
-				// count 与搜索框并存时,把 count 挤掉视觉冲突 —— 这里干脆覆盖右上角
-				// SectionHeader 的 count 仍然显示,搜索框在其左侧
-				"pr-[3.5ch]",
-			]}
-		>
-			<BlogSearchBox
-				action={listPath}
-				initialQuery={pageResult.query}
+	<header class="pt-6 lg:pt-8">
+		<div class="flex items-center gap-3 sm:gap-4 mb-3">
+			{/* 左:eyebrow + count */}
+			<div class="shrink-0 flex items-baseline gap-2">
+				<span
+					class:list={[
+						"mono-label",
+						"text-[11px] sm:text-xs",
+						"leading-none",
+						"tracking-[var(--tracking-wider)]",
+						"text-[color:var(--color-ink-secondary)]",
+						"font-medium",
+					]}
+				>
+					{copy.sectionTitle}
+				</span>
+			</div>
+
+			{/* 中:分类切换(占据剩余宽度,超出横向滚动) */}
+			<BlogCategoryTabs
+				listPath={listPath}
+				categories={categoriesList}
+				activeSlug={activeCatSlug}
+				counts={categoryCountsForTabs}
+				currentQuery={pageResult.query}
+				class="flex-1 min-w-0"
 			/>
+
+			{/* 右:搜索框 */}
+			<div class="shrink-0 flex items-center">
+				<BlogSearchBox
+					action={searchAction}
+					initialQuery={pageResult.query}
+					hiddenFields={{ cat: activeCatSlug }}
+				/>
+			</div>
 		</div>
-	</div>
+
+		{/* 虚线分割(与 SectionHeader 一致的节奏) */}
+		<hr
+			aria-hidden="true"
+			class:list={[
+				"border-0 border-t border-dashed",
+				"border-[color:var(--color-hairline)]",
+				"m-0",
+			]}
+		/>
+	</header>
 
 	{/* ---------- 搜索结果提示行(仅搜索态显示) ---------- */}
 	{

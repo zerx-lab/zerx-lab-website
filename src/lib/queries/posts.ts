@@ -37,6 +37,7 @@ import {
 	findCategory,
 	findTag,
 	pickLang,
+	FALLBACK_CATEGORIES,
 	type FallbackPost,
 } from "@/lib/fallback-data";
 import type { Lang } from "@/i18n/ui";
@@ -618,6 +619,11 @@ export interface PostsPageParams {
 	pageSize?: number;
 	/** 搜索关键词,未传或全空白视为"不搜索" */
 	q?: string;
+	/**
+	 * 分类 slug 过滤。空串 / undefined / "all" 视为"不过滤"。
+	 * 未知 slug 会导致返回空列表(页面层据此展示"无结果")。
+	 */
+	categorySlug?: string;
 }
 
 /** clamp 到 [min, max] 闭区间;NaN → min */
@@ -680,28 +686,41 @@ function fallbackSearch(
 	});
 }
 
+/**
+ * 归一化分类参数:空串 / "all" / 全空白 → 空串("不过滤")。
+ * 其它值原样返回(调用方自己保证合法性,未知 slug 自然会查不到结果)。
+ */
+function normalizeCategorySlug(v: string | undefined | null): string {
+	const s = (v ?? "").trim().toLowerCase();
+	if (s === "" || s === "all") return "";
+	return s;
+}
+
 export async function listPostsPaged(
 	params: PostsPageParams,
 ): Promise<PostsPageResult> {
 	const { lang } = params;
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? 10));
 	const q = (params.q ?? "").trim();
+	const categorySlug = normalizeCategorySlug(params.categorySlug);
 	const langCode = langToDirectusCode(lang);
 
 	// 1. Directus(首选)
 	try {
 		const client = directus();
 
-		// 组合 filter:status = published [+ 搜索条件]
+		// 组合 filter:status = published [+ 搜索条件] [+ 分类条件]
+		// 三个条件均可选,按需 push 到 _and 列表。任一条件存在就走 _and 包装,
+		// 三者都没有则退化为单条 status 过滤,保持 Directus query 精简。
+		const andClauses: any[] = [{ status: { _eq: "published" } }];
+		if (q.length > 0) {
+			andClauses.push(buildSearchFilter(q, langCode));
+		}
+		if (categorySlug) {
+			andClauses.push({ category: { slug: { _eq: categorySlug } } });
+		}
 		const filter: any =
-			q.length > 0
-				? {
-						_and: [
-							{ status: { _eq: "published" } },
-							buildSearchFilter(q, langCode),
-						],
-					}
-				: { status: { _eq: "published" } };
+			andClauses.length === 1 ? andClauses[0] : { _and: andClauses };
 
 		// Directus 要求显式声明 `meta: "filter_count"` 才会返回总数
 		// (否则 response 只有 data,不含 meta)
@@ -769,9 +788,12 @@ export async function listPostsPaged(
 		);
 	}
 
-	// 2. Fallback(内存分页 + 内存搜索)
+	// 2. Fallback(内存分页 + 内存搜索 + 内存分类过滤)
 	const allFb = listFallbackPosts();
-	const filteredFb = fallbackSearch(allFb, q, lang);
+	const byCat = categorySlug
+		? allFb.filter((p) => p.categorySlug === categorySlug)
+		: allFb;
+	const filteredFb = fallbackSearch(byCat, q, lang);
 	// fallback 也保持按 date 倒序(FALLBACK_POSTS 已经是此顺序,但保险再排)
 	const sortedFb = [...filteredFb].sort(
 		(a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
@@ -792,6 +814,168 @@ export async function listPostsPaged(
 		totalPages,
 		query: q,
 	};
+}
+
+/* ============================================================================
+ * 5. listCategoryCounts() — 分类切换器用
+ * ----------------------------------------------------------------------------
+ * 返回 { [categorySlug]: 已发布文章数 } + 全部已发布总数。
+ *
+ * 实现:
+ *   Directus 路径用 aggregate: readItems("posts", { groupBy: ["category.slug"],
+ *   aggregate: { count: "id" }, filter: status=published })。
+ *   失败时退回 fallback-data 内存聚合。
+ *
+ * 语义:
+ *   - 计数只看 status = published,不受当前语言 / 搜索词影响
+ *   - 返回对象里没有的 slug 视为"该分类 0 篇"
+ *   - total 是"全部文章数",用于 "ALL" 标签的计数
+ * ============================================================================ */
+
+export interface CategoryCounts {
+	/** 每个分类的文章数,key 是 category.slug */
+	readonly byCategory: Readonly<Record<string, number>>;
+	/** 全部已发布文章数(等同于 "ALL" 的计数) */
+	readonly total: number;
+}
+
+export async function listCategoryCounts(): Promise<CategoryCounts> {
+	// 1. Directus(首选)
+	//
+	// 实测发现:Directus 对 `groupBy: ["category.slug"]` 这种 dotted 关联路径
+	// 直接返回 500 INTERNAL_SERVER_ERROR,只有 `groupBy: ["category"]`(外键 id)
+	// 能正常聚合。所以这里拆成两次请求:
+	//   (a) posts 按 category 外键 id 聚合 → { categoryId: count }
+	//   (b) categories [id, slug] 做 id → slug 映射
+	// 两次请求并行,再在内存里合并。
+	//
+	// category = null 的行(文章未选分类)不归入任何具体分类的 byCategory,
+	// 但要计入 total(代表"全部已发布文章数")。
+	try {
+		const client = directus();
+		const [aggRows, catRows] = await Promise.all([
+			client.request(
+				readItems("posts", {
+					filter: { status: { _eq: "published" } },
+					groupBy: ["category"] as any,
+					aggregate: { count: "id" } as any,
+					limit: -1,
+				} as any),
+			) as Promise<any[]>,
+			client.request(
+				readItems("categories", {
+					fields: ["id", "slug"] as any,
+					limit: -1,
+				}),
+			) as Promise<any[]>,
+		]);
+
+		// id → slug 映射(兼容 id 为数字或字符串两种形态)
+		const idToSlug = new Map<string, string>();
+		for (const c of catRows ?? []) {
+			if (c?.id != null && typeof c?.slug === "string" && c.slug) {
+				idToSlug.set(String(c.id), c.slug);
+			}
+		}
+
+		const byCategory: Record<string, number> = {};
+		let total = 0;
+		for (const row of aggRows ?? []) {
+			// 聚合返回:{ category: <id|null>, count: { id: "<n>" } }
+			const catId = row?.category;
+			const raw = row?.count?.id ?? row?.count ?? 0;
+			const n = Number(raw) || 0;
+			total += n;
+			if (catId == null) continue; // 未分类:只累加 total,不进 byCategory
+			const slug = idToSlug.get(String(catId));
+			if (slug) {
+				byCategory[slug] = (byCategory[slug] ?? 0) + n;
+			}
+		}
+		return { byCategory, total };
+	} catch (err) {
+		console.warn(
+			"[posts] listCategoryCounts Directus 读取失败,降级到 fallback:",
+			(err as Error)?.message ?? err,
+		);
+	}
+
+	// 2. Fallback(内存聚合)
+	const allFb = listFallbackPosts();
+	const byCategory: Record<string, number> = {};
+	for (const p of allFb) {
+		byCategory[p.categorySlug] = (byCategory[p.categorySlug] ?? 0) + 1;
+	}
+	return { byCategory, total: allFb.length };
+}
+
+/* ============================================================================
+ * 6. listCategories(lang) — 分类切换器用
+ * ----------------------------------------------------------------------------
+ * 返回当前语言下的分类列表(slug + 本地化 name),按 sort 升序。
+ *
+ * 为什么独立出来、而不是复用 FALLBACK_CATEGORIES:
+ *   Directus 里的分类可通过 Data Studio / AI Writer 动态新增
+ *   (例如 "资讯" / "daily-news" 在 bootstrap 之后被创建),
+ *   FALLBACK_CATEGORIES 只是应急兜底,线上必须以 Directus 为准。
+ *
+ * 实现:
+ *   Directus → readItems("categories", {
+ *     fields: ["slug", "sort", { translations: ["languages_code", "name"] }],
+ *     sort: ["sort"],
+ *   })
+ *   按 langCode 解包 translations.name;缺失时回落 slug。
+ *   Directus 失败时退回 FALLBACK_CATEGORIES。
+ * ============================================================================ */
+
+export interface CategoryVM {
+	readonly slug: string;
+	readonly name: string;
+}
+
+export async function listCategories(
+	lang: Lang,
+): Promise<readonly CategoryVM[]> {
+	const langCode = langToDirectusCode(lang);
+
+	// 1. Directus(首选)
+	try {
+		const client = directus();
+		const rows = (await client.request(
+			readItems("categories", {
+				fields: [
+					"slug",
+					"sort",
+					{
+						translations: ["languages_code", "name"],
+					},
+				] as any,
+				sort: ["sort"] as any,
+				limit: -1,
+			}),
+		)) as any[];
+
+		const items: CategoryVM[] = [];
+		for (const row of rows ?? []) {
+			const slug = typeof row?.slug === "string" ? row.slug : null;
+			if (!slug) continue;
+			const tr = pickTranslation(row.translations, langCode);
+			const name = (typeof tr?.name === "string" && tr.name.trim()) || slug;
+			items.push({ slug, name });
+		}
+		if (items.length > 0) return items;
+	} catch (err) {
+		console.warn(
+			"[posts] listCategories Directus 读取失败,降级到 fallback:",
+			(err as Error)?.message ?? err,
+		);
+	}
+
+	// 2. Fallback(静态类目)
+	return FALLBACK_CATEGORIES.map((c) => ({
+		slug: c.slug,
+		name: pickLang(c.name, lang),
+	}));
 }
 
 export async function listPostsForFeed(): Promise<readonly FeedPost[]> {

@@ -53,11 +53,35 @@ interface Props {
 	 *   2. 决定初始展开 / 折叠状态(有词则展开)
 	 */
 	initialQuery?: string;
+	/**
+	 * 随表单一起提交的额外 hidden 字段(键值对)。
+	 * 用途:让搜索提交保留当前 URL 上的其它筛选参数(如 ?cat=<slug>),
+	 * 避免搜索时丢失已选分类。
+	 *
+	 * 约定:
+	 *   - 值为空串 / undefined 的键会被忽略(不渲染 hidden input)
+	 *   - 键名不做白名单校验,调用方自己负责合法性
+	 *   - 不会渲染 page 字段,搜索始终从第 1 页开始(与本组件原有语义一致)
+	 */
+	hiddenFields?: Readonly<Record<string, string | undefined>>;
 	/** 额外类名 */
 	class?: string;
 }
 
-const { action, initialQuery = "", class: className = "" } = Astro.props;
+const {
+	action,
+	initialQuery = "",
+	hiddenFields,
+	class: className = "",
+} = Astro.props;
+
+// 过滤掉空值,得到真正要渲染的 hidden 字段列表
+const hiddenEntries: ReadonlyArray<readonly [string, string]> = hiddenFields
+	? Object.entries(hiddenFields).filter(
+			(entry): entry is [string, string] =>
+				typeof entry[1] === "string" && entry[1].length > 0,
+		)
+	: [];
 
 // 当前语言(仅用于 placeholder / aria-label 文案)
 const lang = getLangFromUrl(Astro.url) as Lang;
@@ -251,7 +275,15 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 	{/* ------------------------------------------------------------------
 	 *  保持 ?page 不污染搜索提交:不渲染 page hidden input
 	 *  (搜索提交后始终回到第 1 页,URL 不含 page 参数)
+	 *
+	 *  其它筛选参数(如 ?cat=<slug>)通过 hiddenFields prop 注入,
+	 *  以 hidden input 形式随表单一起提交,避免搜索时丢失分类选择。
 	 * ------------------------------------------------------------------ */}
+	{
+		hiddenEntries.map(([name, value]) => (
+			<input type="hidden" name={name} value={value} />
+		))
+	}
 </form>
 
 {/* ====================================================================

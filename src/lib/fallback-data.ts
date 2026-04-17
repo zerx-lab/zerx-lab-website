@@ -117,6 +117,20 @@ export const FALLBACK_AUTHORS: readonly FallbackAuthor[] = [
 			en: "Full-stack engineer focused on building high-performance tools with Go and Rust. Polishes micro-interactions until they shine.",
 		},
 	},
+	{
+		// 专用于 GitHub Actions daily-tech-news workflow 自动发布的作者身份。
+		// 所有"每日技术资讯"帖子挂在此作者下,便于在博客列表按作者筛选与审计。
+		slug: "ai",
+		name: "AI",
+		avatar: null,
+		github: null,
+		x: null,
+		email: null,
+		bio: {
+			zh: "自动化写作身份,由 GitHub Actions + Claude Code 驱动,每日汇总全球技术资讯。所有内容经多源交叉验证后发布。",
+			en: "Automated writing identity powered by GitHub Actions + Claude Code. Curates global tech news daily, with every item cross-verified across multiple sources.",
+		},
+	},
 ] as const;
 
 /** 按 slug 快速查找作者 */
@@ -167,6 +181,15 @@ export const FALLBACK_CATEGORIES: readonly FallbackCategory[] = [
 			en: "About the lab, this site, and editorial notes.",
 		},
 	},
+	{
+		// 每日技术资讯汇总(daily-tech-news workflow 自动产出)
+		slug: "news",
+		name: { zh: "资讯", en: "News" },
+		description: {
+			zh: "每日技术资讯汇总:AI、开源、前端、后端、基础设施等领域的重要动态。",
+			en: "Daily tech news digest: AI, open source, frontend, backend, infrastructure and beyond.",
+		},
+	},
 ] as const;
 
 export function findCategory(slug: string): FallbackCategory | undefined {
@@ -193,6 +216,15 @@ export const FALLBACK_TAGS: readonly FallbackTag[] = [
 	{ slug: "bun", name: { zh: "Bun", en: "Bun" } },
 	{ slug: "docker", name: { zh: "Docker", en: "Docker" } },
 	{ slug: "wordzero", name: { zh: "WordZero", en: "WordZero" } },
+	// 每日技术资讯常用标签(daily-tech-news workflow 会自动挂)
+	{ slug: "daily-news", name: { zh: "每日资讯", en: "Daily News" } },
+	{ slug: "ai", name: { zh: "AI", en: "AI" } },
+	{ slug: "llm", name: { zh: "大模型", en: "LLM" } },
+	{ slug: "github", name: { zh: "GitHub", en: "GitHub" } },
+	{ slug: "frontend", name: { zh: "前端", en: "Frontend" } },
+	{ slug: "backend", name: { zh: "后端", en: "Backend" } },
+	{ slug: "infra", name: { zh: "基础设施", en: "Infrastructure" } },
+	{ slug: "devtools", name: { zh: "开发工具", en: "Dev Tools" } },
 ] as const;
 
 export function findTag(slug: string): FallbackTag | undefined {

@@ -79,6 +79,12 @@ const t = useTranslations(lang);
 const hasMetaSlot = Astro.slots.has("meta");
 const hasActionsSlot = Astro.slots.has("actions");
 const hasSocialSlot = Astro.slots.has("social");
+// 视觉装置 slot 是否被"实际填充"。
+// AppShell 重构后已确保只在页面传了 left-visual 或 showLabMark=true 时,
+// 才会向 LeftPane 的 visual slot 写内容;其他情况 slot 为空。
+// 这里据此决定是否输出装置容器,避免空的 <div class="hidden md:block mt-6 lg:mt-10">
+// 在 md+ 屏幕上留下无内容的外边距空白。
+const hasVisualSlot = Astro.slots.has("visual");
 // 视觉装置:不再手动检测 slot 是否存在,而是利用 Astro 原生的 slot fallback 机制。
 // 在模板里写 <slot name="visual"><LabMark /></slot>,当父级没传 visual slot 时,
 // 自动渲染 LabMark;传了则用父级内容替换。这种写法完全规避了 hasSlot 的
@@ -136,9 +142,11 @@ const showDefaultMeta = !hasMetaSlot;
 	 *     主内容,装饰性装置只会把主体内容推到一屏之下,伤害可用性。
 	 *   - 桌面端(md 及以上)正常显示,作为左栏视觉焦点。
 	 * --------------------------------------------------------------------- */}
-	<div class="hidden md:block mt-6 lg:mt-10">
-		<slot name="visual" />
-	</div>
+	{hasVisualSlot && (
+		<div class="hidden md:block mt-6 lg:mt-10">
+			<slot name="visual" />
+		</div>
+	)}
 
 	{/* ---------- 中部:页面主体(eyebrow/title/description/actions)---------- */}
 	{

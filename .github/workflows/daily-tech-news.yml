@@ -1,0 +1,130 @@
+# ============================================================================
+# Daily Tech News - 每日技术资讯自动发布(MCP 直发版)
+# ----------------------------------------------------------------------------
+# 流程:
+#   1. 每天北京时间 07:00 (UTC 23:00 前一天) 触发,也支持手动触发
+#   2. Calculate date: 计算"昨天"(北京时间),作为搜索目标日期
+#   3. Run Claude Code: 调 claude-code-action 执行 .claude/skills/daily-tech-news
+#      skill,让 Claude:
+#        · 通过 Directus MCP 查近 7 天已发文章做去重基线
+#        · WebSearch + WebFetch 多源搜集资讯
+#        · 交叉验证 + 重要性评分 + Top 3 深度分析
+#        · 通过 Directus MCP 直接 create posts + posts_translations + posts_tags
+#          (status=published,一步到位,不走脚本中转)
+#
+# 身份与权限:
+#   - Claude Code 用 CLAUDE_CODE_OAUTH_TOKEN 驱动 WebSearch / WebFetch / MCP
+#   - Directus MCP 用 DIRECTUS_AI_WRITER_TOKEN 鉴权
+#     AI Writer policy 已放宽(允许直接 published + 允许 create 新元数据)
+#     Directus settings.mcp_system_prompt 里有软约束:
+#       · 交互式 MCP 对话默认 draft
+#       · 自动化脚本调度场景(本 workflow)明确写 published
+#     工作流 prompt 会声明"自动化场景",Claude 按软约束判定使用 published。
+#
+# 必需的 GitHub Secrets:
+#   - CLAUDE_CODE_OAUTH_TOKEN  — Claude Code Action 授权 (本地 `claude setup-token`)
+#   - DIRECTUS_URL             — Directus 实例地址 (如 https://directus.zerx.dev)
+#   - DIRECTUS_AI_WRITER_TOKEN — AI Writer token,对应本地 .env 同名变量
+#
+# 可选变量:
+#   - 手动触发时可通过 inputs.date 指定目标日期 (YYYY-MM-DD),留空则用昨天
+# ============================================================================
+
+name: Daily Tech News
+
+on:
+  schedule:
+    # 每天北京时间 07:00 执行 = UTC 23:00 前一天
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "指定搜索日期 (YYYY-MM-DD),留空则使用北京时间昨天"
+        required: false
+        type: string
+
+concurrency:
+  # 同一天只跑一次,防止手动触发 + schedule 撞车时并发写库
+  group: daily-tech-news
+  cancel-in-progress: false
+
+jobs:
+  generate-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      # claude-code-action 运行时需要 status check / 评论等
+      pull-requests: write
+      issues: write
+      id-token: write
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. Checkout (拉 .claude/skills 供 Claude 读取 SKILL.md)
+      # ------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ------------------------------------------------------------------
+      # 2. 计算目标日期
+      # ------------------------------------------------------------------
+      - name: Calculate target date
+        id: date
+        run: |
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            echo "target_date=${{ github.event.inputs.date }}" >> $GITHUB_OUTPUT
+          else
+            # 北京时间 (UTC+8) 昨天
+            # cron 在 UTC 23:00 跑时,北京时间是次日 07:00
+            # "昨天" (北京时区) = UTC 今天
+            echo "target_date=$(TZ='Asia/Shanghai' date -d 'yesterday' '+%Y-%m-%d')" >> $GITHUB_OUTPUT
+          fi
+          echo "✓ 目标日期: $(cat $GITHUB_OUTPUT | grep target_date | cut -d= -f2)"
+
+      # ------------------------------------------------------------------
+      # 3. 让 Claude 通过 Directus MCP 直接搜集并发布
+      # ------------------------------------------------------------------
+      - name: Run Claude Code (collect news + publish via MCP)
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          prompt: |
+            执行 `.claude/skills/daily-tech-news/SKILL.md` 完成每日技术资讯的搜集与发布。
+
+            === 运行上下文(注入给 skill) ===
+
+            TARGET_DATE: ${{ steps.date.outputs.target_date }}
+            RUN_MODE:    github-actions-automation
+            TARGET_STATUS: published
+
+            说明:
+            - 本次是 **GitHub Actions 自动化批量产出**,非交互式 MCP 对话
+            - 按 Directus system prompt "软约束"判定: status = "published"(直接发布)
+            - 所有日期派生(slug / date_published / 标题日期 / cover_label)
+              必须基于 TARGET_DATE,禁止使用"今天/昨天"等相对日期
+
+            === 执行要求 ===
+
+            严格按 SKILL.md 的 Phase 0-7 顺序执行,**不要跳过任何 Phase**:
+              Phase 0: Directus MCP 基线(system-prompt + 近 7 天去重 + 元数据 id)
+              Phase 1: 多源 WebSearch + WebFetch
+              Phase 2: 交叉验证 + 重要性评分 + 应用 EXCLUDE_LIST
+              Phase 3: Top 3 深度分析
+              Phase 4: 按模板撰写中英双语 content
+              Phase 5: 通过 mcp__directus__items 直接 create/update 发布
+              Phase 6: 发布前自检清单逐项过关
+              Phase 7: 输出 "PUBLISHED: <slug>" 结束标志
+
+            MCP endpoint 已通过 --mcp-config 注入,直接用 mcp__directus__*
+            工具即可,无需额外配置鉴权。
+
+          claude_args: |
+            --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(wc:*),mcp__directus__system-prompt,mcp__directus__items,mcp__directus__schema,mcp__directus__fields"
+            --max-turns 60
+            --mcp-config '{"mcpServers":{"directus":{"type":"http","url":"${{ secrets.DIRECTUS_URL }}/mcp","headers":{"Authorization":"Bearer ${{ secrets.DIRECTUS_AI_WRITER_TOKEN }}"}}}}'
