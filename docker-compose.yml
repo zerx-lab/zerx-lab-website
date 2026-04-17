@@ -1,0 +1,103 @@
+# =============================================================================
+# ZerxLab Website - docker-compose.yml
+# -----------------------------------------------------------------------------
+# 用途:
+#   本地 / 自托管环境一键启动 SSR 站点。与 Dockerfile 配套使用。
+#
+# 使用方式:
+#   1. 准备环境变量文件 .env(与本文件同目录),至少包含:
+#        DIRECTUS_URL=https://directus.zerx.dev
+#        DIRECTUS_READ_TOKEN=<读 token>
+#        SITE_URL=https://zerx.dev
+#      docker-compose 会自动读取同目录下的 .env 用于变量插值。
+#
+#   2. 启动:
+#        docker compose up -d --build
+#
+#   3. 查看日志:
+#        docker compose logs -f website
+#
+#   4. 停止:
+#        docker compose down
+#
+# 架构说明:
+#   - 仅一个服务 website(Node SSR 进程)
+#   - 不包含 nginx/CDN:上游由部署平台(Dokploy / Cloudflare / 自建 nginx)
+#     负责 TLS 终结、HTTP 缓存(消费 middleware 下发的 Cache-Control)、
+#     请求路由。本文件只负责跑应用本身。
+#   - 若要在 compose 层也加 nginx 作为反代 + 缓存,再另起一个 service 接入即可。
+#
+# 网络:
+#   - 容器监听 4321,通过 ports 暴露到宿主机 4321。
+#   - 反向代理在宿主机上(或另一个 compose 栈)把 443 / 80 反代到 4321 即可。
+#   - 如果不希望对外直接暴露,把 ports 改成 expose,再接同一 docker network
+#     的上游 nginx 容器。
+#
+# 环境变量传递策略:
+#   - 敏感值(DIRECTUS_READ_TOKEN)不在本文件硬编码,通过 .env 注入
+#   - environment 段显式列出要透传的键,避免宿主机无关环境变量污染容器
+#   - SITE_URL 有兜底默认值,其余必填项不给默认,缺失时容器会报错暴露配置问题
+# =============================================================================
+
+services:
+  website:
+    # 镜像名:本地 build 产出,tag 跟随 package.json 版本
+    # 若要推到 registry,改成 image: <registry>/zerx-lab-website:<tag>
+    image: zerx-lab-website:latest
+    container_name: zerx-lab-website
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # buildkit 缓存友好;需要 Docker 23+(默认启用)
+
+    restart: unless-stopped
+
+    # 端口映射:宿主机 4321 → 容器 4321
+    # 若宿主机端口冲突,改左侧即可(例:"8080:4321")
+    ports:
+      - "4321:4321"
+
+    # 运行时环境变量
+    # 左侧是容器内变量名,右侧 ${VAR} 从 .env / shell 读取
+    # ":-xxx" 语法提供默认值,未设置时使用后者
+    environment:
+      # --- Directus 连接 ---
+      DIRECTUS_URL: ${DIRECTUS_URL}
+      DIRECTUS_READ_TOKEN: ${DIRECTUS_READ_TOKEN}
+
+      # --- 站点自身 ---
+      # 用于 RSS / sitemap / canonical URL 的绝对域名
+      SITE_URL: ${SITE_URL:-https://zerx.dev}
+
+      # --- Node / Astro 运行时 ---
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "4321"
+
+    # 资源限制(可选,按实际机器情况调整)
+    # 博客站负载极低,256MB 内存够用;CPU 不限,让 Node 充分利用瞬时峰值
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    # 日志轮转:避免长期运行日志撑满磁盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # 健康检查由 Dockerfile 里的 HEALTHCHECK 指令定义,这里不重复覆盖
+    # 若要覆盖,在此加 healthcheck: 段
+
+    # 若未来要接入同 compose 栈的 nginx / directus,定义共享网络后加到这里
+    # networks:
+    #   - web
+
+# networks:
+#   web:
+#     driver: bridge
