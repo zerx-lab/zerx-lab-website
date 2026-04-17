@@ -1,0 +1,380 @@
+---
+/**
+ * ============================================================================
+ * BlogMark - 博客左栏视觉装置(分类分布条形图)
+ * ----------------------------------------------------------------------------
+ * 用途:
+ *   博客列表页(/blog 与 /en/blog)左栏 Logo 与页面主体之间的视觉装置。
+ *   与首页的 LabMark(ASCII 几何矩阵 + 宣言)相对应,但承载的语义不同 ——
+ *   LabMark 是"实验室主视觉宣言",BlogMark 是"档案的分类分布索引"。
+ *
+ * 视觉组成(由上至下):
+ *   1. 顶栏 meta 行:CAT · N  + 右侧 ∎ / ZERX-LAB/BLOG
+ *   2. 分类分布条形图(每行: 分类名 ──── ██▒▒ · N,长度按占比)
+ *   3. 细虚线分割
+ *   4. 底栏:左 "N CATEGORIES",右 "N POSTS" + 状态 dot
+ *
+ * 设计约束(与 LabMark 对称):
+ *   - 不依赖任何图片/SVG/字体图标,所有视觉来自字符 + CSS 边框
+ *   - 暗色/亮色模式自动适配(靠 var 映射)
+ *   - 响应式:同 LabMark 的尺寸阶梯
+ *   - 纯静态,零 JS
+ *
+ * 数据契约:
+ *   页面层从 listCategories + listCategoryCounts 取得真实数据后,
+ *   折成 categories: { slug, name, count }[] 传入(已排序),
+ *   total 表示全部已发布文章数(不一定等于 categories.count 之和,
+ *   因为可能有未分类文章)。
+ *
+ * 用法:
+ *   <BlogMark
+ *     categories={[
+ *       { slug: "engineering", name: "工程", count: 12 },
+ *       { slug: "release", name: "发布", count: 5 },
+ *       ...
+ *     ]}
+ *     total={20}
+ *   />
+ *
+ * 与 LabMark 的对称点(方便后续扩展其它页面装置):
+ *   - 顶栏 MARK · NN → 本组件 CAT · NN
+ *   - 中间 ASCII 矩阵 → 本组件按"分类 × 文章数"条形矩阵
+ *   - 底栏"55 MODULES · ONLINE" → 本组件"N CATEGORIES · N POSTS"
+ * ============================================================================
+ */
+
+interface BlogMarkCategory {
+	/** 分类 slug,用于生成行内 mono id */
+	readonly slug: string;
+	/** 分类显示名(已按当前 lang 解包) */
+	readonly name: string;
+	/** 该分类下已发布文章数 */
+	readonly count: number;
+}
+
+interface Props {
+	/** 分类列表(调用方已排序,通常按 count 降序或 sort 升序) */
+	categories: readonly BlogMarkCategory[];
+	/** 全部已发布文章数(用于底栏 N POSTS 展示) */
+	total: number;
+	/** 顶栏右侧 tag,默认 "ZERX-LAB/BLOG" */
+	tagLabel?: string;
+	/** 额外类名 */
+	class?: string;
+}
+
+const {
+	categories,
+	total,
+	tagLabel = "ZERX-LAB/BLOG",
+	class: className = "",
+} = Astro.props;
+
+/* ----------------------------------------------------------------------------
+ * 条形图字符化
+ * ----------------------------------------------------------------------------
+ * 设计目标:每行看起来像 ASCII 几何矩阵,而不是普通数据可视化。
+ *
+ * 规则:
+ *   - 总宽度固定 BAR_WIDTH(字符数),按占 max(count) 的比例填充 █,
+ *     剩余部分用 ░ 填满,保证每行严格等长 —— 这是 LabMark 同样的排版约束
+ *   - 实心块用 █,空白用 ░;中间梯度用 ▓▒ 做过渡,制造"由近到远"的景深
+ *   - 空列表 / 零计数的分类仍然渲染一行 "░ ░ ░ ... · 0",避免跳动
+ *
+ * 为什么不做两位颜色的 CSS 条:
+ *   - 为了和 LabMark 的视觉语言严格对齐。ASCII 是品牌的"编辑派"关键特征,
+ *     引入彩色/渐变会和 LabMark / 右栏代码块打架
+ * -------------------------------------------------------------------------- */
+
+const BAR_WIDTH = 9; // 每行条形图字符数(不含分类名 + 计数)
+const MAX_NAME_LEN = 6; // 分类名占位字符数(超长截断,保证严格等长)
+
+const maxCount = categories.reduce<number>(
+	(acc, c) => (c.count > acc ? c.count : acc),
+	0,
+);
+
+function padRight(s: string, n: number): string {
+	// 中英文混合场景下严格按"视觉字符数"截断:
+	// 中文字占 2 列宽,这里简化处理 —— 用 Array.from 拿到码点数组,
+	// 超过 n 截断,不足时用半角空格补齐。
+	// 注意:这和 monospace 下的真实视觉列宽不完全一致(CJK 偏宽),
+	// 但在 left-pane 的有限空间里已经足够对齐,不追求像素级精确。
+	const chars = Array.from(s);
+	if (chars.length >= n) return chars.slice(0, n).join("");
+	return s + " ".repeat(n - chars.length);
+}
+
+/**
+ * 把 count 折成长度 BAR_WIDTH 的字符序列
+ *   - 实心部分 █ 的数量 = round(count / maxCount * BAR_WIDTH)
+ *   - 接着一个 ▓,再一个 ▒(过渡),剩下用 ░ 填
+ *   - 当实心 = BAR_WIDTH 时全 █;实心 = 0 时全 ░
+ */
+function makeBar(count: number): string {
+	if (maxCount <= 0 || count <= 0) {
+		return "░".repeat(BAR_WIDTH);
+	}
+	const filled = Math.max(
+		1,
+		Math.min(BAR_WIDTH, Math.round((count / maxCount) * BAR_WIDTH)),
+	);
+	if (filled >= BAR_WIDTH) return "█".repeat(BAR_WIDTH);
+	// filled 实心 + 1 个 ▓ 过渡 + 1 个 ▒ 过渡 + 剩余 ░
+	const tail = BAR_WIDTH - filled;
+	if (tail === 1) return "█".repeat(filled) + "▓";
+	if (tail === 2) return "█".repeat(filled) + "▓▒";
+	return (
+		"█".repeat(filled) +
+		"▓▒" +
+		"░".repeat(BAR_WIDTH - filled - 2)
+	);
+}
+
+/* ----------------------------------------------------------------------------
+ * 渲染行构造
+ * ----------------------------------------------------------------------------
+ * 每行格式(字符级等长):
+ *   [name padded MAX_NAME_LEN] [BAR_WIDTH chars] · [count 3位右对齐]
+ *
+ * 为什么在数据层构造而不是 JSX 内联:
+ *   - pre 标签里做模板字面量比在 JSX flex 里做 mono 对齐可靠得多
+ *   - 未来若要做"高亮当前分类"再切回 JSX 行渲染也不迟
+ * -------------------------------------------------------------------------- */
+
+interface RowVM {
+	readonly name: string;
+	readonly bar: string;
+	readonly count: number;
+}
+
+const rows: readonly RowVM[] = categories.map((c) => ({
+	name: padRight(c.name, MAX_NAME_LEN),
+	bar: makeBar(c.count),
+	count: c.count,
+}));
+
+// 底栏统计
+const categoryCount = categories.length;
+---
+
+<div
+	class:list={[
+		"blog-mark",
+		"relative",
+		"select-none",
+		className,
+	]}
+	aria-hidden="true"
+>
+	{/* ---------- 顶栏 meta:CAT · 编号 + 右侧标签 ---------- */}
+	<div
+		class:list={[
+			"flex items-center justify-between",
+			"mb-3 lg:mb-4",
+		]}
+	>
+		<div class="flex items-center gap-2">
+			<span
+				class:list={[
+					"mono-label",
+					"text-[10px]",
+					"leading-none",
+					"text-[color:var(--color-ink-tertiary)]",
+				]}>CAT</span>
+			<span
+				aria-hidden="true"
+				class:list={[
+					"inline-block w-6 h-px",
+					"bg-[color:var(--color-hairline-strong)]",
+				]}></span>
+			<span
+				class:list={[
+					"mono-num",
+					"text-[10px]",
+					"tabular-nums",
+					"text-[color:var(--color-ink-muted)]",
+				]}>{String(categoryCount).padStart(2, "0")}</span>
+		</div>
+
+		<div class="flex items-center gap-1.5">
+			<span
+				aria-hidden="true"
+				class:list={[
+					"inline-block h-[6px] w-[6px]",
+					"bg-[color:var(--color-ink-primary)]",
+				]}></span>
+			<span
+				class:list={[
+					"mono-label",
+					"text-[10px]",
+					"leading-none",
+					"text-[color:var(--color-ink-tertiary)]",
+				]}>{tagLabel}</span>
+		</div>
+	</div>
+
+	{/* ---------- 条形图盒子(核心视觉) ---------- */}
+	<div
+		class:list={[
+			"bars-box",
+			"relative",
+			"px-4 py-5 lg:px-5 lg:py-6",
+			"border border-dashed border-[color:var(--color-hairline)]",
+			"bg-[color:var(--color-paper-muted)]/30",
+			"rounded-[var(--radius-sm)]",
+			"overflow-hidden",
+		]}
+	>
+		{/* 四角裁切标记(与 LabMark 一致的编辑派细节) */}
+		<span class="corner corner-tl" aria-hidden="true" />
+		<span class="corner corner-tr" aria-hidden="true" />
+		<span class="corner corner-bl" aria-hidden="true" />
+		<span class="corner corner-br" aria-hidden="true" />
+
+		{
+			rows.length > 0 ? (
+				<pre
+					class:list={[
+						"bars-pre",
+						"font-[var(--font-mono)]",
+						"text-[color:var(--color-ink-secondary)]",
+						"text-[11.5px] sm:text-[12px] lg:text-[11.5px] xl:text-[12px]",
+						"leading-[1.85]",
+						"tracking-[0.02em]",
+						"m-0",
+						"whitespace-pre",
+					]}>{rows
+						.map(
+							(r) =>
+								`${r.name}  ${r.bar}  ${String(r.count).padStart(2, " ")}`,
+						)
+						.join("\n")}</pre>
+			) : (
+				<div
+					class:list={[
+						"font-[var(--font-mono)]",
+						"text-[11.5px]",
+						"text-[color:var(--color-ink-muted)]",
+						"text-center py-2",
+					]}
+				>
+					— no categories —
+				</div>
+			)
+		}
+
+		{/* 底栏:左"分类计数",右"文章总数 + 状态 dot" */}
+		<div
+			class:list={[
+				"mt-4 pt-3",
+				"border-t border-dashed border-[color:var(--color-hairline)]",
+				"flex items-center justify-between",
+				"font-[var(--font-mono)]",
+				"text-[10px]",
+				"tracking-[var(--tracking-wide)]",
+				"text-[color:var(--color-ink-tertiary)]",
+			]}
+		>
+			<span class="uppercase tabular-nums">
+				{categoryCount} categor{categoryCount === 1 ? "y" : "ies"}
+			</span>
+			<span class="flex items-center gap-1.5">
+				<span
+					aria-hidden="true"
+					class:list={[
+						"inline-block h-[6px] w-[6px] rounded-full",
+						"bg-[color:var(--color-ink-primary)]",
+						"blog-mark-pulse",
+					]}></span>
+				<span class="uppercase tabular-nums">
+					{total} posts
+				</span>
+			</span>
+		</div>
+	</div>
+</div>
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * 四角裁切标记
+	 * --------------------------------------------------------------------------
+	 * 完全复用 LabMark 的样式规格,保持两个装置视觉语言一致。
+	 * 不抽共享 style —— 两个装置在语义上独立,未来其中一个若调整不应影响另一个。
+	 * -------------------------------------------------------------------------- */
+
+	.corner {
+		position: absolute;
+		width: 8px;
+		height: 8px;
+		pointer-events: none;
+		color: var(--color-ink-primary);
+	}
+
+	.corner-tl {
+		top: -1px;
+		left: -1px;
+		border-top: 1px solid currentColor;
+		border-left: 1px solid currentColor;
+	}
+
+	.corner-tr {
+		top: -1px;
+		right: -1px;
+		border-top: 1px solid currentColor;
+		border-right: 1px solid currentColor;
+	}
+
+	.corner-bl {
+		bottom: -1px;
+		left: -1px;
+		border-bottom: 1px solid currentColor;
+		border-left: 1px solid currentColor;
+	}
+
+	.corner-br {
+		bottom: -1px;
+		right: -1px;
+		border-bottom: 1px solid currentColor;
+		border-right: 1px solid currentColor;
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 条形图 pre 容器
+	 * --------------------------------------------------------------------------
+	 * 同 LabMark 的 ASCII 矩阵,强制 tabular-nums + optimizeSpeed,
+	 * 防止父容器的 text-rendering 把 ▓▒░█ 优化成诡异的字形。
+	 * -------------------------------------------------------------------------- */
+
+	.bars-pre {
+		font-variant-numeric: tabular-nums;
+		font-feature-settings: "tnum" 1, "ss01" 1;
+		text-rendering: optimizeSpeed;
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 状态 dot 的轻微脉动(和 LabMark 一致)
+	 * -------------------------------------------------------------------------- */
+
+	.blog-mark-pulse {
+		animation: blog-mark-breathe 2400ms ease-in-out infinite;
+	}
+
+	@keyframes blog-mark-breathe {
+		0%,
+		100% {
+			opacity: 1;
+			transform: scale(1);
+		}
+		50% {
+			opacity: 0.35;
+			transform: scale(0.8);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.blog-mark-pulse {
+			animation: none;
+		}
+	}
+</style>
