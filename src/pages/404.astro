@@ -131,10 +131,13 @@ const GITHUB_URL = "https://github.com/zerx-lab";
 					"flex items-stretch",
 				]}
 			>
-				{/* 左侧 Logo 占位 */}
+				{/* 左侧 Logo 占位
+				 * 移动端(< md)隐藏:此时 TopNav 自身已显示 "ZERX-LAB" 品牌文字,
+				 * 再多一个 Logo 会重复并挤占导航区。桌面端保留作为左锚视觉。
+				 */}
 				<div
 					class:list={[
-						"flex items-center",
+						"hidden md:flex items-center",
 						"px-4 sm:px-6 lg:px-8",
 						"border-r border-dashed border-[color:var(--color-hairline)]",
 						"shrink-0",

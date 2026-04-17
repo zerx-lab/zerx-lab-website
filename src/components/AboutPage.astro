@@ -40,6 +40,7 @@ import {
 	getFallbackCounts,
 	pickLang,
 } from "@lib/fallback-data";
+import { getGithubStatsBatch } from "@lib/github";
 
 /* ----------------------------------------------------------------------------
  * 当前语言 / 翻译工具
@@ -53,9 +54,43 @@ const t = useTranslations(lang);
  * -------------------------------------------------------------------------- */
 
 const settings = FALLBACK_SITE_SETTINGS;
-const counts = getFallbackCounts();
+const fallbackCounts = getFallbackCounts();
 const projects = listFallbackProjects();
 const languageStats = FALLBACK_LANGUAGE_STATS;
+
+/* ----------------------------------------------------------------------------
+ * GitHub 真实总数覆盖
+ * ----------------------------------------------------------------------------
+ * fallback-data 里的 totalStars / totalForks 是手填的快照,会漂。
+ * 构建时通过 getGithubStatsBatch 并发拉一次真实数据(24h 磁盘缓存),
+ * 把 counts.totalStars / totalForks 覆盖成权威值。
+ *
+ * 设计取舍:
+ *   - 只覆盖 totalStars / totalForks,其他统计(posts / projects / tags 等
+ *     本站自有数据)仍取 fallback 值,GitHub 不负责这些
+ *   - 任一 repo 拉取失败(返回 null),其 star/fork 贡献回落到 fallback 快照,
+ *     确保页面永远有数字可显示
+ *   - GitHub API 全挂时,本逻辑等价于直接用 fallbackCounts,不会抛错
+ * -------------------------------------------------------------------------- */
+
+const githubStatsList = await getGithubStatsBatch(
+	projects.map((p) => p.githubUrl),
+);
+
+let liveTotalStars = 0;
+let liveTotalForks = 0;
+for (let i = 0; i < projects.length; i++) {
+	const live = githubStatsList[i];
+	const fb = projects[i];
+	liveTotalStars += live?.stars ?? fb.stars;
+	liveTotalForks += live?.forks ?? fb.forks;
+}
+
+const counts = {
+	...fallbackCounts,
+	totalStars: liveTotalStars,
+	totalForks: liveTotalForks,
+};
 
 const tagline = pickLang(settings.tagline, lang);
 const description = pickLang(settings.description, lang);
@@ -485,12 +520,12 @@ const numberStats: readonly NumberStat[] = [
 			<div
 				class:list={[
 					"flex flex-col",
-					"p-6 lg:p-8",
-					"min-h-[140px]",
+					"p-5 sm:p-6 lg:p-8",
+					"min-h-[120px] sm:min-h-[140px]",
 				]}
 			>
 				{/* 顶栏:icon + label */}
-				<div class="flex items-center gap-2 mb-4">
+				<div class="flex items-center gap-2 mb-3 sm:mb-4">
 					<span
 						aria-hidden="true"
 						class="inline-flex items-center justify-center h-4 w-4 text-[color:var(--color-ink-tertiary)]"
@@ -573,9 +608,9 @@ const numberStats: readonly NumberStat[] = [
 						"text-[color:var(--color-ink-primary)]",
 						"tracking-[-0.02em]",
 						"leading-none",
-						"text-[44px] sm:text-[48px] lg:text-[56px]",
+						"text-[36px] sm:text-[44px] md:text-[48px] lg:text-[56px]",
 						"tabular-nums",
-						"mb-3",
+						"mb-2 sm:mb-3",
 					]}
 				>
 					{stat.value}
@@ -612,9 +647,10 @@ const numberStats: readonly NumberStat[] = [
 		]}
 	>
 		{joinPlatforms.map((platform) => (
-			<div class="flex flex-col p-6 lg:p-7 min-h-[200px]">
-				{/* 顶栏:icon + eyebrow + 右侧数据 */}
-				<div class="flex items-center gap-3 mb-4">
+			<div class="flex flex-col p-5 sm:p-6 lg:p-7 min-h-[180px] sm:min-h-[200px]">
+				{/* 顶栏:icon + eyebrow + 右侧数据
+				 * 移动端允许换行,避免 icon + eyebrow + metric 三段横向挤爆 */}
+				<div class="flex items-center gap-3 mb-4 flex-wrap">
 					<span
 						aria-hidden="true"
 						class:list={[

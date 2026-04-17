@@ -292,9 +292,10 @@ const jsonLd = JSON.stringify({
 				"relative flex flex-col",
 				"bg-[color:var(--color-paper)]",
 				"lg:border-r lg:border-dashed lg:border-[color:var(--color-hairline)]",
-				"px-6 sm:px-8 lg:px-10 xl:px-14",
-				"pt-6 lg:pt-8",
-				"pb-10 lg:pb-10",
+				// 移动端紧凑 padding,桌面端留白
+				"px-5 sm:px-8 lg:px-10 xl:px-14",
+				"pt-5 sm:pt-6 lg:pt-8",
+				"pb-6 sm:pb-8 lg:pb-10",
 				"lg:min-h-screen",
 			]}
 			aria-label={lang === "zh" ? "文章信息栏" : "Post sidebar"}
@@ -305,7 +306,7 @@ const jsonLd = JSON.stringify({
 			</div>
 
 			<hr
-				class="border-0 border-t border-dashed border-[color:var(--color-hairline)] mt-6 lg:mt-8"
+				class="border-0 border-t border-dashed border-[color:var(--color-hairline)] mt-5 sm:mt-6 lg:mt-8"
 				aria-hidden="true"
 			/>
 
@@ -314,7 +315,7 @@ const jsonLd = JSON.stringify({
 				href={tp("/blog")}
 				class:list={[
 					"group",
-					"mt-6 lg:mt-8",
+					"mt-5 sm:mt-6 lg:mt-8",
 					"inline-flex items-center gap-2",
 					"font-[var(--font-mono)]",
 					"text-[10.5px]",
@@ -349,15 +350,17 @@ const jsonLd = JSON.stringify({
 				<span>{C.backToList}</span>
 			</a>
 
-			{/* ---- 文章标题(大字,左栏主视觉) ---- */}
+			{/* ---- 文章标题(大字,左栏主视觉) ----
+			 * 移动端字号缩小,避免在 320~375px 窄屏下撑满多行把右栏推下去
+			 */}
 			<h1
 				class:list={[
-					"mt-8 lg:mt-10",
+					"mt-6 sm:mt-8 lg:mt-10",
 					"font-medium",
 					"text-[color:var(--color-ink-primary)]",
 					"tracking-[-0.02em]",
 					"leading-[1.2]",
-					"text-[26px] sm:text-[30px] lg:text-[32px] xl:text-[34px]",
+					"text-[22px] sm:text-[28px] md:text-[30px] lg:text-[32px] xl:text-[34px]",
 				]}
 			>
 				{post.title}
@@ -367,9 +370,9 @@ const jsonLd = JSON.stringify({
 			{post.excerpt && (
 				<p
 					class:list={[
-						"mt-4",
+						"mt-3 sm:mt-4",
 						"text-[color:var(--color-ink-secondary)]",
-						"text-[14px] lg:text-[14.5px]",
+						"text-[13.5px] sm:text-[14px] lg:text-[14.5px]",
 						"leading-[1.65]",
 						"max-w-[40ch]",
 					]}
@@ -386,7 +389,7 @@ const jsonLd = JSON.stringify({
 					rel={post.authorGithub ? "noopener noreferrer" : undefined}
 					aria-label={C.viewAuthor}
 					class:list={[
-						"mt-7 lg:mt-8",
+						"mt-5 sm:mt-7 lg:mt-8",
 						"group",
 						"flex items-center gap-3",
 						"p-3",
@@ -462,9 +465,135 @@ const jsonLd = JSON.stringify({
 			{/* ---- 将后面的 meta 推到底部 ---- */}
 			<div class="flex-1" aria-hidden="true"></div>
 
-			{/* ---- Meta 元信息(底部) ---- */}
+			{/* ---- Meta 元信息(底部) ----
+			 * 移动端折叠到 <details>,默认收起,避免把右栏正文推到很远下方
+			 * 桌面端(lg+)常驻展示,作为文章信息卡片
+			 */}
+
+			{/* 移动/中屏:折叠版 */}
+			<details
+				class:list={[
+					"post-meta-collapsible",
+					"lg:hidden",
+					"mt-6 pt-4",
+					"border-t border-dashed border-[color:var(--color-hairline)]",
+				]}
+			>
+				<summary
+					class:list={[
+						"flex items-center justify-between gap-2",
+						"cursor-pointer select-none list-none py-1",
+					]}
+				>
+					<span class="mono-label text-[11px] text-[color:var(--color-ink-tertiary)]">
+						{C.tags && post.tags.length > 0 ? `META · ${C.tags}` : "META"}
+					</span>
+					<span
+						aria-hidden="true"
+						class:list={[
+							"post-meta-chevron",
+							"inline-flex items-center justify-center h-5 w-5",
+							"text-[color:var(--color-ink-muted)]",
+							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						]}
+					>
+						<svg
+							width="12"
+							height="12"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<path d="m6 9 6 6 6-6" />
+						</svg>
+					</span>
+				</summary>
+
+				<dl class="flex flex-col mt-2">
+					<MetaRow label={C.published} value={formatDate(post.date, lang)} />
+					{post.updatedDate && post.updatedDate !== post.date && (
+						<MetaRow
+							label={C.updated}
+							value={formatDate(post.updatedDate, lang)}
+						/>
+					)}
+					{post.categoryName && post.categorySlug && (
+						<MetaRow label={C.category}>
+							<Fragment slot="value">
+								<span class="uppercase">{post.categoryName}</span>
+							</Fragment>
+						</MetaRow>
+					)}
+					<MetaRow label={C.readingTime}>
+						<Fragment slot="value">
+							<span class="tabular-nums">{readingTimeMin}</span>
+							<span class="ml-1 uppercase">{C.minutes}</span>
+						</Fragment>
+					</MetaRow>
+					{wordCount > 0 && (
+						<MetaRow label={lang === "zh" ? "字数" : "Words"}>
+							<Fragment slot="value">
+								<span class="tabular-nums">{wordCount.toLocaleString()}</span>
+								<span class="ml-1 uppercase">{C.words}</span>
+							</Fragment>
+						</MetaRow>
+					)}
+				</dl>
+
+				{/* ---- 标签云(折叠内) ---- */}
+				{post.tags.length > 0 && (
+					<div class="mt-5">
+						<span
+							class:list={[
+								"mono-label",
+								"text-[10px] leading-none",
+								"text-[color:var(--color-ink-tertiary)]",
+								"tracking-[var(--tracking-wider)]",
+								"uppercase",
+								"block mb-2.5",
+							]}
+						>
+							{C.tags}
+						</span>
+						<ul class="flex flex-wrap gap-1.5 list-none m-0 p-0">
+							{post.tags.map((tag) => (
+								<li class="inline-flex">
+									<span
+										class:list={[
+											"inline-flex items-center",
+											"px-2 py-[3px]",
+											"font-[var(--font-mono)]",
+											"text-[10px]",
+											"leading-none",
+											"tracking-[var(--tracking-wide)]",
+											"text-[color:var(--color-ink-secondary)]",
+											"bg-[color:var(--color-paper-muted)]/60",
+											"border border-[color:var(--color-hairline)]",
+											"rounded-[var(--radius-sm)]",
+										]}
+									>
+										<span
+											aria-hidden="true"
+											class="text-[color:var(--color-ink-muted)] mr-[2px]"
+										>
+											#
+										</span>
+										{tag.name}
+									</span>
+								</li>
+							))}
+						</ul>
+					</div>
+				)}
+			</details>
+
+			{/* 桌面端:常驻展示 */}
 			<div
 				class:list={[
+					"hidden lg:block",
 					"mt-10 lg:mt-12",
 					"pt-4",
 					"border-t border-dashed border-[color:var(--color-hairline)]",
@@ -501,7 +630,7 @@ const jsonLd = JSON.stringify({
 					)}
 				</dl>
 
-				{/* ---- 标签云 ---- */}
+				{/* ---- 标签云(桌面) ---- */}
 				{post.tags.length > 0 && (
 					<div class="mt-5">
 						<span
@@ -777,5 +906,18 @@ const jsonLd = JSON.stringify({
 		-webkit-line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 移动端 meta 折叠区:自定义 summary 箭头
+	 * -------------------------------------------------------------------------- */
+	.post-meta-collapsible > summary {
+		list-style: none;
+	}
+	.post-meta-collapsible > summary::-webkit-details-marker {
+		display: none;
+	}
+	.post-meta-collapsible[open] .post-meta-chevron {
+		transform: rotate(180deg);
 	}
 </style>

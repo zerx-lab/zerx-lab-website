@@ -54,7 +54,13 @@ interface Props {
 	maxDepth?: number;
 	/** 自定义 eyebrow 文字(默认从 i18n 推导为"在本页" / "On this page") */
 	eyebrow?: string;
-	/** 作为移动端/平板的默认展开状态(默认 true) */
+	/**
+	 * 作为移动端/平板的默认展开状态(默认 false)
+	 *
+	 * 说明:移动端默认折叠更友好 —— 目录会把正文推到屏幕下方,
+	 * 而手机上用户通常是顺序阅读,不需要一上来就看到完整目录。
+	 * 桌面端(xl+)通过 CSS 强制展开,不受此 prop 影响。
+	 */
 	defaultOpen?: boolean;
 	/** 额外类名 */
 	class?: string;
@@ -67,7 +73,7 @@ const {
 	minDepth = 2,
 	maxDepth = 3,
 	eyebrow,
-	defaultOpen = true,
+	defaultOpen = false,
 	class: className = "",
 	stickyTopOffset,
 } = Astro.props;

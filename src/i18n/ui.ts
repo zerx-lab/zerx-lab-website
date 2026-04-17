@@ -47,6 +47,9 @@ export const ui = {
 		"nav.blog": "博客",
 		"nav.about": "关于",
 		"nav.github": "GitHub",
+		"nav.openMenu": "打开菜单",
+		"nav.closeMenu": "关闭菜单",
+		"nav.menu": "菜单",
 
 		// ---------- 通用操作 ----------
 		"action.readMore": "阅读全文",
@@ -163,6 +166,9 @@ export const ui = {
 		"nav.blog": "Blog",
 		"nav.about": "About",
 		"nav.github": "GitHub",
+		"nav.openMenu": "Open menu",
+		"nav.closeMenu": "Close menu",
+		"nav.menu": "Menu",
 
 		// ---------- Common actions ----------
 		"action.readMore": "Read more",

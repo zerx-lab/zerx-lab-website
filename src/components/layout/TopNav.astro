@@ -1,21 +1,32 @@
 ---
 /**
  * ============================================================================
- * TopNav - 顶部 Tab 式导航
+ * TopNav - 顶部 Tab 式导航(桌面) / 汉堡抽屉(移动)
  * ----------------------------------------------------------------------------
  * 视觉参考: better-auth.com 顶部
+ *
+ * 桌面端 (≥ 768px, md):
  *   - Tab 风格:每项占据等宽,底部有激活下划线
  *   - 全大写 + Monospace tracking
  *   - 最右侧是"强调块"(SIGN-IN 的黑块),我们换成 GitHub 外链
  *   - 再右侧放语言切换 + 主题切换
- *
- * 布局:
+ *   布局:
  *   [HOME] [PROJECTS] [AUR] [BLOG] [ABOUT] | [ZH/EN] [☼] [GITHUB ↗]
- *                                                       ^ 强调块
+ *
+ * 移动端 (< 768px):
+ *   - 左侧:ZERX-LAB 品牌文字(点击回首页)
+ *   - 右侧:GitHub 强调块(保留,一键到 GH 是常用操作) + 汉堡按钮
+ *   - 点击汉堡弹出全屏抽屉(from-top),抽屉内:
+ *       · 5 个导航项(纵向大块可点,触控友好 48px 高)
+ *       · 分割线
+ *       · 语言切换 + 主题切换
+ *       · 关闭按钮
  *
  * 行为:
  *   - 激活态:当前路由(剥离语言前缀后)匹配某项
- *   - 响应式:< 768px 折叠为抽屉(本次先不实现,留 TODO)
+ *   - 抽屉用原生 <dialog> + 一小段 JS 控制,无 Alpine/React 依赖
+ *   - 打开时 body 禁止滚动,关闭时恢复
+ *   - Astro View Transitions 兼容(astro:after-swap 重新绑定)
  * ============================================================================
  */
 
@@ -85,11 +96,104 @@ function isActive(item: NavItem): boolean {
 		"supports-[backdrop-filter]:bg-[color:var(--color-paper)]/60",
 	]}
 >
+	{/* ==========================================================================
+	 *  移动端 (< md):品牌文字 + 右侧 GitHub + 汉堡
+	 * ========================================================================== */}
+	<div class="md:hidden flex items-stretch w-full">
+		{/* 左:品牌文字(点击回首页) */}
+		<a
+			href={tp("/")}
+			aria-label={t("brand.name")}
+			class:list={[
+				"flex items-center",
+				"px-4",
+				"font-[var(--font-mono)]",
+				"text-[12px] font-semibold",
+				"tracking-[var(--tracking-wider)]",
+				"text-[color:var(--color-ink-primary)]",
+				"select-none",
+			]}
+		>
+			{t("brand.name")}
+		</a>
+
+		{/* 右:工具区 */}
+		<div class="ml-auto flex items-stretch">
+			{/* GitHub 强调块(移动端保留,但收窄为图标+短文案) */}
+			<a
+				href={GITHUB_URL}
+				target="_blank"
+				rel="noopener noreferrer"
+				aria-label={t("nav.github")}
+				class:list={[
+					"flex items-center gap-1.5",
+					"px-3",
+					"mono-label",
+					"text-[11px]",
+					"bg-[color:var(--color-ink-primary)]",
+					"text-[color:var(--color-paper)]",
+					"select-none whitespace-nowrap",
+				]}
+			>
+				<svg
+					aria-hidden="true"
+					width="13"
+					height="13"
+					viewBox="0 0 24 24"
+					fill="currentColor"
+					class="shrink-0"
+				>
+					<path
+						d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
+					/>
+				</svg>
+			</a>
+
+			{/* 汉堡按钮 */}
+			<button
+				type="button"
+				data-mobile-menu-open
+				aria-label={t("nav.openMenu")}
+				aria-controls="mobile-menu-drawer"
+				aria-expanded="false"
+				class:list={[
+					"inline-flex items-center justify-center",
+					"h-full w-14",
+					"border-l border-[color:var(--color-hairline)]",
+					"text-[color:var(--color-ink-primary)]",
+					"hover:bg-[color:var(--color-paper-muted)]",
+					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+					"cursor-pointer",
+				]}
+			>
+				<svg
+					aria-hidden="true"
+					width="18"
+					height="18"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<path d="M3 6h18" />
+					<path d="M3 12h18" />
+					<path d="M3 18h18" />
+				</svg>
+			</button>
+		</div>
+	</div>
+
+	{/* ==========================================================================
+	 *  桌面端 (≥ md):完整 Tab + 工具区
+	 * ========================================================================== */}
+
 	{/* ---------- 主导航项(Tab 组) ---------- */}
 	<ul
 		role="menubar"
 		class:list={[
-			"flex items-stretch flex-1 min-w-0",
+			"hidden md:flex items-stretch flex-1 min-w-0",
 			"list-none m-0 p-0",
 		]}
 	>
@@ -141,10 +245,10 @@ function isActive(item: NavItem): boolean {
 		}
 	</ul>
 
-	{/* ---------- 右侧工具区 ---------- */}
+	{/* ---------- 右侧工具区(桌面) ---------- */}
 	<div
 		class:list={[
-			"flex items-stretch shrink-0",
+			"hidden md:flex items-stretch shrink-0",
 			"border-l border-[color:var(--color-hairline)]",
 		]}
 	>
@@ -222,6 +326,221 @@ function isActive(item: NavItem): boolean {
 	</div>
 </nav>
 
+{/* ==========================================================================
+ *  移动端抽屉 (fixed,覆盖全屏;仅在 < md 显示)
+ * ----------------------------------------------------------------------------
+ * 实现要点:
+ *   - 纯 CSS + 小段 JS,不依赖任何库
+ *   - 使用 data-open 属性切换显隐,以便做 CSS 过渡(而不是瞬变)
+ *   - 默认 display:none(via [data-open="false"]),避免 SSR 首屏闪现
+ *   - 打开时 body.add('no-scroll')
+ *   - ESC 关闭 + 点背景关闭
+ * ========================================================================== */}
+<div
+	id="mobile-menu-drawer"
+	data-mobile-menu
+	data-open="false"
+	aria-hidden="true"
+	role="dialog"
+	aria-modal="true"
+	aria-label={t("nav.menu")}
+	class="mobile-menu md:hidden"
+>
+	{/* 背景遮罩(点击关闭) */}
+	<div
+		data-mobile-menu-backdrop
+		class="mobile-menu__backdrop"
+		aria-hidden="true"
+	></div>
+
+	{/* 抽屉主体 */}
+	<div class="mobile-menu__panel" role="document">
+		{/* 顶栏:品牌 + 关闭按钮 */}
+		<div class="mobile-menu__header">
+			<span
+				class:list={[
+					"font-[var(--font-mono)]",
+					"text-[12px] font-semibold",
+					"tracking-[var(--tracking-wider)]",
+					"text-[color:var(--color-ink-primary)]",
+				]}
+			>
+				{t("brand.name")}
+			</span>
+
+			<button
+				type="button"
+				data-mobile-menu-close
+				aria-label={t("nav.closeMenu")}
+				class:list={[
+					"inline-flex items-center justify-center",
+					"h-10 w-10",
+					"text-[color:var(--color-ink-primary)]",
+					"hover:bg-[color:var(--color-paper-muted)]",
+					"rounded-[var(--radius-sm)]",
+					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+					"cursor-pointer",
+				]}
+			>
+				<svg
+					aria-hidden="true"
+					width="18"
+					height="18"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<path d="M18 6 6 18" />
+					<path d="m6 6 12 12" />
+				</svg>
+			</button>
+		</div>
+
+		{/* 导航项:大块纵向列表,触控友好 */}
+		<ul
+			role="menu"
+			class:list={[
+				"list-none m-0 p-0",
+				"border-t border-dashed border-[color:var(--color-hairline)]",
+			]}
+		>
+			{
+				NAV_ITEMS.map((item, idx) => {
+					const active = isActive(item);
+					return (
+						<li role="none" class="border-b border-dashed border-[color:var(--color-hairline)]">
+							<a
+								role="menuitem"
+								href={tp(item.path)}
+								aria-current={active ? "page" : undefined}
+								data-mobile-menu-link
+								class:list={[
+									"flex items-center justify-between gap-4",
+									"h-14 px-6",
+									"mono-label",
+									"text-[13px]",
+									"select-none",
+									"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+									active
+										? "text-[color:var(--color-ink-primary)] bg-[color:var(--color-paper-muted)]/40"
+										: "text-[color:var(--color-ink-secondary)] hover:bg-[color:var(--color-paper-muted)]/40 hover:text-[color:var(--color-ink-primary)]",
+								]}
+							>
+								<span class="flex items-center gap-3">
+									<span
+										aria-hidden="true"
+										class="mono-num text-[10px] text-[color:var(--color-ink-muted)] tabular-nums"
+									>
+										{String(idx + 1).padStart(2, "0")}
+									</span>
+									<span>{t(item.labelKey)}</span>
+								</span>
+
+								{active && (
+									<span
+										aria-hidden="true"
+										class:list={[
+											"mono-label",
+											"text-[10px]",
+											"text-[color:var(--color-ink-muted)]",
+										]}
+									>
+										●
+									</span>
+								)}
+							</a>
+						</li>
+					);
+				})
+			}
+		</ul>
+
+		{/* 工具区:语言 + 主题 */}
+		<div
+			class:list={[
+				"mt-6 px-6",
+				"flex flex-col gap-4",
+			]}
+		>
+			<div class="flex items-center justify-between gap-4">
+				<span
+					class:list={[
+						"mono-label",
+						"text-[11px]",
+						"text-[color:var(--color-ink-tertiary)]",
+					]}
+				>
+					{t("action.toggleLanguage")}
+				</span>
+				<LanguageToggle class="!px-0" />
+			</div>
+
+			<div class="flex items-center justify-between gap-4">
+				<span
+					class:list={[
+						"mono-label",
+						"text-[11px]",
+						"text-[color:var(--color-ink-tertiary)]",
+					]}
+				>
+					{t("action.toggleTheme")}
+				</span>
+				<ThemeToggle class="!px-0" />
+			</div>
+		</div>
+
+		{/* 底部 GitHub CTA */}
+		<div class="mt-auto px-6 pb-6 pt-6">
+			<a
+				href={GITHUB_URL}
+				target="_blank"
+				rel="noopener noreferrer"
+				class:list={[
+					"flex items-center justify-center gap-2",
+					"h-12 px-5",
+					"mono-label",
+					"text-[12px]",
+					"bg-[color:var(--color-ink-primary)]",
+					"text-[color:var(--color-paper)]",
+					"rounded-[var(--radius-sm)]",
+					"select-none",
+				]}
+			>
+				<svg
+					aria-hidden="true"
+					width="14"
+					height="14"
+					viewBox="0 0 24 24"
+					fill="currentColor"
+				>
+					<path
+						d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
+					/>
+				</svg>
+				<span>{t("nav.github")}</span>
+				<svg
+					aria-hidden="true"
+					width="11"
+					height="11"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					class="shrink-0"
+				>
+					<path d="M7 17L17 7" />
+					<path d="M8 7h9v9" />
+				</svg>
+			</a>
+		</div>
+	</div>
+</div>
+
 <style>
 	.top-nav {
 		/* 让导航在滚动容器中保持顶部(作为 RightPane 内的 sticky 元素) */
@@ -229,4 +548,179 @@ function isActive(item: NavItem): boolean {
 		top: 0;
 		z-index: 30;
 	}
+
+	/* ----------------------------------------------------------------------------
+	 * 移动端抽屉
+	 * --------------------------------------------------------------------------
+	 * 策略:
+	 *   - fixed 铺满视口
+	 *   - 默认 [data-open="false"] → pointer-events:none + opacity:0,
+	 *     面板额外 translateY(-8px),形成轻微下拉动效
+	 *   - 打开 [data-open="true"] → 显示 + 复位
+	 * -------------------------------------------------------------------------- */
+
+	.mobile-menu {
+		position: fixed;
+		inset: 0;
+		z-index: 100;
+		pointer-events: none;
+	}
+
+	.mobile-menu[data-open="true"] {
+		pointer-events: auto;
+	}
+
+	.mobile-menu__backdrop {
+		position: absolute;
+		inset: 0;
+		background-color: rgba(10, 10, 10, 0.35);
+		backdrop-filter: blur(2px);
+		opacity: 0;
+		transition: opacity var(--duration-base) var(--ease-standard);
+	}
+
+	:global(:root.dark) .mobile-menu__backdrop {
+		background-color: rgba(0, 0, 0, 0.55);
+	}
+
+	.mobile-menu[data-open="true"] .mobile-menu__backdrop {
+		opacity: 1;
+	}
+
+	.mobile-menu__panel {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		/* 近全屏高度,底部留一小截露出背景,提示可以点关闭 */
+		max-height: 100dvh;
+		min-height: 80dvh;
+		display: flex;
+		flex-direction: column;
+		background-color: var(--color-paper);
+		border-bottom: 1px solid var(--color-hairline);
+		box-shadow: 0 12px 32px rgba(10, 10, 10, 0.08);
+		transform: translateY(-12px);
+		opacity: 0;
+		transition:
+			transform var(--duration-base) var(--ease-emphasized),
+			opacity var(--duration-base) var(--ease-standard);
+		overflow-y: auto;
+		overscroll-behavior: contain;
+	}
+
+	.mobile-menu[data-open="true"] .mobile-menu__panel {
+		transform: translateY(0);
+		opacity: 1;
+	}
+
+	.mobile-menu__header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 12px 16px 12px 24px;
+		height: var(--layout-top-nav-height);
+		border-bottom: 1px solid var(--color-hairline);
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 打开时锁定 body 滚动
+	 * -------------------------------------------------------------------------- */
+	:global(body.mobile-menu-open) {
+		overflow: hidden;
+		touch-action: none;
+	}
 </style>
+
+<script>
+	/**
+	 * 移动端菜单交互
+	 * -------------------------------------------------------------------------
+	 * - 点汉堡 → 打开
+	 * - 点关闭 / 点背景 / 点导航项 / 按 ESC → 关闭
+	 * - 打开时禁止 body 滚动
+	 * - 视口 ≥ 768px (md) 时自动关闭(避免旋转 / resize 后遗留打开态)
+	 * - Astro View Transitions 兼容:astro:after-swap 重新绑定
+	 */
+
+	function initMobileMenu(): void {
+		const drawer = document.querySelector<HTMLElement>("[data-mobile-menu]");
+		if (!drawer) return;
+
+		const openBtns = document.querySelectorAll<HTMLButtonElement>(
+			"[data-mobile-menu-open]",
+		);
+		const closeBtns = document.querySelectorAll<HTMLButtonElement>(
+			"[data-mobile-menu-close]",
+		);
+		const backdrop = drawer.querySelector<HTMLElement>(
+			"[data-mobile-menu-backdrop]",
+		);
+		const links = drawer.querySelectorAll<HTMLAnchorElement>(
+			"[data-mobile-menu-link]",
+		);
+
+		const open = (): void => {
+			drawer.setAttribute("data-open", "true");
+			drawer.setAttribute("aria-hidden", "false");
+			document.body.classList.add("mobile-menu-open");
+			openBtns.forEach((b) => b.setAttribute("aria-expanded", "true"));
+		};
+
+		const close = (): void => {
+			drawer.setAttribute("data-open", "false");
+			drawer.setAttribute("aria-hidden", "true");
+			document.body.classList.remove("mobile-menu-open");
+			openBtns.forEach((b) => b.setAttribute("aria-expanded", "false"));
+		};
+
+		openBtns.forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.preventDefault();
+				open();
+			});
+		});
+
+		closeBtns.forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.preventDefault();
+				close();
+			});
+		});
+
+		backdrop?.addEventListener("click", close);
+
+		// 点导航项后关闭(路由跳转前 UI 立刻响应)
+		links.forEach((link) => {
+			link.addEventListener("click", () => {
+				close();
+			});
+		});
+
+		// ESC 关闭
+		document.addEventListener("keydown", (e) => {
+			if (
+				e.key === "Escape" &&
+				drawer.getAttribute("data-open") === "true"
+			) {
+				close();
+			}
+		});
+
+		// 视口宽度 ≥ md(768px)时强制关闭,避免旋转遗留状态
+		const mq = window.matchMedia("(min-width: 768px)");
+		const onChange = (): void => {
+			if (mq.matches && drawer.getAttribute("data-open") === "true") {
+				close();
+			}
+		};
+		if (mq.addEventListener) {
+			mq.addEventListener("change", onChange);
+		} else if ((mq as MediaQueryList).addListener) {
+			(mq as MediaQueryList).addListener(onChange);
+		}
+	}
+
+	initMobileMenu();
+	document.addEventListener("astro:after-swap", initMobileMenu);
+</script>

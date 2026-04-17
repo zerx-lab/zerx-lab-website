@@ -40,6 +40,7 @@ import {
 	type FallbackProject,
 } from "@lib/fallback-data";
 import { directus, readItems, DIRECTUS_CONFIG } from "@lib/directus";
+import { getGithubStatsBatch } from "@lib/github";
 
 /* ----------------------------------------------------------------------------
  * 当前语言 / 翻译工具
@@ -188,7 +189,42 @@ async function loadProjects(): Promise<readonly ProjectVM[]> {
 	}
 }
 
-const projects = await loadProjects();
+const projects = await enrichWithGithubStats(await loadProjects());
+
+/* ----------------------------------------------------------------------------
+ * GitHub 实时数据覆盖层
+ * ----------------------------------------------------------------------------
+ * 策略:从 Directus / fallback 拿到的 stars / forks / language 是"快照",
+ * 真实权威数据在 GitHub 上。构建时统一用 getGithubStats 并发拉一次,
+ * 24h 磁盘缓存(见 src/lib/github.ts),命中则覆盖快照字段。
+ *
+ * 设计取舍:
+ *   - 只覆盖 stars / forks / language 三个真的会漂的字段,其他字段(slug /
+ *     techStack / featured / description)继续以 Directus 为准
+ *   - GitHub API 失败(限流 / 404 / 网络)时 `getGithubStats` 返回 null,
+ *     此处保留快照值,不会让页面显示 0
+ *   - language 只在快照里取不到(Unknown)时才用 GitHub 回填,避免把
+ *     "TypeScript 项目但主要代码是 Go"这种人工判断覆盖掉
+ * -------------------------------------------------------------------------- */
+
+async function enrichWithGithubStats(
+	items: readonly ProjectVM[],
+): Promise<readonly ProjectVM[]> {
+	// 并发拉:getGithubStatsBatch 内部有去重 + 磁盘缓存,不会重复发请求
+	const statsList = await getGithubStatsBatch(items.map((p) => p.githubUrl));
+
+	return items.map((p, i) => {
+		const s = statsList[i];
+		if (!s) return p; // 拉取失败保持快照
+		return {
+			...p,
+			stars: s.stars,
+			forks: s.forks,
+			language:
+				p.language && p.language !== "Unknown" ? p.language : (s.language ?? p.language),
+		};
+	});
+}
 
 /* ----------------------------------------------------------------------------
  * 左栏 meta 数据计算
@@ -501,10 +537,12 @@ function formatCount(n: number): string {
 										</div>
 									)}
 
-									{/* 底栏:stars / forks + 操作按钮 */}
+									{/* 底栏:stars / forks + 操作按钮
+									 * 移动端允许换行,避免 stars + forks + 源码 + Demo 四个元素
+									 * 在 320~375px 窄屏下横向挤爆 */}
 									<div
 										class:list={[
-											"flex items-center gap-3",
+											"flex items-center gap-x-3 gap-y-2 flex-wrap",
 											"pt-4",
 											"border-t border-dashed border-[color:var(--color-hairline)]",
 										]}
