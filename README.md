@@ -1,43 +1,174 @@
-# Astro Starter Kit: Minimal
+# ZerxLab Website
 
-```sh
-bun create astro@latest -- --template minimal
-```
+> ZerxLab 官网与博客，基于 Astro 6 + Directus 11 的全站 SSR 双语站点。
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+线上地址：[zerx.dev](https://zerx.dev) · CMS：[directus.zerx.dev](https://directus.zerx.dev)
 
-## 🚀 Project Structure
+---
 
-Inside of your Astro project, you'll see the following folders and files:
+## 技术栈
+
+| 层       | 选型                                                                 |
+| :------- | :------------------------------------------------------------------- |
+| 框架     | [Astro 6](https://astro.build/) (`output: "server"`, Node standalone) |
+| UI       | Tailwind CSS v4 (CSS-first) + 少量 React 19 交互岛                    |
+| 内容源   | [Directus 11](https://directus.io/) (唯一数据源，实时 SSR)            |
+| Markdown | `marked` + `marked-shiki` (双主题 github-light / github-dark-dimmed)  |
+| 包管理   | 本地 Bun，镜像内 npm ci                                              |
+| 部署     | Docker 多阶段构建，Dokploy 托管                                      |
+
+---
+
+## 特性
+
+- **双语路由**：`/` 中文（默认无前缀）、`/en/` 英文，目录即路由，不依赖 Astro 内建 i18n
+- **全站 SSR**：Directus 后台改动对用户立即可见，缓存由 `src/middleware.ts` 统一下发 `Cache-Control`，边缘缓存交给上游 CDN / nginx
+- **博客能力**：分页（`?page=N`）、按当前页面语言对 `title + excerpt + content` 做 `_icontains` 模糊搜索并在列表高亮、TOC 目录、代码高亮、阅读时长、按语言拆分的 RSS feed
+- **Directus 一键初始化**：`scripts/bootstrap-directus.ts` 幂等地建 collections / fields / relations / roles / policies / 受限 AI Writer 身份，配套 `seed` 与 `typegen`
+- **三层降级**：Directus → `src/lib/fallback-data.ts` → 空值/404，离线或 CMS 未就绪也能出页
+- **移动端完整适配**：`< md` 汉堡菜单，`< lg` 双栏塌陷，TOC 默认展开
+- **SEO**：sitemap 带 `hreflang`、canonical URL、双语 RSS feed、OG 图
+
+---
+
+## 目录结构
 
 ```text
-/
-├── public/
+zerx-lab-website/
+├── public/                     # 静态资源（favicon 等）
+├── scripts/
+│   ├── bootstrap-directus.ts   # 幂等初始化 Directus 结构
+│   ├── seed-directus.ts        # 把 fallback-data 灌进 Directus
+│   ├── generate-directus-types.ts  # 基于 OpenAPI 生成类型
+│   └── _shared.ts
 ├── src/
-│   └── pages/
-│       └── index.astro
+│   ├── pages/                  # 路由：/ (zh) 与 /en/* (en) 对称
+│   │   ├── blog/               # 博客列表 + 详情
+│   │   ├── en/                 # 英文镜像路由
+│   │   ├── about.astro
+│   │   ├── aur.astro
+│   │   ├── projects.astro
+│   │   ├── 404.astro
+│   │   └── rss.xml.ts          # 按语言拆分的 RSS
+│   ├── components/             # 布局 / blog / projects / ui
+│   ├── layouts/
+│   ├── lib/
+│   │   ├── queries/            # Directus 查询（posts / site-settings ...）
+│   │   ├── fallback-data.ts    # 降级数据
+│   │   └── markdown.ts         # marked + shiki 管线
+│   ├── i18n/                   # 自建 i18n（ui.ts 文案 + utils.ts 工具）
+│   ├── styles/global.css       # Tailwind v4 CSS-first + 设计 tokens
+│   └── middleware.ts           # 统一 Cache-Control
+├── astro.config.mjs
+├── Dockerfile                  # 三阶段构建（deps / build / runner）
+├── docker-compose.yml
 └── package.json
 ```
 
-Astro looks for `.astro` or `.md` files in the `src/pages/` directory. Each page is exposed as a route based on its file name.
+详细的架构说明见 `astro.config.mjs` 与 `Dockerfile` 内的注释，关键决策均在文件头注明。
 
-There's nothing special about `src/components/`, but that's where we like to put any Astro/React/Vue/Svelte/Preact components.
+---
 
-Any static assets, like images, can be placed in the `public/` directory.
+## 本地开发
 
-## 🧞 Commands
+### 环境要求
 
-All commands are run from the root of the project, from a terminal:
+- Node.js ≥ 22.12（与 `package.json` 的 `engines.node` 对齐）
+- [Bun](https://bun.sh/) ≥ 1.0（本地开发首选，镜像内不需要）
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `bun install`             | Installs dependencies                            |
-| `bun dev`             | Starts local dev server at `localhost:4321`      |
-| `bun build`           | Build your production site to `./dist/`          |
-| `bun preview`         | Preview your build locally, before deploying     |
-| `bun astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `bun astro -- --help` | Get help using the Astro CLI                     |
+### 启动
 
-## 👀 Want to learn more?
+```sh
+# 1. 安装依赖
+bun install
 
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+# 2. 配置环境变量
+cp .env.example .env
+#   填入 DIRECTUS_URL / DIRECTUS_READ_TOKEN / SITE_URL
+#   （如需跑 bootstrap/seed 还要 DIRECTUS_ADMIN_TOKEN）
+
+# 3. 启动 dev server
+bun dev            # http://localhost:4321
+```
+
+### 常用命令
+
+| Command          | 作用                                                               |
+| :--------------- | :----------------------------------------------------------------- |
+| `bun dev`        | 本地开发服务器（带 HMR）                                           |
+| `bun build`      | 生产构建，产出 `./dist/`（`dist/server/entry.mjs` 为 SSR 入口）    |
+| `bun preview`    | 预览生产构建                                                       |
+| `bun lint`       | `astro check` 类型与模板诊断                                       |
+| `bun format`     | Prettier 格式化 astro/ts/tsx/md/mdx/json                           |
+| `bun bootstrap`  | 幂等初始化 Directus（collections / fields / roles / AI Writer 等） |
+| `bun seed`       | 把 `fallback-data.ts` 灌进 Directus，用于冷启动                     |
+| `bun typegen`    | 根据 Directus OpenAPI 生成 TS 类型                                 |
+
+---
+
+## 环境变量
+
+| 变量                      | 用途                                       | 必填          |
+| :------------------------ | :----------------------------------------- | :------------ |
+| `DIRECTUS_URL`            | Directus 实例地址                          | ✅            |
+| `DIRECTUS_READ_TOKEN`     | 运行时读数据用的受限 token                 | ✅            |
+| `SITE_URL`                | 站点 canonical 域名（RSS/sitemap 绝对 URL） | ✅（默认 `https://zerx.dev`） |
+| `DIRECTUS_ADMIN_TOKEN`    | 仅 `bootstrap` / `seed` / `typegen` 需要   | 脚本场景      |
+| `DIRECTUS_AI_WRITER_TOKEN`| bootstrap 每次轮换生成，供 MCP 写作身份用  | 自动产出      |
+| `HOST` / `PORT`           | Node 监听地址（镜像默认 `0.0.0.0:4321`）   | 可选          |
+
+---
+
+## 部署（Docker）
+
+Dockerfile 采用 `deps → build → runner` 三阶段，最终镜像只含生产依赖与 `./dist`，以非 root `node` 用户运行。
+
+```sh
+# 构建并启动
+docker compose up -d --build
+
+# 跟日志
+docker compose logs -f website
+
+# 停止
+docker compose down
+```
+
+注意：
+
+- 构建阶段**不注入** `DIRECTUS_*` 变量 —— SSR 模式下数据拉取全在运行时，避免 token 被固化到镜像层
+- 容器内置 `HEALTHCHECK` 命中首页 `/` 判活，`start-period=20s` 留给冷启动
+- 生产反向代理（Dokploy / Cloudflare / nginx）负责 TLS 与边缘缓存，消费 `middleware.ts` 下发的 `Cache-Control`
+
+---
+
+## Directus 数据模型
+
+由 `scripts/bootstrap-directus.ts` 幂等建立，核心 collections：
+
+- `site_settings`（单例）— 站点标题、描述、og_image 等
+- `authors` — 作者资料（avatar 为 file 关系）
+- `categories` / `tags` — 分类与标签
+- `posts` + `posts_translations` — 博客正文（中英翻译，字段级 i18n）
+- `projects` + `projects_translations` — 项目展示
+- `aur_packages` — AUR 包列表
+
+权限模型：
+
+- **Reader 角色**：只读，绑定 `DIRECTUS_READ_TOKEN`，给前端 SSR 使用
+- **AI Blog Writer 角色**：受限写权限（仅 `posts` / `posts_translations`），绑定专用用户与 token，配套 system prompt 通过 MCP 供 AI 写作
+
+---
+
+## 关键约定
+
+- **i18n 走目录结构，不启用 Astro 内建 i18n**：避免 `/en` 虚拟路由与实体目录 `/en/` 冲突。所有翻译字典在 `src/i18n/ui.ts`，工具函数在 `src/i18n/utils.ts`
+- **Directus 为唯一数据源**：`fallback-data.ts` 仅用于 CMS 不可达时降级，不承担业务真实态
+- **RSS 按语言拆分**：`/rss.xml` 为中文，`/en/rss.xml` 为英文，符合 RSS 2.0 `<language>` 语义
+- **Surgical changes**：代码风格贴合既有模式，改动只涉及需求本身
+
+---
+
+## License
+
+MIT © ZerxLab
