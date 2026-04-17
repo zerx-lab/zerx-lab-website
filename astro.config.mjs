@@ -57,7 +57,10 @@ export default defineConfig({
 	],
 
 	vite: {
-		plugins: [tailwindcss()],
+		// tailwindcss() 返回的是根 vite 版本的 Plugin[],而 Astro 内嵌了另一份 vite,
+		// 两份 vite 的 Plugin 类型在 hotUpdate hook 的 this 签名上不兼容(只是类型噪音,
+		// 运行时完全正常)。用 any 断言绕过编译期类型检查。
+		plugins: [/** @type {any} */ (tailwindcss())],
 	},
 
 	// Markdown 渲染配置

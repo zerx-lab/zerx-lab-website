@@ -105,6 +105,7 @@ export const ui = {
 		"blog.previousPost": "上一篇",
 		"blog.nextPost": "下一篇",
 		"blog.relatedPosts": "相关文章",
+		"blog.featured": "精选",
 
 		// ---------- 项目 ----------
 		"projects.title": "开源项目",
@@ -225,6 +226,7 @@ export const ui = {
 		"blog.previousPost": "Previous",
 		"blog.nextPost": "Next",
 		"blog.relatedPosts": "Related",
+		"blog.featured": "Featured",
 
 		// ---------- Projects ----------
 		"projects.title": "Open-source projects",

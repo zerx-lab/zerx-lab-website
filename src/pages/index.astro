@@ -203,111 +203,61 @@ const FEATURES: readonly FeatureItem[] = [
 	{
 		number: "01",
 		eyebrow: { zh: "全栈工程", en: "Full-Stack" },
-		title: { zh: "一个人,一条全链路。", en: "End-to-end ownership." },
+		title: { zh: "多语言协作开发", en: "Polyglot by design" },
 		description: {
-			zh: "从系统级 Rust 到前端 TypeScript,从数据库到 CI/CD,用合适的工具解决合适的问题。",
-			en: "From systems-level Rust to front-end TypeScript, from databases to CI/CD — right tool for the right problem.",
+			zh: "TypeScript 用于前端,Go 用于后端服务,Rust 用于系统工具,Python 用于脚本,按场景选型。",
+			en: "TypeScript for frontend, Go for services, Rust for systems tooling, Python for scripts.",
 		},
 		tags: ["TypeScript", "Rust", "Go", "Python"],
 	},
 	{
 		number: "02",
 		eyebrow: { zh: "高性能", en: "High Performance" },
-		title: { zh: "性能是功能。", en: "Performance is a feature." },
+		title: { zh: "WordZero 对比 Python 快 21×", en: "WordZero: 21× over Python" },
 		description: {
-			zh: "WordZero 处理 Word 文档比 Python 方案快 21 倍。对热路径做 profiling 与基准测试,不猜测。",
-			en: "WordZero processes Word docs 21x faster than Python. Profile and benchmark hot paths — never guess.",
+			zh: "Go 实现的零依赖 OOXML 引擎,单文档处理平均 2.62ms,内置 18 种预定义样式。",
+			en: "Zero-dependency Go OOXML engine, 2.62ms average per document, 18 built-in styles.",
 		},
 		tags: ["Benchmark", "Profiling", "Zero-dep"],
 	},
 	{
 		number: "03",
 		eyebrow: { zh: "系统编程", en: "Systems" },
-		title: { zh: "并行与并发原语。", en: "Parallel & concurrent primitives." },
+		title: { zh: "rmx:Rust 并行目录删除", en: "rmx: parallel rm for Windows" },
 		description: {
-			zh: "rmx 用 Rust 重写 Windows 目录删除,数量级加速。拥抱所有权模型,把运行时问题推到编译期。",
-			en: "rmx rewrites Windows directory deletion in Rust for magnitude-level speedup. Push runtime bugs to compile time.",
+			zh: "基于 Rayon 并行与 NTFS API,在 Windows 下处理 node_modules 等深层目录比原生方式快一个数量级,并保证符号链接安全。",
+			en: "Built on Rayon and the NTFS API. Removes deeply nested trees like node_modules an order of magnitude faster than native tooling, with symlink safety.",
 		},
 	},
 	{
 		number: "04",
 		eyebrow: { zh: "开发者工具", en: "Dev Tools" },
-		title: { zh: "为开发者,由开发者。", en: "For developers, by developers." },
+		title: { zh: "PenBridge / LspProxy", en: "PenBridge / LspProxy" },
 		description: {
-			zh: "PenBridge 一键跨平台发布博客;LspProxy 把 LSP 文档实时翻译成中文。消除每天都会遇到的小摩擦。",
-			en: "PenBridge publishes to multiple platforms with one click. LspProxy translates LSP docs to Chinese in real time.",
+			zh: "PenBridge 将 Markdown 一键发布至知乎、掘金、CSDN 等平台;LspProxy 以透明代理方式将 LSP hover 与 diagnostics 实时翻译为中文。",
+			en: "PenBridge publishes Markdown to Zhihu / Juejin / CSDN in one click. LspProxy transparently translates LSP hover and diagnostics into Chinese.",
 		},
 	},
 	{
 		number: "05",
-		eyebrow: { zh: "开源优先", en: "Open Source" },
-		badge: "MIT",
-		title: { zh: "代码公开,决策公开。", en: "Code open, decisions open." },
-		description: {
-			zh: "所有项目 MIT 开源,750+ stars 是社区信任的累积。Issue 即产品会议,PR 即代码评审。",
-			en: "All projects open-sourced under MIT. 750+ stars reflect community trust. Issues are the product meetings.",
-		},
-	},
-	{
-		number: "06",
 		eyebrow: { zh: "AUR 维护", en: "AUR" },
-		title: { zh: "Arch Linux 包常备。", en: "Ready-made for Arch." },
+		title: { zh: "4 个 -bin 包常备", en: "4 -bin packages on AUR" },
 		description: {
-			zh: "为 Arch 用户维护 pencil-bin / fluxdown-bin / dida365-bin / hexhub-bin 等包,一行 yay 即用。",
-			en: "Maintaining pencil-bin / fluxdown-bin / dida365-bin / hexhub-bin on AUR. One yay away.",
+			zh: "为 Arch Linux 维护 pencil-bin、fluxdown-bin、dida365-bin、hexhub-bin,支持 yay -S 直接安装。",
+			en: "Maintaining pencil-bin, fluxdown-bin, dida365-bin, and hexhub-bin. Install via yay -S.",
 		},
 		tags: ["yay", "paru", "binary"],
 	},
 	{
-		number: "07",
-		eyebrow: { zh: "现代前端", en: "Modern Web" },
-		title: { zh: "静态为王,交互有度。", en: "Static first, interactive where needed." },
-		description: {
-			zh: "Astro 的岛屿架构、React 的组件生态、Tailwind 的原子化。默认零 JS,按需使用.",
-			en: "Astro's island architecture, React's ecosystem, Tailwind's utilities. Zero JS by default, hydrate on demand.",
-		},
-	},
-	{
-		number: "08",
-		eyebrow: { zh: "AI 原生", en: "AI Native" },
-		badge: lang === "zh" ? "探索中" : "exploring",
-		title: { zh: "Agent 与代码协作。", en: "Agents as co-authors." },
-		description: {
-			zh: "axon-ai 在探索 Agent 编排与工具调用。把 LLM 当作「会写代码的同事」,而不是玩具。",
-			en: "axon-ai explores agent orchestration. Treat LLMs as coworkers that write code, not toys.",
-		},
-	},
-	{
-		number: "09",
+		number: "06",
 		eyebrow: { zh: "工程美学", en: "Craft" },
-		title: { zh: "细节即品牌。", en: "Details are the brand." },
+		title: { zh: "视觉细节规范", en: "Visual details" },
 		description: {
-			zh: "等宽标签、虚线发丝、01/02/03 编号、tabular-nums 数字对齐。每一处都是审慎的选择。",
-			en: "Monospace labels, hairline dashes, 01/02/03 numbering, tabular digits. Every detail is deliberate.",
+			zh: "等宽标签、虚线分隔、01/02/03 编号、tabular-nums 数字对齐,视觉参考 better-auth。",
+			en: "Monospace labels, hairline dashes, 01/02/03 numbering, tabular digits. Visual reference: better-auth.",
 		},
 	},
 ] as const;
-
-/* ----------------------------------------------------------------------------
- * Stack 演示代码片段 —— 展示 Lab 的技术身份
- * -------------------------------------------------------------------------- */
-
-const ABOUT_SNIPPET = `// about.ts
-const zerxLab = {
-  name: "ZerxLab",
-  mission: "build fast, ship open, stay curious",
-  stack: {
-    languages: ["TypeScript", "Rust", "Go", "Python"],
-    runtime:   ["Bun", "Node", "Tokio"],
-    frontend:  ["Astro", "React", "Tailwind"],
-    backend:   ["Hono", "Directus", "PostgreSQL"],
-    infra:     ["Docker", "Dokploy", "GitHub Actions"],
-  },
-  focus: "performance / dx / open-source",
-  since: 2020,
-} as const;
-
-export default zerxLab;`;
 
 /* ----------------------------------------------------------------------------
  * 左栏 CTA 按钮文案
@@ -474,17 +424,14 @@ const ctaSecondary = {
 						<span class="text-[color:var(--color-ink-primary)] font-medium">
 							ZerxLab
 						</span>{" "}
-						是一个专注于构建高性能应用、探索现代技术架构并持续产出开源工具的全栈实验室。
-						这里没有大词和营销话术 —— 每个项目都能跑、能测、能用,并以 MIT 协议开放源代码。
+						是一个关注全栈工程、性能优化与开发者工具的开源实验室,始于 2020。主要技术栈为 Go、Rust、TypeScript,代表项目包括 WordZero(Go 实现的 Word 文档引擎,对比 Python 方案有 21× 的性能差异)、PenBridge(跨平台博客发布工具)、rmx(Windows 下基于 Rust 的并行目录删除工具)。所有项目均以开源协议发布,并在 AUR 同步维护常用软件包。
 					</>
 				) : (
 					<>
 						<span class="text-[color:var(--color-ink-primary)] font-medium">
 							ZerxLab
 						</span>{" "}
-						is a full-stack lab focused on building high-performance apps,
-						exploring modern architecture, and shipping open-source tools.
-						No buzzwords — every project runs, benchmarks, and ships under MIT.
+						is an open-source laboratory focused on full-stack engineering, performance, and developer tools, founded in 2020. Core stack: Go, Rust, TypeScript. Representative projects include WordZero (a Go-based Word document engine, 21× faster than the Python path), PenBridge (cross-platform blog publisher), and rmx (a Rust parallel directory remover for Windows). All projects are released under open-source licenses, with mirrored packages on the AUR.
 					</>
 				)
 			}
@@ -630,64 +577,6 @@ const ctaSecondary = {
 				</FeatureCard>
 			))
 		}
-	</div>
-
-	{/* ---------- STACK 代码片段分区 ---------- */}
-	<SectionHeader
-		eyebrow={t("section.stack")}
-		spacious
-		linkText={t("action.viewOnGithub")}
-		linkHref={data.github}
-	/>
-
-	<div
-		class:list={[
-			"mt-6 lg:mt-8",
-			"border border-dashed border-[color:var(--color-hairline)]",
-			"bg-[color:var(--color-paper-muted)]/30",
-			"overflow-hidden",
-		]}
-	>
-		{/* 伪编辑器头部 */}
-		<div
-			class:list={[
-				"flex items-center gap-3",
-				"px-4 py-2.5",
-				"border-b border-dashed border-[color:var(--color-hairline)]",
-				"bg-[color:var(--color-paper-muted)]/50",
-			]}
-		>
-			<div class="flex items-center gap-1.5">
-				<span class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"></span>
-				<span class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"></span>
-				<span class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"></span>
-			</div>
-			<span
-				class:list={[
-					"mono-label",
-					"text-[10px]",
-					"text-[color:var(--color-ink-tertiary)]",
-				]}
-			>
-				about.ts
-			</span>
-			<span
-				aria-hidden="true"
-				class="ml-auto mono-num text-[10px] text-[color:var(--color-ink-muted)]"
-			>
-				TS
-			</span>
-		</div>
-
-		{/* 代码内容 */}
-		<pre
-			class:list={[
-				"px-4 py-4 lg:px-5 lg:py-5",
-				"font-[var(--font-mono)]",
-				"text-[12.5px] leading-[1.65]",
-				"text-[color:var(--color-ink-secondary)]",
-				"overflow-x-auto",
-			]}><code>{ABOUT_SNIPPET}</code></pre>
 	</div>
 
 	{/* ---------- 底部:博客 / 项目引导 ---------- */}

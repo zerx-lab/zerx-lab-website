@@ -144,6 +144,7 @@ const hasLabelCover = !hasImageCover && Boolean(coverLabel);
 <a
 	href={href}
 	aria-label={title}
+	data-featured={featured ? "true" : undefined}
 	class:list={[
 		"post-card",
 		"group relative",
@@ -180,6 +181,40 @@ const hasLabelCover = !hasImageCover && Boolean(coverLabel);
 			"bg-[color:var(--color-paper-subtle)]",
 		]}
 	>
+		{/* ----------------------------------------------------------------
+		 *   精选徽标 —— 封面左上角浮层
+		 * ----------------------------------------------------------------
+		 *   形态贴合编辑派:
+		 *     - 虚线边框(系统主语言,与 BlogIndexPage 列表框、AboutPage 卡片一致)
+		 *     - 纸色半透明底 + 墨色 ink-tertiary 文字
+		 *     - font-mono + uppercase + tracking-wider(与 .mono-label 同规范)
+		 *   位置:
+		 *     - absolute top-2 left-2,永远在封面图/占位/斜线之上
+		 *     - z-20 保证压过占位块里的噪点与索引条(z 为 10)
+		 *   暗色模式:
+		 *     - 颜色全走 CSS 变量,自动反相,无需额外处理
+		 * -------------------------------------------------------------- */}
+		{featured && (
+			<span
+				aria-label={t("blog.featured")}
+				class:list={[
+					"absolute top-2 left-2 z-20",
+					"inline-flex items-center",
+					"px-1.5 py-[2px]",
+					"font-[var(--font-mono)]",
+					"text-[10px] sm:text-[10.5px]",
+					"leading-none",
+					"uppercase tracking-[var(--tracking-wider)]",
+					"text-[color:var(--color-ink-secondary)]",
+					"bg-[color:var(--color-paper)]/85",
+					"border border-dashed border-[color:var(--color-hairline-strong)]",
+					"backdrop-blur-[2px]",
+					"select-none pointer-events-none",
+				]}
+			>
+				{t("blog.featured")}
+			</span>
+		)}
 		{hasImageCover ? (
 			<img
 				src={cover!}
@@ -503,14 +538,16 @@ const hasLabelCover = !hasImageCover && Boolean(coverLabel);
 	}
 
 	/* ----------------------------------------------------------------------------
-	 * 精选卡片的左侧强调条(与 FeatureCard 的做法保持一致,形成系列感)
+	 * 精选卡片
 	 * --------------------------------------------------------------------------
-	 * 精选卡片在 hover 之前就已有一条淡色强调条,hover 后加深并延长;
-	 * 非精选卡片不显示。
+	 * 视觉标识由封面左上角的 "FEATURED / 精选" 徽标承担(见上方模板),
+	 * 外加整张卡片的 bg-[color:var(--color-paper-muted)]/30 底色区分;
+	 * 此处保留 data-featured 选择器作为未来扩展钩子(如加侧边强调条),
+	 * 当前不追加任何规则,避免与模板里的 Tailwind 工具类重复或冲突。
 	 * -------------------------------------------------------------------------- */
 
 	.post-card[data-featured="true"] {
-		position: relative;
+		/* reserved */
 	}
 
 	/* ----------------------------------------------------------------------------

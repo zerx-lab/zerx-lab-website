@@ -100,7 +100,6 @@
 .prose .md-heading-2 {
 	font-size: 1.55em;
 	margin: 2.25em 0 0.7em;
-	padding-top: 0.2em;
 	/* H2 之上加一条极淡的虚线,强化分节感 */
 	border-top: 1px dashed var(--color-hairline);
 	padding-top: 1.5em;

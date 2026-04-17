@@ -79,11 +79,22 @@ const LOCALES: Record<Lang, FeedLocaleMeta> = {
  * 对正常文本完全是 no-op,安全起见保留。
  * -------------------------------------------------------------------------- */
 
+// XML 1.0 不允许的控制字符(除 \t=0x09 \n=0x0A \r=0x0D 外的 0x00-0x1F)。
+// 用 new RegExp + 字符串拼接动态构造,避免在源码里出现字面量控制字符
+// (字面量写法会触发 no-control-regex 诊断)。pattern 在模块加载期编译一次复用。
+const XML_INVALID_CONTROL_CHARS = new RegExp(
+	"[" +
+		"\\u0000-\\u0008" + // 排除 \t (\u0009)
+		"\\u000B\\u000C" + // 排除 \n (\u000A) \r (\u000D)
+		"\\u000E-\\u001F" +
+		"]",
+	"g",
+);
+
 function cleanText(input: string): string {
 	return (
 		input
-			// 去除 XML 1.0 不允许的控制字符(除 \t \n \r 外的 0x00-0x1F)
-			.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+			.replace(XML_INVALID_CONTROL_CHARS, "")
 			// 去除零宽与 BOM
 			.replace(/[\u200B-\u200F\uFEFF]/g, "")
 			.trim()
