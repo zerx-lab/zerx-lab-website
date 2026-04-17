@@ -8,14 +8,15 @@
  * 桌面端 (≥ 768px, md):
  *   - Tab 风格:每项占据等宽,底部有激活下划线
  *   - 全大写 + Monospace tracking
- *   - 最右侧是"强调块"(SIGN-IN 的黑块),我们换成 GitHub 外链
- *   - 再右侧放语言切换 + 主题切换
+ *   - 最右侧依次放 语言切换 / 主题切换 / GitHub 外链,三者视觉权重一致
+ *     (早期版本 GitHub 用 better-auth 的 SIGN-IN 黑块强调,已改为 ghost 风格,
+ *      避免黑色实心块在整条 hairline+克制的工具区里过于突兀)
  *   布局:
  *   [HOME] [PROJECTS] [AUR] [BLOG] [ABOUT] | [ZH/EN] [☼] [GITHUB ↗]
  *
  * 移动端 (< 768px):
  *   - 左侧:ZERX-LAB 品牌文字(点击回首页)
- *   - 右侧:GitHub 强调块(保留,一键到 GH 是常用操作) + 汉堡按钮
+ *   - 右侧:GitHub 图标钮(ghost 风格,与汉堡按钮对齐) + 汉堡按钮
  *   - 点击汉堡弹出全屏抽屉(from-top),抽屉内:
  *       · 5 个导航项(纵向大块可点,触控友好 48px 高)
  *       · 分割线
@@ -119,26 +120,27 @@ function isActive(item: NavItem): boolean {
 
 		{/* 右:工具区 */}
 		<div class="ml-auto flex items-stretch">
-			{/* GitHub 强调块(移动端保留,但收窄为图标+短文案) */}
+			{/* GitHub 图标钮(ghost 风格,与汉堡一致) */}
 			<a
 				href={GITHUB_URL}
 				target="_blank"
 				rel="noopener noreferrer"
 				aria-label={t("nav.github")}
 				class:list={[
-					"flex items-center gap-1.5",
-					"px-3",
-					"mono-label",
-					"text-[11px]",
-					"bg-[color:var(--color-ink-primary)]",
-					"text-[color:var(--color-paper)]",
-					"select-none whitespace-nowrap",
+					"inline-flex items-center justify-center",
+					"h-full w-12",
+					"border-l border-[color:var(--color-hairline)]",
+					"text-[color:var(--color-ink-muted)]",
+					"hover:text-[color:var(--color-ink-primary)]",
+					"hover:bg-[color:var(--color-paper-muted)]",
+					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+					"select-none",
 				]}
 			>
 				<svg
 					aria-hidden="true"
-					width="13"
-					height="13"
+					width="16"
+					height="16"
 					viewBox="0 0 24 24"
 					fill="currentColor"
 					class="shrink-0"
@@ -272,7 +274,7 @@ function isActive(item: NavItem): boolean {
 			<ThemeToggle />
 		</div>
 
-		{/* GitHub 强调块(对应 better-auth 的 SIGN-IN 黑块) */}
+		{/* GitHub 外链(ghost 风格,与语言/主题切换统一) */}
 		<a
 			href={GITHUB_URL}
 			target="_blank"
@@ -281,19 +283,20 @@ function isActive(item: NavItem): boolean {
 			class:list={[
 				"group flex items-center gap-2",
 				"px-4 sm:px-5",
-				"mono-label",
+				"font-[var(--font-mono)]",
 				"text-[11px] sm:text-xs",
-				"bg-[color:var(--color-ink-primary)]",
-				"text-[color:var(--color-paper)]",
-				"hover:bg-[color:var(--color-ink-secondary)]",
+				"uppercase tracking-[var(--tracking-wider)] font-medium",
+				"text-[color:var(--color-ink-muted)]",
+				"hover:text-[color:var(--color-ink-primary)]",
+				"hover:bg-[color:var(--color-paper-muted)]",
 				"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
 				"select-none whitespace-nowrap",
 			]}
 		>
 			<svg
 				aria-hidden="true"
-				width="12"
-				height="12"
+				width="13"
+				height="13"
 				viewBox="0 0 24 24"
 				fill="currentColor"
 				class="shrink-0"

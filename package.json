@@ -13,6 +13,7 @@
     "preview": "astro preview",
     "astro": "astro",
     "bootstrap": "bun run scripts/bootstrap-directus.ts",
+    "bootstrap:flows": "bun run scripts/bootstrap-flows.ts",
     "seed": "bun run scripts/seed-directus.ts",
     "typegen": "bun run scripts/generate-directus-types.ts",
     "lint": "astro check",
