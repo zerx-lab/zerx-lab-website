@@ -327,12 +327,48 @@ const categoryCountsForTabs: Record<string, number> = {
 	__all__: categoryCounts.total,
 	...categoryCounts.byCategory,
 };
+
+/* ----------------------------------------------------------------------------
+ * BlogMark 左栏装置数据
+ * ----------------------------------------------------------------------------
+ * 把 Directus(或 fallback)真实分类列表和每分类计数折成 BlogMark 需要的形状:
+ *   { slug, name, count }[],按 count 降序(条形图"重"的排在上面,视觉更稳)。
+ *
+ * name 取自 categoriesList(已按当前 lang 解包),count 取自 categoryCounts.byCategory,
+ * 查不到计数的分类视为 0(bootstrap 新增但还没文章的分类不会被遗漏)。
+ *
+ * 只展示前 N 项,避免左栏被极长的分类列表撑开。剩余分类不进入装置 —— 用户要看
+ * 完整分类可用右栏顶部的分类切换器。
+ * -------------------------------------------------------------------------- */
+
+const BLOG_MARK_MAX_ROWS = 6;
+
+const blogMarkCategories = categoriesList
+	.map((c: CategoryVM) => ({
+		slug: c.slug,
+		name: c.name,
+		count: categoryCounts.byCategory[c.slug] ?? 0,
+	}))
+	.sort((a, b) => b.count - a.count)
+	.slice(0, BLOG_MARK_MAX_ROWS);
 ---
 
 <AppShell
 	title={copy.title}
 	description={copy.description}
 >
+	{/* ---------- 左栏:视觉装置(分类分布条形图) ----------
+	 * 博客列表页专属装置,替代首页的 LabMark。
+	 * 传入 left-visual slot 后,AppShell 走"页面自定义装置"分支,
+	 * 不再渲染默认 LabMark。
+	 * ------------------------------------------------------------ */}
+	<Fragment slot="left-visual">
+		<BlogMark
+			categories={blogMarkCategories}
+			total={categoryCounts.total}
+		/>
+	</Fragment>
+
 	{/* ---------- 左栏:社交(仅 RSS) ---------- */}
 	<Fragment slot="left-social">
 		<a
