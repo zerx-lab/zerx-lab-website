@@ -23,16 +23,16 @@
  *   - Markdown 正文(prose 样式)
  *   - 分割线 + 上一篇 / 下一篇导航
  *
- * 使用方式(页面文件):
+ * 使用方式(页面文件,SSR):
  *   ---
  *   import BlogPostPage from "@components/blog/BlogPostPage.astro";
- *   export async function getStaticPaths() { ... }
  *   const { slug } = Astro.params;
+ *   if (!slug) return new Response(null, { status: 404 });
  *   ---
  *   <BlogPostPage slug={slug} />
  *
  * 错误处理:
- *   - slug 不存在 → 返回 Astro 的 404(由 getStaticPaths 提前保证不会发生)
+ *   - slug 不存在 → 直接 return 404 Response(运行时由 loadPostBySlug 判定)
  *   - Markdown 渲染失败 → 降级为纯文本 <pre>,不让页面炸
  * ============================================================================
  */
@@ -51,14 +51,10 @@ import {
 } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 import {
-	findFallbackPost,
-	findAuthor,
-	findCategory,
-	findTag,
-	getAdjacentPosts,
-	pickLang,
-	type FallbackPost,
-} from "@lib/fallback-data";
+	loadPostBySlug,
+	loadAdjacentPosts,
+	type PostVM,
+} from "@lib/queries/posts";
 import { renderMarkdown, type MarkdownHeading } from "@lib/markdown";
 import "@styles/prose.css";
 
@@ -80,81 +76,37 @@ const tp = useTranslatedPath(lang);
 /* ----------------------------------------------------------------------------
  * 加载文章
  * ----------------------------------------------------------------------------
- * 策略:
- *   - 优先走 Fallback(这是唯一保证"永远有内容"的来源)
- *   - 未来接入 Directus 的单篇查询时,在此处扩展并在失败时降级到 fallback
+ * 所有数据源优先级、fallback 降级、Directus fields 映射都收敛在
+ * src/lib/queries/posts.ts,本文件只消费 PostVM。
+ *
+ * 三层优先级(由 loadPostBySlug 内部处理):
+ *   1. Directus posts + translations + author + category + tags
+ *   2. fallback-data 的 FALLBACK_POSTS
+ *   3. 都找不到 → null
+ *
+ * 404 边界在页面文件(src/pages/blog/[slug].astro 与 /en/blog/[slug].astro)
+ * 已经前置拦截:slug 查不到时页面直接 Astro.redirect("/404", 404),
+ * 根本不会渲染到本组件。本组件里若仍然拿到 null 属于"契约被破坏"的 bug,
+ * 应当抛错而不是 return Response —— Astro 的 `.astro` 子组件里
+ * return Response 行为未定义,会触发 ResponseSentError。
  * -------------------------------------------------------------------------- */
 
-interface PostVM {
-	slug: string;
-	title: string;
-	excerpt: string;
-	content: string;
-	coverLabel: string;
-	cover: string | null;
-	authorName: string | null;
-	authorBio: string | null;
-	authorGithub: string | null;
-	authorAvatar: string | null;
-	categorySlug: string | null;
-	categoryName: string | null;
-	tags: readonly { slug: string; name: string }[];
-	date: string;
-	updatedDate: string | null;
-	readingTime: number;
-	featured: boolean;
+const post: PostVM | null = await loadPostBySlug(slug, lang);
+
+if (!post) {
+	// 理论上不可达:页面层已前置拦截 null 情况。若真的走到这里,
+	// 说明调用方没按契约使用本组件,直接抛错便于排查而不是静默降级。
+	throw new Error(
+		`[BlogPostPage] loadPostBySlug("${slug}") returned null. ` +
+			`调用方应在页面级先做存在性判断并跳转 404,不应把不存在的 slug 传进本组件。`,
+	);
 }
-
-function fallbackToVM(post: FallbackPost, currentLang: Lang): PostVM {
-	const author = findAuthor(post.authorSlug);
-	const category = findCategory(post.categorySlug);
-	const tags = post.tagSlugs
-		.map((s) => {
-			const tag = findTag(s);
-			if (!tag) return null;
-			return { slug: tag.slug, name: pickLang(tag.name, currentLang) };
-		})
-		.filter((x): x is { slug: string; name: string } => x !== null);
-
-	return {
-		slug: post.slug,
-		title: pickLang(post.title, currentLang),
-		excerpt: pickLang(post.excerpt, currentLang),
-		content: pickLang(post.content, currentLang),
-		coverLabel: pickLang(post.coverLabel, currentLang),
-		cover: post.cover,
-		authorName: author?.name ?? null,
-		authorBio: author ? pickLang(author.bio, currentLang) : null,
-		authorGithub: author?.github ?? null,
-		authorAvatar: author?.avatar ?? null,
-		categorySlug: category?.slug ?? null,
-		categoryName: category ? pickLang(category.name, currentLang) : null,
-		tags,
-		date: post.date,
-		updatedDate: post.updatedDate,
-		readingTime: post.readingTime,
-		featured: post.featured,
-	};
-}
-
-const fallbackPost = findFallbackPost(slug);
-
-if (!fallbackPost) {
-	// 理论上不会到这里(getStaticPaths 已经过滤过),
-	// 但以防万一:返回 404
-	return new Response(null, { status: 404 });
-}
-
-const post: PostVM = fallbackToVM(fallbackPost, lang);
 
 /* ----------------------------------------------------------------------------
  * 相邻文章(上一篇/下一篇)
  * -------------------------------------------------------------------------- */
 
-const { previous: prevPost, next: nextPost } = getAdjacentPosts(slug);
-
-const prevVM = prevPost ? fallbackToVM(prevPost, lang) : null;
-const nextVM = nextPost ? fallbackToVM(nextPost, lang) : null;
+const { previous: prevVM, next: nextVM } = await loadAdjacentPosts(slug, lang);
 
 /* ----------------------------------------------------------------------------
  * Markdown 渲染
@@ -751,7 +703,7 @@ const jsonLd = JSON.stringify({
 					"order-first xl:order-last",
 				]}
 			>
-				<TableOfContents headings={headings} />
+				<TableOfContents headings={headings} defaultOpen={true} />
 			</div>
 		)}
 	</div>

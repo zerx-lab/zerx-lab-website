@@ -176,14 +176,55 @@ const generator = Astro.generator;
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <link rel="manifest" href="/site.webmanifest" />
 
-{/* ---------- Sitemap / RSS 自动发现 ---------- */}
+{/* ---------- Sitemap / RSS 自动发现 ----------
+ * RSS feed 按语言拆分成两个端点:
+ *   /rss.xml       zh-CN, 默认语言无前缀
+ *   /en/rss.xml    en-US
+ *
+ * 声明策略:
+ *   1. 当前语言的 feed 作为主订阅源(不带 hreflang,优先级最高)
+ *   2. 另一种语言的 feed 补一条带 hreflang 的 alternate,让 RSS 阅读器
+ *      和浏览器扩展可以在同一页面发现两种语言的 feed。
+ *   3. title 里带语言后缀,避免订阅面板里两条同名。
+ *
+ * 规范参考:
+ *   - hreflang 对 <link rel="alternate"> 合法,见 HTML spec
+ *   - 同一页面多条 alternate rss 被主流阅读器(Feedly/Inoreader)支持
+ * -------------------------------------------------------------------------- */}
 <link rel="sitemap" type="application/xml" href="/sitemap-index.xml" />
-<link
-	rel="alternate"
-	type="application/rss+xml"
-	title={`${SITE_NAME} — ${t("nav.blog")} RSS`}
-	href="/rss.xml"
-/>
+{lang === "zh" ? (
+	<>
+		<link
+			rel="alternate"
+			type="application/rss+xml"
+			title={`${SITE_NAME} — ${t("nav.blog")} RSS (中文)`}
+			href="/rss.xml"
+		/>
+		<link
+			rel="alternate"
+			type="application/rss+xml"
+			title={`${SITE_NAME} — Blog RSS (English)`}
+			href="/en/rss.xml"
+			hreflang="en"
+		/>
+	</>
+) : (
+	<>
+		<link
+			rel="alternate"
+			type="application/rss+xml"
+			title={`${SITE_NAME} — ${t("nav.blog")} RSS (English)`}
+			href="/en/rss.xml"
+		/>
+		<link
+			rel="alternate"
+			type="application/rss+xml"
+			title={`${SITE_NAME} — 博客 RSS (中文)`}
+			href="/rss.xml"
+			hreflang="zh"
+		/>
+	</>
+)}
 
 {/* ---------- 字体预连接 / 预加载 ----------
  * 字体自托管在 /public/fonts 下,使用 woff2 格式。

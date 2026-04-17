@@ -1,71 +1,84 @@
 /**
  * ============================================================================
- * RSS Feed
+ * RSS Feed — 中文入口 (默认语言,无前缀)
  * ----------------------------------------------------------------------------
  * 端点:
- *   /rss.xml
- *
- * 行为:
- *   聚合博客所有已发布文章(中英两种语言版本都收录,使用 slug + 语言前缀区分),
- *   按发布时间降序输出 RSS 2.0 XML。
+ *   /rss.xml        本文件(zh,zh-cn)
+ *   /en/rss.xml     src/pages/en/rss.xml.ts(en,en-us)
  *
  * 设计决策:
- *   1. 订阅源只有一个根 feed,不按语言拆分成 /rss.xml 和 /rss-en.xml:
- *      - 读者通常只关心"有没有新内容",而不是"用哪种语言写的"
- *      - 同一篇文章的中英版本都作为独立 <item> 收录,title / description
- *        根据语言拼接可识别的前缀(如 "[EN]"),避免 feed 阅读器内两条重复
- *   2. 正文只放 excerpt(摘要),不放完整 content:
+ *   1. 按语言拆分成两个独立 feed,而不是单 feed 塞双语 item:
+ *      - 符合 RSS 2.0 规范:<language> 是 feed 级属性,不是 item 级
+ *      - 阅读器体验更干净:中文用户只看中文条目,不会看到 "[EN] ..." 前缀
+ *      - 与全站路由对称:其它资源都是 /foo(zh) + /en/foo(en)
+ *   2. 核心构造逻辑抽到 buildLocalizedFeed(),两个语言入口只传一个参数:
+ *      - 中文入口: export const GET = buildLocalizedFeed("zh")
+ *      - 英文入口: export const GET = buildLocalizedFeed("en")
+ *      保证两边 feed 的字段映射、排序、过滤完全一致
+ *   3. 正文只放 excerpt(摘要),不放完整 content:
  *      - 避免 feed 体积膨胀(Markdown → HTML 展开后单篇可达数十 KB)
  *      - 鼓励读者点回站内阅读(有更好的排版与暗色模式)
- *   3. link 使用绝对 URL(基于 SITE_URL),确保 feed 阅读器能正确跳转
- *   4. guid 使用 canonical URL(含语言前缀),保证唯一且稳定
+ *   4. link / guid 使用含语言前缀的绝对 URL,保证跨 feed 全局唯一
  *
  * 数据源:
- *   - 当前阶段从 src/lib/fallback-data.ts 的 FALLBACK_POSTS 读取
- *   - 未来接入 Directus 后可在此处改为优先从 Directus 拉取 published 文章,
- *     失败时回退到 fallback
+ *   - src/lib/queries/posts.ts 的 listPostsForFeed()
+ *   - 内部已做 Directus → fallback-data 双层降级,本文件只负责 feed 成型
  *
  * 参考:
  *   https://docs.astro.build/en/recipes/rss/
  *   https://www.rssboard.org/rss-specification
+ *   https://www.rssboard.org/rss-language-codes
  * ============================================================================
  */
 
 import rss from "@astrojs/rss";
-import type { APIContext } from "astro";
-import {
-	listFallbackPosts,
-	pickLang,
-	findAuthor,
-	findCategory,
-} from "@lib/fallback-data";
+import type { APIContext, APIRoute } from "astro";
+import type { Lang } from "@i18n/ui";
+import { listPostsForFeed, type FeedPost } from "@lib/queries/posts";
 
 /* ----------------------------------------------------------------------------
- * Feed 基础元信息
+ * Feed 基础元信息(双语各一套)
  * ----------------------------------------------------------------------------
  * 这些字段会出现在 feed 阅读器的"订阅源信息"面板,影响默认展示名与介绍。
- * 不涉及任何文章级数据,可视作站点级常量。
  * -------------------------------------------------------------------------- */
 
 const FEED_TITLE = "ZerxLab";
-const FEED_DESCRIPTION_ZH =
-	"ZerxLab 博客 — 工程笔记、项目发布与架构决策。所有文章双语发布。";
-const FEED_DESCRIPTION_EN =
-	"ZerxLab blog — engineering notes, release logs, and architecture decisions. All posts available in Chinese and English.";
 
-/** RSS <language> 字段:使用 zh-cn 作为主语言(默认语言) */
-const FEED_LANGUAGE = "zh-cn";
+/** 每种语言的 feed 级元数据 */
+interface FeedLocaleMeta {
+	/** RSS <description> channel 级简介 */
+	description: string;
+	/**
+	 * RSS <language> 字段。
+	 * 必须使用 RSS 规范允许的 code(zh-cn / en-us 等),与 BCP 47 区分:
+	 *   BCP 47 是 "zh-CN" 大小写敏感,RSS 规范用小写。
+	 */
+	language: "zh-cn" | "en-us";
+}
 
-/**
- * 把任意字符串转成 CDATA 安全的文本。
- *
- * 技术说明:
- *   RSS 的 title / description 允许 CDATA 包裹,@astrojs/rss 会帮我们处理,
- *   但我们仍然主动清理一些容易炸的字符:
- *     - 零宽字符(用户粘贴时偶尔带入)
- *     - 不可打印控制字符(XML 1.0 不允许部分控制字符即便 CDATA)
- *   对正常文本完全是 no-op,安全起见保留。
- */
+const LOCALES: Record<Lang, FeedLocaleMeta> = {
+	zh: {
+		description:
+			"ZerxLab 博客 — 工程笔记、项目发布与架构决策。关注高性能应用与开源工具。",
+		language: "zh-cn",
+	},
+	en: {
+		description:
+			"ZerxLab blog — engineering notes, release logs, and architecture decisions. Focused on high-performance apps and open-source tools.",
+		language: "en-us",
+	},
+};
+
+/* ----------------------------------------------------------------------------
+ * 文本清理
+ * ----------------------------------------------------------------------------
+ * RSS 的 title / description 允许 CDATA 包裹,@astrojs/rss 会帮我们处理,
+ * 但我们仍然主动清理一些容易炸的字符:
+ *   - 零宽字符(用户粘贴时偶尔带入)
+ *   - 不可打印控制字符(XML 1.0 不允许部分控制字符即便 CDATA)
+ * 对正常文本完全是 no-op,安全起见保留。
+ * -------------------------------------------------------------------------- */
+
 function cleanText(input: string): string {
 	return (
 		input
@@ -76,6 +89,10 @@ function cleanText(input: string): string {
 			.trim()
 	);
 }
+
+/* ----------------------------------------------------------------------------
+ * 绝对 URL 拼接
+ * -------------------------------------------------------------------------- */
 
 /**
  * 把 SITE_URL 与相对路径拼成绝对 URL。
@@ -93,11 +110,67 @@ function absolute(site: URL | undefined, path: string): string {
 	return `${base}${rel}`;
 }
 
+/**
+ * 按语言计算 RSS feed 自身的相对路径。
+ *
+ * 为什么不用 @i18n/utils 的 useTranslatedPath:
+ *   - 该函数名以 `use` 开头,会被 React Hooks 的 lint 规则误判为 Hook,
+ *     在工厂函数(非组件)里调用会触发 "hooks called conditionally" 报错
+ *   - RSS 的路径映射极简(只有两种语言、一个文件名),本地实现一行就够,
+ *     不值得为了复用引入 Hooks lint 抑制注释
+ *
+ * 约定与全站一致:
+ *   zh(默认语言)→ /rss.xml        (无前缀)
+ *   en           → /en/rss.xml
+ */
+function feedSelfPath(lang: Lang): string {
+	return lang === "en" ? "/en/rss.xml" : "/rss.xml";
+}
+
 /* ----------------------------------------------------------------------------
- * Feed item 构造
+ * 按语言从 FeedPost 抽字段
  * ----------------------------------------------------------------------------
- * 每篇文章被展开为两条 <item>(中文 + 英文),方便不同语言读者。
- * 如未来希望严格按用户偏好 feed,可改为仅导出默认语言条目。
+ * FeedPost 是双语扁平结构(titleZh / titleEn 等),feed 只要一种语言,
+ * 这个工具做单向选择。目的是把所有 "lang === "zh" ? a : b" 的决策
+ * 收敛到一处,后续加新字段不会漏某处分支。
+ * -------------------------------------------------------------------------- */
+
+interface LocalizedPostFields {
+	title: string;
+	excerpt: string;
+	categoryName: string | null;
+	/** canonical URL 相对路径,不含 site 部分。后续由 absolute() 补全域名 */
+	path: string;
+}
+
+function localizePost(post: FeedPost, lang: Lang): LocalizedPostFields {
+	if (lang === "en") {
+		return {
+			title: post.titleEn,
+			excerpt: post.excerptEn,
+			categoryName: post.categoryNameEn,
+			path: `/en/blog/${post.slug}`,
+		};
+	}
+	// 默认语言 zh:URL 无前缀
+	return {
+		title: post.titleZh,
+		excerpt: post.excerptZh,
+		categoryName: post.categoryNameZh,
+		path: `/blog/${post.slug}`,
+	};
+}
+
+/* ----------------------------------------------------------------------------
+ * Feed items 构造
+ * ----------------------------------------------------------------------------
+ * 每篇文章只产出一条 item(对应当前 lang)。
+ * 相比早期"中英双 item"的设计,这里不会再出现 "[EN] ..." 的 title 前缀。
+ *
+ * 约束:
+ *   - 只产出当前 lang 的 item
+ *   - guid 用 canonical URL(含语言前缀),跨 feed 天然唯一
+ *   - 按 pubDate 降序排序,阅读器顶部永远是最新文章
  * -------------------------------------------------------------------------- */
 
 interface FeedItem {
@@ -110,112 +183,124 @@ interface FeedItem {
 	categories: readonly string[];
 }
 
-/**
- * 构建 feed items 列表。
- *
- * 约束:
- *   - 仅收录有 date 字段的文章(无 date 的条目会被 @astrojs/rss 当作无效)
- *   - 同一篇文章中英各一条 item,guid 靠 canonical URL 区分
- *   - 按 pubDate 降序排序,保证阅读器顶部永远是最新文章
- */
-function buildFeedItems(site: URL | undefined): FeedItem[] {
-	const posts = listFallbackPosts();
+function buildFeedItems(
+	site: URL | undefined,
+	posts: readonly FeedPost[],
+	lang: Lang,
+): FeedItem[] {
+	const langTag = LOCALES[lang].language; // "zh-cn" | "en-us"
 	const items: FeedItem[] = [];
 
 	for (const post of posts) {
 		const pubDate = new Date(post.date);
 		if (Number.isNaN(pubDate.getTime())) {
-			// 日期无效的条目直接跳过,避免 @astrojs/rss 抛错
+			// 理论上 listPostsForFeed 已经过滤过,这里是最后一道保险
 			continue;
 		}
 
-		const author = findAuthor(post.authorSlug);
-		const category = findCategory(post.categorySlug);
+		const localized = localizePost(post, lang);
+		const link = absolute(site, localized.path);
 
-		// 中文版
-		const zhTitle = cleanText(pickLang(post.title, "zh"));
-		const zhExcerpt = cleanText(pickLang(post.excerpt, "zh"));
-		const zhLink = absolute(site, `/blog/${post.slug}`);
-
-		items.push({
-			title: zhTitle,
-			pubDate,
-			description: zhExcerpt,
-			link: zhLink,
-			guid: zhLink,
-			author: author?.email ? `${author.email} (${author.name})` : author?.name,
-			categories: category
-				? [pickLang(category.name, "zh"), "zh-CN"]
-				: ["zh-CN"],
-		});
-
-		// 英文版
-		const enTitle = cleanText(pickLang(post.title, "en"));
-		const enExcerpt = cleanText(pickLang(post.excerpt, "en"));
-		const enLink = absolute(site, `/en/blog/${post.slug}`);
+		// RSS <author> 规范要求 "email (name)" 形式;降级用纯 name,再降级 undefined
+		const author =
+			post.authorEmail && post.authorName
+				? `${post.authorEmail} (${post.authorName})`
+				: (post.authorName ?? undefined);
 
 		items.push({
-			title: `[EN] ${enTitle}`,
+			title: cleanText(localized.title),
 			pubDate,
-			description: enExcerpt,
-			link: enLink,
-			guid: enLink,
-			author: author?.email ? `${author.email} (${author.name})` : author?.name,
-			categories: category
-				? [pickLang(category.name, "en"), "en-US"]
-				: ["en-US"],
+			description: cleanText(localized.excerpt),
+			link,
+			guid: link,
+			author,
+			// 第一个 category 是分类名(可能为 null → 只用语言标签)
+			// 第二个固定是语言标签,帮助阅读器做过滤
+			categories: localized.categoryName
+				? [localized.categoryName, langTag]
+				: [langTag],
 		});
 	}
 
-	// 按日期降序(同一天的两条中英并列,保持原插入顺序)
+	// 按日期降序
 	items.sort((a, b) => b.pubDate.getTime() - a.pubDate.getTime());
 
 	return items;
 }
 
 /* ----------------------------------------------------------------------------
- * Astro 端点
+ * Feed 端点工厂
  * ----------------------------------------------------------------------------
- * 静态端点:构建期生成一次 /rss.xml,运行时零成本。
- * 文章更新后需要重新构建站点以刷新 feed(符合 SSG 模型)。
+ * 返回一个 Astro APIRoute,供 /rss.xml 与 /en/rss.xml 各自 export GET 使用。
+ *
+ * 为什么导出工厂而不是两份拷贝:
+ *   - 两种语言的 feed 90% 逻辑相同,不同的只是:文章字段取哪种语言、
+ *     feed 级 description / language / self-link 路径
+ *   - 把这几个"差异点"封装在 LOCALES 和 localizePost() 里,工厂只接一个
+ *     lang 参数就能复用全部构造逻辑
+ *   - 英文入口文件只有几行 import + export,后续想加西语/日语 feed 也无痛
+ *
+ * 使用示例:
+ *   // src/pages/rss.xml.ts
+ *   export const GET = buildLocalizedFeed("zh");
+ *
+ *   // src/pages/en/rss.xml.ts
+ *   export const GET = buildLocalizedFeed("en");
  * -------------------------------------------------------------------------- */
 
-export async function GET(context: APIContext): Promise<Response> {
-	const items = buildFeedItems(context.site);
+export function buildLocalizedFeed(lang: Lang): APIRoute {
+	const meta = LOCALES[lang];
+	// feedSelfPath(lang) 在 zh 下返回 "/rss.xml",en 下返回 "/en/rss.xml"
+	const selfPath = feedSelfPath(lang);
 
-	return rss({
-		title: FEED_TITLE,
-		description: `${FEED_DESCRIPTION_ZH}\n\n${FEED_DESCRIPTION_EN}`,
-		// @astrojs/rss 要求绝对 URL;若 context.site 缺失回退到默认域名
-		site: context.site ?? "https://zerx.dev",
+	return async function GET(context: APIContext): Promise<Response> {
+		const posts = await listPostsForFeed();
+		const items = buildFeedItems(context.site, posts, lang);
 
-		items: items.map((item) => ({
-			title: item.title,
-			pubDate: item.pubDate,
-			description: item.description,
-			link: item.link,
-			// guid 由 @astrojs/rss 自动从 link 推断,这里显式传以避免歧义
-			// (guid 必须全文唯一,用完整 URL 最稳)
-			categories: [...item.categories],
-			author: item.author,
-		})),
+		return rss({
+			title: FEED_TITLE,
+			description: meta.description,
+			// @astrojs/rss 要求绝对 URL;若 context.site 缺失回退到默认域名
+			site: context.site ?? "https://zerx.dev",
 
-		// feed 层级自定义字段(会原样插入 <rss><channel> 下)
-		customData: [
-			`<language>${FEED_LANGUAGE}</language>`,
-			// self-link:指向 feed 本身,帮助 feed 阅读器做"断开订阅"判断
-			`<atom:link href="${absolute(context.site, "/rss.xml")}" rel="self" type="application/rss+xml" />`,
-			// 更新频率提示(纯建议,feed 阅读器可忽略)
-			`<ttl>60</ttl>`,
-		].join(""),
+			items: items.map((item) => ({
+				title: item.title,
+				pubDate: item.pubDate,
+				description: item.description,
+				link: item.link,
+				// guid 由 @astrojs/rss 自动从 link 推断,这里显式传以避免歧义
+				// (guid 必须全文唯一,用完整 URL 最稳)
+				categories: [...item.categories],
+				author: item.author,
+			})),
 
-		// 注册 atom 命名空间,让上面的 <atom:link> 合法
-		xmlns: {
-			atom: "http://www.w3.org/2005/Atom",
-		},
+			// feed 层级自定义字段(会原样插入 <rss><channel> 下)
+			customData: [
+				`<language>${meta.language}</language>`,
+				// self-link:指向当前 feed 自己的绝对 URL
+				// 帮助 feed 阅读器做"断开订阅"判断,以及 feed 迁移时的 301 识别
+				`<atom:link href="${absolute(context.site, selfPath)}" rel="self" type="application/rss+xml" />`,
+				// 更新频率提示(分钟,纯建议,feed 阅读器可忽略)
+				`<ttl>60</ttl>`,
+			].join(""),
 
-		// 允许不转义的字段(marked 输出的 description 已经是纯文本,不需要此处改动)
-		// stylesheet 指向一个可选的 XSL 文件,用于在浏览器直接打开 /rss.xml 时
-		// 渲染为美观的页面;这里不启用,保持极简。
-	});
+			// 注册 atom 命名空间,让上面的 <atom:link> 合法
+			xmlns: {
+				atom: "http://www.w3.org/2005/Atom",
+			},
+
+			// 允许不转义的字段(marked 输出的 description 已经是纯文本,不需要此处改动)
+			// stylesheet 指向一个可选的 XSL 文件,用于在浏览器直接打开 /rss.xml 时
+			// 渲染为美观的页面;这里不启用,保持极简。
+		});
+	};
 }
+
+/* ============================================================================
+ * 中文入口
+ * ==========================================================================
+ * 默认语言 zh,无 URL 前缀,对应 /rss.xml。
+ * 英文 feed 在 src/pages/en/rss.xml.ts。
+ * ========================================================================== */
+
+export const GET: APIRoute = buildLocalizedFeed("zh");

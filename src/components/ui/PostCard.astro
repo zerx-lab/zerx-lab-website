@@ -59,8 +59,26 @@ interface Props {
 	href: string;
 	/** 文章标题 */
 	title: string;
+	/**
+	 * 可选:带高亮标记的标题 HTML 片段(由调用方用 @lib/highlight 生成)。
+	 *
+	 * 为什么同时保留 title 与 titleHtml:
+	 *   - title 永远是纯文本,用于 aria-label / 封面 alt,保证可访问性不泄漏 <mark>
+	 *   - titleHtml 只在搜索场景注入,内部用 set:html 渲染
+	 *   - 不传则按纯文本渲染 title,交互完全向后兼容
+	 *
+	 * 安全约定:
+	 *   titleHtml 必须是经 @lib/highlight 处理过的"HTML 安全"字符串
+	 *   (原文已转义 + 仅 <mark> 标签)。调用方如果自行拼 HTML 必须先 escapeHtml。
+	 */
+	titleHtml?: string;
 	/** 简介(控制在 2 行内) */
 	excerpt?: string;
+	/**
+	 * 可选:带高亮标记的简介 HTML 片段(语义同 titleHtml)。
+	 * 不传则按纯文本渲染 excerpt。
+	 */
+	excerptHtml?: string;
 	/** 封面图 URL(优先级高于 coverLabel) */
 	cover?: string | null;
 	/** 封面图 alt 文本(a11y) */
@@ -88,7 +106,9 @@ interface Props {
 const {
 	href,
 	title,
+	titleHtml,
 	excerpt,
+	excerptHtml,
 	cover,
 	coverAlt,
 	coverLabel,
@@ -257,6 +277,13 @@ const hasLabelCover = !hasImageCover && Boolean(coverLabel);
 	<div class="flex-1 min-w-0 flex flex-col justify-between gap-3">
 		{/* ---------- 顶部:标题 + 简介 ---------- */}
 		<div class="flex flex-col gap-2">
+			{/*
+			 * 标题渲染策略:
+			 *   - 有 titleHtml(搜索高亮场景)→ set:html 注入已转义 + <mark> 包裹的 HTML
+			 *   - 否则 → 按纯文本渲染 title(Astro 会自动 escape,安全)
+			 * titleHtml 的来源必须是 @lib/highlight 的 highlight() 返回值,
+			 * 否则存在 XSS 风险(见 PostCard Props 注释)。
+			 */}
 			<h3
 				class:list={[
 					"font-medium",
@@ -269,10 +296,10 @@ const hasLabelCover = !hasImageCover && Boolean(coverLabel);
 					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
 				]}
 			>
-				{title}
+				{titleHtml ? <Fragment set:html={titleHtml} /> : title}
 			</h3>
 
-			{excerpt && (
+			{(excerptHtml || excerpt) && (
 				<p
 					class:list={[
 						"text-[color:var(--color-ink-secondary)]",
@@ -282,7 +309,11 @@ const hasLabelCover = !hasImageCover && Boolean(coverLabel);
 						"max-w-[72ch]",
 					]}
 				>
-					{excerpt}
+					{excerptHtml ? (
+						<Fragment set:html={excerptHtml} />
+					) : (
+						excerpt
+					)}
 				</p>
 			)}
 		</div>
@@ -500,5 +531,29 @@ const hasLabelCover = !hasImageCover && Boolean(coverLabel);
 
 	.post-card:focus-visible {
 		outline-offset: -2px;
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 搜索高亮 <mark class="search-hit">
+	 * --------------------------------------------------------------------------
+	 * 由 @lib/highlight 的 highlight() 产出的命中片段。
+	 * 视觉:
+	 *   - 浅黄半透明背景(不喧宾夺主,不破坏卡片整体编辑派调性)
+	 *   - 墨色文本保持不变,仅做"荧光笔"效果
+	 *   - 暗色模式下用降低饱和度的琥珀色,避免刺眼
+	 *   - 去除 <mark> 默认的 color:inherit 之外的浏览器默认样式
+	 * -------------------------------------------------------------------------- */
+	.post-card :global(mark.search-hit) {
+		background-color: rgba(250, 204, 21, 0.32); /* amber-400 / ~32% */
+		color: inherit;
+		padding: 0 1px;
+		border-radius: 1px;
+		/* 轻微下划线强调,即使背景在暗色模式下对比度不够也能识别 */
+		box-shadow: inset 0 -1px 0 rgba(202, 138, 4, 0.45);
+	}
+
+	:global(:root.dark) .post-card :global(mark.search-hit) {
+		background-color: rgba(250, 204, 21, 0.22);
+		box-shadow: inset 0 -1px 0 rgba(250, 204, 21, 0.35);
 	}
 </style>

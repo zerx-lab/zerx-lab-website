@@ -1,0 +1,422 @@
+---
+/**
+ * ============================================================================
+ * BlogSearchBox - 博客列表页搜索入口
+ * ----------------------------------------------------------------------------
+ * 交互:
+ *   - 默认态:一个放大镜小图标(与 SectionHeader 右上角 count 对齐)
+ *   - 点击 / 聚焦:展开为输入框,自动聚焦
+ *   - 有搜索词时:展开态保持,显示 ✕ 清空按钮
+ *   - 回车:提交表单,浏览器走 GET 跳转到 /blog?q=xxx,SSR 重新渲染
+ *   - 按 Esc:折叠回图标(若输入为空);有内容时 Esc 先清空再折叠
+ *   - 点击空白处(outside click):折叠(若输入为空)
+ *
+ * 架构选择:
+ *   - 纯 <form method="GET">,没有 AJAX,没有实时搜索
+ *     · 提交后浏览器导航到新 URL,SSR 直出结果,middleware 的缓存语义一致
+ *     · 搜索词通过 URL 反映,支持分享 / 刷新保留状态
+ *   - 展开 / 折叠 / 清空 这些纯 UI 交互走一小段内嵌 <script>,
+ *     不引入 React 或其它框架
+ *
+ * URL 约定:
+ *   - ?q=<keyword>  搜索词(已由 URL 自动 encode/decode)
+ *   - 提交时如果输入为空,不带 q 参数,保持 URL 干净(跳到 /blog)
+ *   - 提交时会清空 ?page,搜索结果始终从第 1 页开始
+ *
+ * a11y:
+ *   - 放大镜按钮有 aria-label 与 aria-expanded
+ *   - 输入框有 aria-label;图标用 aria-hidden
+ *   - Esc / 回车交互遵循 https://www.w3.org/WAI/ARIA/apg/patterns/combobox/
+ *     的常用子集(本组件不是真正的 combobox,只取用户熟悉的键盘约定)
+ *
+ * 视觉约束:
+ *   - 编辑派风格:无圆角,1px 发丝边框,展开动画仅宽度过渡
+ *   - 与 SectionHeader 的 eyebrow / count 同一基线(11px mono)
+ *   - 折叠态图标大小 = 右侧 count 的字号约束,保证不冲击标题行视觉节奏
+ * ============================================================================
+ */
+
+import { getLangFromUrl } from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+
+interface Props {
+	/**
+	 * 表单 action URL。通常是当前列表页路径:
+	 *   - 中文: "/blog"
+	 *   - 英文: "/en/blog"
+	 * 组件不做 lang 推断,避免和调用方的 useTranslatedPath 重复。
+	 */
+	action: string;
+	/**
+	 * 当前搜索词(来自 URL ?q=),用于:
+	 *   1. 回显到输入框 value
+	 *   2. 决定初始展开 / 折叠状态(有词则展开)
+	 */
+	initialQuery?: string;
+	/** 额外类名 */
+	class?: string;
+}
+
+const { action, initialQuery = "", class: className = "" } = Astro.props;
+
+// 当前语言(仅用于 placeholder / aria-label 文案)
+const lang = getLangFromUrl(Astro.url) as Lang;
+
+const LABELS = {
+	zh: {
+		openLabel: "打开搜索",
+		closeLabel: "关闭搜索",
+		inputLabel: "搜索文章",
+		clearLabel: "清空搜索",
+		submitLabel: "提交搜索",
+		placeholder: "搜索标题或内容…",
+	},
+	en: {
+		openLabel: "Open search",
+		closeLabel: "Close search",
+		inputLabel: "Search posts",
+		clearLabel: "Clear search",
+		submitLabel: "Submit search",
+		placeholder: "Search title or content…",
+	},
+} as const;
+
+const L = LABELS[lang] ?? LABELS.zh;
+
+// 初始是否展开:有搜索词时保持展开,方便用户修改
+const initiallyExpanded = initialQuery.trim().length > 0;
+---
+
+<form
+	role="search"
+	method="GET"
+	action={action}
+	data-blog-search
+	data-initial-expanded={initiallyExpanded ? "true" : "false"}
+	class:list={[
+		"blog-search",
+		"relative inline-flex items-center",
+		// data-expanded 为 true 时使用更宽的布局,详见下方 <style>
+		className,
+	]}
+>
+	{/* ------------------------------------------------------------------
+	 *  放大镜按钮(折叠态的视觉主体;展开态隐藏)
+	 * ------------------------------------------------------------------ */}
+	<button
+		type="button"
+		data-blog-search-toggle
+		aria-label={L.openLabel}
+		aria-expanded={initiallyExpanded ? "true" : "false"}
+		class:list={[
+			"blog-search__toggle",
+			"inline-flex items-center justify-center",
+			"h-7 w-7",
+			"text-[color:var(--color-ink-tertiary)]",
+			"hover:text-[color:var(--color-ink-primary)]",
+			"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+			"cursor-pointer",
+			"bg-transparent",
+			"border-0",
+			"p-0",
+			"focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-ink-primary)]",
+		]}
+	>
+		<svg
+			aria-hidden="true"
+			width="14"
+			height="14"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+		>
+			<circle cx="11" cy="11" r="7"></circle>
+			<line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+		</svg>
+	</button>
+
+	{/* ------------------------------------------------------------------
+	 *  输入框容器(展开态的视觉主体;折叠态隐藏)
+	 *  ------------------------------------------------------------------
+	 *  结构:[小放大镜图标] [input] [可选的清空 ✕]
+	 *  放大镜 svg 同时承担"提交按钮"的语义(点击触发表单提交)
+	 * ------------------------------------------------------------------ */}
+	<div
+		data-blog-search-panel
+		class:list={[
+			"blog-search__panel",
+			"relative inline-flex items-center",
+			"h-7",
+			"border border-[color:var(--color-hairline)]",
+			"bg-[color:var(--color-paper)]",
+			"pl-2 pr-1",
+			"gap-1",
+			"transition-[width,opacity] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+		]}
+	>
+		{/* 提交按钮(表达成 icon button;回车提交时也会经过此按钮的默认动作) */}
+		<button
+			type="submit"
+			aria-label={L.submitLabel}
+			class:list={[
+				"inline-flex items-center justify-center",
+				"h-5 w-5 shrink-0",
+				"text-[color:var(--color-ink-tertiary)]",
+				"hover:text-[color:var(--color-ink-primary)]",
+				"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+				"bg-transparent border-0 p-0 cursor-pointer",
+				"focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-ink-primary)]",
+			]}
+		>
+			<svg
+				aria-hidden="true"
+				width="12"
+				height="12"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<circle cx="11" cy="11" r="7"></circle>
+				<line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+			</svg>
+		</button>
+
+		<input
+			type="search"
+			name="q"
+			value={initialQuery}
+			aria-label={L.inputLabel}
+			placeholder={L.placeholder}
+			autocomplete="off"
+			autocorrect="off"
+			autocapitalize="off"
+			spellcheck="false"
+			data-blog-search-input
+			class:list={[
+				"blog-search__input",
+				"h-full",
+				// 展开态的实际可输入宽度,JS 会在展开时给父级加 data-expanded
+				"w-[160px] sm:w-[200px] lg:w-[220px]",
+				"bg-transparent",
+				"border-0",
+				"p-0",
+				"font-[var(--font-sans)]",
+				"text-[12px]",
+				"leading-none",
+				"text-[color:var(--color-ink-primary)]",
+				"placeholder:text-[color:var(--color-ink-muted)]",
+				"focus:outline-none",
+			]}
+		/>
+
+		{/* 清空按钮:仅有 query 时显示(初始由服务端 SSR 决定;后续由 JS 按 input 值切换) */}
+		<button
+			type="button"
+			data-blog-search-clear
+			aria-label={L.clearLabel}
+			hidden={initialQuery.length === 0}
+			class:list={[
+				"inline-flex items-center justify-center",
+				"h-5 w-5 shrink-0",
+				"text-[color:var(--color-ink-muted)]",
+				"hover:text-[color:var(--color-ink-primary)]",
+				"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+				"bg-transparent border-0 p-0 cursor-pointer",
+				"focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-ink-primary)]",
+			]}
+		>
+			<svg
+				aria-hidden="true"
+				width="11"
+				height="11"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<line x1="18" y1="6" x2="6" y2="18"></line>
+				<line x1="6" y1="6" x2="18" y2="18"></line>
+			</svg>
+		</button>
+	</div>
+
+	{/* ------------------------------------------------------------------
+	 *  保持 ?page 不污染搜索提交:不渲染 page hidden input
+	 *  (搜索提交后始终回到第 1 页,URL 不含 page 参数)
+	 * ------------------------------------------------------------------ */}
+</form>
+
+{/* ====================================================================
+ *                       折叠 / 展开 / 清空 脚本
+ * --------------------------------------------------------------------
+ * 仅处理纯 UI 交互,不做任何数据请求。
+ *   1. 折叠态 → 点击放大镜 → 展开态 + focus input
+ *   2. 展开态 + input 为空 + 点击外部 → 折叠
+ *   3. 展开态 + 按 Esc:
+ *        - input 非空 → 先清空 + focus 保留
+ *        - input 为空 → 折叠
+ *   4. 点击 ✕ → 清空 + 保持展开 + focus
+ *   5. input 输入时动态显示 / 隐藏 ✕ 按钮
+ *
+ * 每个 <form data-blog-search> 独立工作,页面可以同时存在多个实例
+ * (虽然本项目只用一个)。
+ * ==================================================================== */}
+<script>
+	type SearchForm = HTMLFormElement & {
+		__blogSearchInitialized?: boolean;
+	};
+
+	function initBlogSearch(form: SearchForm): void {
+		if (form.__blogSearchInitialized) return;
+		form.__blogSearchInitialized = true;
+
+		const toggleBtn = form.querySelector<HTMLButtonElement>(
+			"[data-blog-search-toggle]",
+		);
+		const panel = form.querySelector<HTMLElement>(
+			"[data-blog-search-panel]",
+		);
+		const input = form.querySelector<HTMLInputElement>(
+			"[data-blog-search-input]",
+		);
+		const clearBtn = form.querySelector<HTMLButtonElement>(
+			"[data-blog-search-clear]",
+		);
+
+		if (!toggleBtn || !panel || !input) return;
+
+		const initiallyExpanded =
+			form.getAttribute("data-initial-expanded") === "true";
+
+		function setExpanded(expanded: boolean, focusInput = false): void {
+			form.setAttribute("data-expanded", expanded ? "true" : "false");
+			toggleBtn!.setAttribute(
+				"aria-expanded",
+				expanded ? "true" : "false",
+			);
+			if (expanded && focusInput) {
+				// 下一帧再聚焦,避免 CSS 过渡被打断
+				requestAnimationFrame(() => input!.focus());
+			}
+		}
+
+		function updateClearVisibility(): void {
+			if (!clearBtn) return;
+			const hasValue = input!.value.length > 0;
+			clearBtn.hidden = !hasValue;
+		}
+
+		// 初始状态
+		setExpanded(initiallyExpanded);
+		updateClearVisibility();
+
+		// 点击放大镜 → 展开
+		toggleBtn.addEventListener("click", () => {
+			setExpanded(true, true);
+		});
+
+		// 输入时更新清空按钮可见性
+		input.addEventListener("input", updateClearVisibility);
+
+		// 清空按钮
+		clearBtn?.addEventListener("click", () => {
+			input.value = "";
+			updateClearVisibility();
+			input.focus();
+		});
+
+		// Esc:优先清空,其次折叠
+		input.addEventListener("keydown", (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				if (input.value.length > 0) {
+					input.value = "";
+					updateClearVisibility();
+					e.preventDefault();
+				} else {
+					setExpanded(false);
+					toggleBtn.focus();
+				}
+			}
+		});
+
+		// 外部点击折叠(仅当 input 为空时;有搜索词保持展开,让用户能继续改)
+		document.addEventListener(
+			"click",
+			(e: MouseEvent) => {
+				const target = e.target as Node | null;
+				if (!target) return;
+				if (form.contains(target)) return;
+				if (input.value.length === 0) {
+					setExpanded(false);
+				}
+			},
+			{ capture: true },
+		);
+	}
+
+	function initAll(): void {
+		document
+			.querySelectorAll<SearchForm>("form[data-blog-search]")
+			.forEach(initBlogSearch);
+	}
+
+	// 首次加载 + Astro 客户端导航后(若启用 ViewTransitions)重新初始化
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", initAll);
+	} else {
+		initAll();
+	}
+	document.addEventListener("astro:page-load", initAll);
+</script>
+
+<style>
+	/* ------------------------------------------------------------------
+	 *  展开 / 折叠状态切换
+	 *  ------------------------------------------------------------------
+	 *  通过根 form 上的 data-expanded 属性,让子元素按状态显隐 / 调整宽度。
+	 *  CSS 里完成切换意味着 JS 只需翻转一个属性,无需手动增删 class,
+	 *  也方便用户代理在脚本加载前(SSR 首屏)就有正确的初始视觉。
+	 * ------------------------------------------------------------------ */
+
+	/* 折叠态:只显示放大镜按钮,panel 隐藏且不占空间 */
+	form[data-blog-search]:not([data-expanded="true"]) .blog-search__panel {
+		display: none;
+	}
+
+	/* 展开态:隐藏放大镜按钮,显示输入面板 */
+	form[data-blog-search][data-expanded="true"] .blog-search__toggle {
+		display: none;
+	}
+
+	/* SSR 首屏(JS 还没跑,data-expanded 属性尚未写入)按 initial-expanded 兜底
+	   避免出现"放大镜和输入框同时显示"的闪烁 */
+	form[data-blog-search][data-initial-expanded="true"]:not([data-expanded])
+		.blog-search__toggle {
+		display: none;
+	}
+	form[data-blog-search][data-initial-expanded="false"]:not([data-expanded])
+		.blog-search__panel {
+		display: none;
+	}
+
+	/* 输入框聚焦时,容器边框加深,提供清晰反馈 */
+	.blog-search__panel:focus-within {
+		border-color: var(--color-ink-primary);
+	}
+
+	/* 关闭 input[type=search] 在 Chrome 下自带的 x 清除按钮,
+	   使用我们自己的 ✕,风格与站点一致 */
+	.blog-search__input::-webkit-search-cancel-button,
+	.blog-search__input::-webkit-search-decoration {
+		-webkit-appearance: none;
+		appearance: none;
+	}
+</style>

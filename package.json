@@ -19,7 +19,8 @@
     "format": "prettier --write \"**/*.{astro,ts,tsx,md,mdx,json}\""
   },
   "dependencies": {
-    "@astrojs/mdx": "^4.2.1",
+    "@astrojs/mdx": "^5.0.3",
+    "@astrojs/node": "^10.0.5",
     "@astrojs/react": "^4.2.1",
     "@astrojs/rss": "^4.0.18",
     "@astrojs/sitemap": "^3.2.1",

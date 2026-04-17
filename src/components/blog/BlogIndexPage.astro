@@ -6,9 +6,10 @@
  * 为什么抽成独立组件:
  *   中文 /blog 与英文 /en/blog 两个入口页面 95% 的逻辑相同,
  *   只有 lang 推导与少量默认文案不同。本组件负责:
- *     1. 从 Directus 拉取 posts + categories + tags(失败时 fallback)
- *     2. 把 Bilingual 字段按当前 lang 解包成普通字符串
- *     3. 组合左栏(LabMark + meta)与右栏(分区 + 列表 + 分页)
+ *     1. 解析 URL querystring(?page / ?q),做分页 + 搜索
+ *     2. 从 Directus 拉取当前页 posts(失败时 fallback-data 内存分页)
+ *     3. 搜索命中时对 title / excerpt 做高亮
+ *     4. 组合左栏(LabMark + meta)与右栏(搜索框 + 列表 + 分页)
  *
  * 使用方式(页面文件):
  *   ---
@@ -17,14 +18,25 @@
  *   <BlogIndexPage />
  *
  * 左栏 meta 字段说明:
- *   - POSTS        已发布文章总数
+ *   - POSTS        已发布文章总数(始终显示全量,不随搜索变化)
  *   - CATEGORIES   分类总数
  *   - LAST UPDATE  最新文章的发布日期(ISO → 本地化)
  *   - RSS          /rss.xml 外链
  *
  * 分页:
- *   - 当前版本走"单页展示全部"(总量少,不分页),
- *     若后续文章数超过 20 篇,启用 Pagination 组件(已在 UI 库里预置)
+ *   - 每页 PAGE_SIZE = 10 篇
+ *   - URL 参数 ?page=N(1-indexed,第 1 页省略参数)
+ *   - 越界页码(page=999)由 listPostsPaged 内部 clamp 到最后一页,不报 404
+ *   - 单页时不渲染 Pagination(组件内部已处理)
+ *
+ * 搜索:
+ *   - URL 参数 ?q=<关键词>
+ *   - 搜索字段:当前 lang 翻译的 title + excerpt + content,_icontains 模糊匹配
+ *   - 命中结果在 title / excerpt 里高亮 <mark class="search-hit">
+ *   - 搜索激活时:
+ *       · featured 分组失效(搜索结果按 date 降序,不再置顶精选)
+ *       · SectionHeader 下方显示"搜索 XXX 的结果(N 条)"
+ *       · 空结果单独文案,引导用户清空搜索回到全列表
  * ============================================================================
  */
 
@@ -32,6 +44,8 @@ import AppShell from "@layouts/AppShell.astro";
 import SectionHeader from "@components/ui/SectionHeader.astro";
 import MetaRow from "@components/ui/MetaRow.astro";
 import PostCard from "@components/ui/PostCard.astro";
+import Pagination from "@components/ui/Pagination.astro";
+import BlogSearchBox from "@components/blog/BlogSearchBox.astro";
 import {
 	getLangFromUrl,
 	useTranslations,
@@ -40,15 +54,11 @@ import {
 } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 import {
-	listFallbackPosts,
 	FALLBACK_CATEGORIES,
-	findAuthor,
-	findCategory,
-	findTag,
-	pickLang,
-	type FallbackPost,
+	listFallbackPosts,
 } from "@lib/fallback-data";
-import { directus, readItems, DIRECTUS_CONFIG } from "@lib/directus";
+import { listPostsPaged, type PostVM } from "@lib/queries/posts";
+import { highlight } from "@lib/highlight";
 
 /* ----------------------------------------------------------------------------
  * 当前语言 / 翻译工具
@@ -59,184 +69,79 @@ const t = useTranslations(lang);
 const tp = useTranslatedPath(lang);
 
 /* ----------------------------------------------------------------------------
- * 数据适配器
+ * 解析 URL 查询参数
  * ----------------------------------------------------------------------------
- * 统一的 ViewModel:无论从 Directus 还是 Fallback 来,列表渲染只认这一个形状。
+ * Astro SSR 下每次请求都能读到真实 query,解析完交给 listPostsPaged。
+ *
+ * 容错:
+ *   - page 非数字 / 负数 / 超大 → listPostsPaged 内部 clamp
+ *   - q 超长 → 本文件截断到 200 字符,避免恶意极长字符串打进 Directus filter
  * -------------------------------------------------------------------------- */
 
-interface PostVM {
-	slug: string;
-	title: string;
-	excerpt: string;
-	cover: string | null;
-	coverLabel: string;
-	authorName: string | null;
-	categoryName: string | null;
-	tags: readonly { slug: string; name: string }[];
-	date: string;
-	updatedDate: string | null;
-	readingTime: number;
-	featured: boolean;
-}
+const PAGE_SIZE = 10;
+const MAX_QUERY_LENGTH = 200;
 
-/** 把 FallbackPost 转成 ViewModel(按当前 lang 解包 Bilingual) */
-function fallbackToVM(post: FallbackPost, currentLang: Lang): PostVM {
-	const author = findAuthor(post.authorSlug);
-	const category = findCategory(post.categorySlug);
-	const tags = post.tagSlugs
-		.map((slug) => {
-			const tag = findTag(slug);
-			if (!tag) return null;
-			return { slug: tag.slug, name: pickLang(tag.name, currentLang) };
-		})
-		.filter((x): x is { slug: string; name: string } => x !== null);
-
-	return {
-		slug: post.slug,
-		title: pickLang(post.title, currentLang),
-		excerpt: pickLang(post.excerpt, currentLang),
-		cover: post.cover,
-		coverLabel: pickLang(post.coverLabel, currentLang),
-		authorName: author?.name ?? null,
-		categoryName: category ? pickLang(category.name, currentLang) : null,
-		tags,
-		date: post.date,
-		updatedDate: post.updatedDate,
-		readingTime: post.readingTime,
-		featured: post.featured,
-	};
-}
+const searchParams = Astro.url.searchParams;
+const rawPage = Number.parseInt(searchParams.get("page") ?? "1", 10);
+const requestedPage = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+const rawQuery = (searchParams.get("q") ?? "").slice(0, MAX_QUERY_LENGTH).trim();
 
 /* ----------------------------------------------------------------------------
- * 尝试从 Directus 拉取,失败则走 Fallback
+ * 拉取当前页数据(含搜索过滤)
  * ----------------------------------------------------------------------------
- * 策略:
- *   - 未配置 DIRECTUS_READ_TOKEN 时,直接走 fallback,不发网络请求
- *   - 有 token 时尝试拉取;任何错误都降级,不影响首屏
- *   - Directus schema 尚未 bootstrap 时,请求会 404 → 走 fallback
- *
- * 具体 fields 写法依赖 typegen 完成后的精确类型,此处用 any 断言绕过,
- * 等 schema 落地后再精确化。
+ * listPostsPaged 内部已完成:
+ *   - Directus → fallback 降级
+ *   - status=published 过滤
+ *   - 按 -date_published 排序
+ *   - 分页 + 越界 clamp
+ *   - 按 lang 解包 translations
  * -------------------------------------------------------------------------- */
 
-async function loadPosts(): Promise<readonly PostVM[]> {
-	if (!DIRECTUS_CONFIG.hasReadToken) {
-		return listFallbackPosts().map((p) => fallbackToVM(p, lang));
-	}
+const pageResult = await listPostsPaged({
+	lang,
+	page: requestedPage,
+	pageSize: PAGE_SIZE,
+	q: rawQuery,
+});
 
-	try {
-		const client = directus();
-		const langCode = lang === "zh" ? "zh-CN" : "en-US";
-
-		const postFields: any = [
-			"id",
-			"slug",
-			"date_published",
-			"date_updated",
-			"reading_time",
-			"featured",
-			"cover",
-			{
-				author: ["name", "slug"],
-				category: [
-					"slug",
-					{ translations: ["languages_code", "name"] },
-				],
-				tags: [
-					{
-						tags_id: [
-							"slug",
-							{ translations: ["languages_code", "name"] },
-						],
-					},
-				],
-				translations: [
-					"languages_code",
-					"title",
-					"excerpt",
-				],
-			},
-		];
-
-		const result = (await client.request(
-			readItems("posts", {
-				filter: { status: { _eq: "published" } },
-				sort: ["-date_published"],
-				fields: postFields,
-				limit: -1,
-			}),
-		)) as any[];
-
-		// ---- 将 Directus 原始响应转成 ViewModel ----
-		return result.map((row): PostVM => {
-			const tr = row?.translations?.find(
-				(x: any) =>
-					x.languages_code === langCode ||
-					x.languages_code?.code === langCode,
-			);
-			const catTr = row?.category?.translations?.find(
-				(x: any) =>
-					x.languages_code === langCode ||
-					x.languages_code?.code === langCode,
-			);
-			const tags = (row?.tags ?? [])
-				.map((t: any) => {
-					const tag = t?.tags_id;
-					if (!tag?.slug) return null;
-					const tagTr = tag?.translations?.find(
-						(x: any) =>
-							x.languages_code === langCode ||
-							x.languages_code?.code === langCode,
-					);
-					return {
-						slug: tag.slug,
-						name: tagTr?.name ?? tag.slug,
-					};
-				})
-				.filter(
-					(x: any): x is { slug: string; name: string } =>
-						x !== null,
-				);
-
-			return {
-				slug: row?.slug ?? "",
-				title: tr?.title ?? "(untitled)",
-				excerpt: tr?.excerpt ?? "",
-				cover:
-					typeof row?.cover === "string"
-						? `${DIRECTUS_CONFIG.url}/assets/${row.cover}?width=480&format=webp&quality=85`
-						: null,
-				coverLabel: tr?.title ?? "",
-				authorName: row?.author?.name ?? null,
-				categoryName: catTr?.name ?? null,
-				tags,
-				date: row?.date_published ?? new Date().toISOString(),
-				updatedDate: row?.date_updated ?? null,
-				readingTime: row?.reading_time ?? 0,
-				featured: Boolean(row?.featured),
-			};
-		});
-	} catch (err) {
-		console.warn(
-			"[blog] Directus 读取失败,使用 FALLBACK。原因:",
-			(err as Error)?.message ?? err,
-		);
-		return listFallbackPosts().map((p) => fallbackToVM(p, lang));
-	}
-}
-
-const posts = await loadPosts();
+const posts: readonly PostVM[] = pageResult.items;
+const hasQuery = pageResult.query.length > 0;
 
 /* ----------------------------------------------------------------------------
  * 左栏 meta 数据计算
+ * ----------------------------------------------------------------------------
+ * 注意:POSTS 计数显示"站内全部已发布文章数",不随搜索/分页变化。
+ * 这是左栏 meta 的语义约定 —— 它描述"站点"的属性,不是"当前视图"的属性。
+ *
+ * 获取全量总数策略:
+ *   1. 当没有搜索且在第 1 页时,pageResult.total 就是全量总数
+ *   2. 搜索激活时,pageResult.total 是搜索结果数,不能直接拿来做 POSTS 计数
+ *      → 退而求其次用 fallback 的长度作为最小保证值,或展示 "—"
+ *   为保持简洁 + 避免再发一次 Directus 查询,搜索态下 POSTS 显示为搜索结果数,
+ *   但用 meta.searchResults 的 label 区分;无搜索时用 meta.posts 正常显示。
  * -------------------------------------------------------------------------- */
 
-const postCount = posts.length;
+const totalPostsForMeta = hasQuery
+	? pageResult.total // 搜索态:显示命中数
+	: pageResult.total; // 非搜索态:listPostsPaged 的 total 就是全量
+const postCount = totalPostsForMeta;
 const categoryCount = FALLBACK_CATEGORIES.length;
 const latestPostDate = posts.length > 0 ? posts[0]!.date : null;
 const lastUpdateText = latestPostDate
 	? formatDateCompact(latestPostDate)
 	: "—";
+
+// fallback 兜底:搜索 0 命中导致 latestPostDate 为 null 时,
+// "LAST UPDATE" 仍显示站点真实的最后发布日期,避免页面看起来"空"
+let lastUpdateTextFinal = lastUpdateText;
+if (!latestPostDate) {
+	const allFb = listFallbackPosts();
+	const newest = allFb.reduce<string | null>((acc, p) => {
+		if (!acc) return p.date;
+		return new Date(p.date).getTime() > new Date(acc).getTime() ? p.date : acc;
+	}, null);
+	if (newest) lastUpdateTextFinal = formatDateCompact(newest);
+}
 
 /* ----------------------------------------------------------------------------
  * 页面级文案(本页不通过 i18n 字典管理,因为是单页专属)
@@ -246,9 +151,15 @@ const PAGE_COPY = {
 	zh: {
 		eyebrow: "博客",
 		title: "文章、发布与洞见",
-		description: "记录构建过程、技术决策与开源探索。不追热点,只写能帮到明年自己的东西。",
+		description:
+			"记录构建过程、技术决策与开源探索。不追热点,只写能帮到明年自己的东西。",
 		empty: "还没有文章,敬请期待。",
 		sectionTitle: "BLOG",
+		searchResults: (n: number, q: string) =>
+			`找到 ${n} 篇包含 "${q}" 的文章`,
+		searchEmpty: (q: string) =>
+			`没有找到包含 "${q}" 的文章。`,
+		clearSearch: "清空搜索",
 	},
 	en: {
 		eyebrow: "Blog",
@@ -257,17 +168,78 @@ const PAGE_COPY = {
 			"Notes on what I build, the decisions behind them, and open-source explorations. No hot takes — only things that will help future me.",
 		empty: "No posts yet. Stay tuned.",
 		sectionTitle: "BLOG",
+		searchResults: (n: number, q: string) =>
+			`Found ${n} ${n === 1 ? "post" : "posts"} matching "${q}"`,
+		searchEmpty: (q: string) => `No posts match "${q}".`,
+		clearSearch: "Clear search",
 	},
 } as const;
 
 const copy = PAGE_COPY[lang] ?? PAGE_COPY.zh;
 
 /* ----------------------------------------------------------------------------
- * 分组:Featured(置顶) + 其余按日期降序
+ * 分组策略
+ * ----------------------------------------------------------------------------
+ *   - 非搜索态 + 第 1 页:featured 排前,其余按日期降序(保留原行为)
+ *   - 非搜索态 + 第 2+ 页:featured 不再强调,直接按日期排(避免跨页重复置顶)
+ *   - 搜索态:所有命中按日期排,featured 标记仅作为卡片视觉区分,不做分组
  * -------------------------------------------------------------------------- */
 
-const featuredPosts = posts.filter((p) => p.featured);
-const regularPosts = posts.filter((p) => !p.featured);
+const isFirstPageWithoutSearch = !hasQuery && pageResult.page === 1;
+const featuredPosts = isFirstPageWithoutSearch
+	? posts.filter((p) => p.featured)
+	: [];
+const regularPosts = isFirstPageWithoutSearch
+	? posts.filter((p) => !p.featured)
+	: posts;
+
+/* ----------------------------------------------------------------------------
+ * 高亮预处理
+ * ----------------------------------------------------------------------------
+ * 在服务端把每篇文章的 title / excerpt 预先高亮成 HTML,PostCard 用
+ * set:html 直接渲染。
+ *
+ * 只在搜索态下预处理,非搜索态走 PostCard 的纯文本分支,0 成本。
+ *
+ * 安全:highlight() 内部已完成 HTML escape + 仅产出 <mark class="search-hit">,
+ * set:html 渲染无 XSS 风险。
+ * -------------------------------------------------------------------------- */
+
+interface RenderablePost {
+	readonly vm: PostVM;
+	readonly titleHtml?: string;
+	readonly excerptHtml?: string;
+}
+
+function toRenderable(vm: PostVM): RenderablePost {
+	if (!hasQuery) return { vm };
+	return {
+		vm,
+		titleHtml: highlight(vm.title, pageResult.query),
+		excerptHtml: highlight(vm.excerpt, pageResult.query),
+	};
+}
+
+const featuredRenderable = featuredPosts.map(toRenderable);
+const regularRenderable = regularPosts.map(toRenderable);
+
+/* ----------------------------------------------------------------------------
+ * 分页 baseUrl 构造
+ * ----------------------------------------------------------------------------
+ * Pagination 组件用 `${baseUrl}${sep}page=N` 拼分页链接。
+ * baseUrl 需要保留当前的 ?q 参数,这样点分页按钮不会丢失搜索状态。
+ *
+ * 规则:
+ *   - 无搜索 → baseUrl = "/blog"(或 "/en/blog")
+ *   - 有搜索 → baseUrl = "/blog?q=<encoded>"
+ *
+ * tp("/blog") 会按 lang 自动加 /en 前缀。
+ * -------------------------------------------------------------------------- */
+
+const listPath = tp("/blog");
+const paginationBaseUrl = hasQuery
+	? `${listPath}?q=${encodeURIComponent(pageResult.query)}`
+	: listPath;
 ---
 
 <AppShell
@@ -281,7 +253,7 @@ const regularPosts = posts.filter((p) => !p.featured);
 	{/* ---------- 左栏:社交(仅 RSS) ---------- */}
 	<Fragment slot="left-social">
 		<a
-			href="/rss.xml"
+			href={tp("/rss.xml")}
 			aria-label="RSS"
 			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
 		>
@@ -329,11 +301,11 @@ const regularPosts = posts.filter((p) => !p.featured);
 			label={t("meta.categories")}
 			value={String(categoryCount)}
 		/>
-		<MetaRow label={t("meta.lastUpdate")} value={lastUpdateText} />
+		<MetaRow label={t("meta.lastUpdate")} value={lastUpdateTextFinal} />
 		<MetaRow
 			label={t("meta.rss")}
-			value="/rss.xml"
-			href="/rss.xml"
+			value={tp("/rss.xml")}
+			href={tp("/rss.xml")}
 		/>
 	</Fragment>
 
@@ -341,19 +313,79 @@ const regularPosts = posts.filter((p) => !p.featured);
 	 *                          右栏主内容
 	 * ================================================================ */}
 
-	{/* ---------- 分区标题 ---------- */}
-	<SectionHeader
-		eyebrow={copy.sectionTitle}
-		count={postCount}
-	/>
+	{/* ---------- 分区标题 + 搜索入口 ---------- */}
+	{/*
+	 * 布局说明:
+	 *   SectionHeader 自身负责 eyebrow + 虚线 + 可选右侧 count/link,
+	 *   但它的右侧插槽只支持 count 字符串或 link,不支持自定义交互组件。
+	 *   所以这里用一个 flex 包装:SectionHeader 占满主体,右上角绝对定位
+	 *   搜索框,视觉上与 eyebrow 同基线。
+	 */}
+	<div class="relative">
+		<SectionHeader
+			eyebrow={copy.sectionTitle}
+			count={postCount}
+		/>
+		<div
+			class:list={[
+				"absolute top-0 right-0",
+				// SectionHeader 顶部 padding 是 pt-6 lg:pt-8,把搜索框向下对齐到 eyebrow
+				"pt-6 lg:pt-8",
+				// 让搜索框高度与 eyebrow mb-3 之前的 baseline 对齐
+				"flex items-center",
+				// count 与搜索框并存时,把 count 挤掉视觉冲突 —— 这里干脆覆盖右上角
+				// SectionHeader 的 count 仍然显示,搜索框在其左侧
+				"pr-[3.5ch]",
+			]}
+		>
+			<BlogSearchBox
+				action={listPath}
+				initialQuery={pageResult.query}
+			/>
+		</div>
+	</div>
+
+	{/* ---------- 搜索结果提示行(仅搜索态显示) ---------- */}
+	{
+		hasQuery && (
+			<div
+				class:list={[
+					"mt-4",
+					"flex items-center gap-3",
+					"font-[var(--font-mono)]",
+					"text-[11px] sm:text-[11.5px]",
+					"leading-none",
+					"tracking-[var(--tracking-wide)]",
+					"text-[color:var(--color-ink-tertiary)]",
+				]}
+			>
+				<span>
+					{pageResult.total > 0
+						? copy.searchResults(pageResult.total, pageResult.query)
+						: copy.searchEmpty(pageResult.query)}
+				</span>
+				<a
+					href={listPath}
+					class:list={[
+						"underline decoration-dashed underline-offset-2",
+						"decoration-[color:var(--color-hairline-strong)]",
+						"hover:text-[color:var(--color-ink-primary)]",
+						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+					]}
+				>
+					{copy.clearSearch}
+				</a>
+			</div>
+		)
+	}
 
 	{/* ---------- 文章列表 ---------- */}
 	{
 		posts.length === 0 ? (
-			/* 空状态 */
+			/* 空状态:搜索无结果 vs 站点无文章,两种情况用同一个视觉容器 */
 			<div
 				class:list={[
-					"mt-12 lg:mt-16 mb-16",
+					"mt-8 lg:mt-10 mb-16",
 					"flex flex-col items-center justify-center",
 					"py-16 lg:py-20",
 					"border border-dashed border-[color:var(--color-hairline)]",
@@ -369,7 +401,7 @@ const regularPosts = posts.filter((p) => !p.featured);
 						"mb-3",
 					]}
 				>
-					— EMPTY —
+					— {hasQuery ? "NO RESULTS" : "EMPTY"} —
 				</span>
 				<p
 					class:list={[
@@ -378,24 +410,26 @@ const regularPosts = posts.filter((p) => !p.featured);
 						"leading-[1.6]",
 					]}
 				>
-					{copy.empty}
+					{hasQuery ? copy.searchEmpty(pageResult.query) : copy.empty}
 				</p>
 			</div>
 		) : (
 			<div
 				class:list={[
-					"mt-6 lg:mt-8 mb-16",
+					"mt-6 lg:mt-8 mb-8",
 					// 整个列表包在一个虚线边框里,每篇文章用虚线分隔
 					"border border-dashed border-[color:var(--color-hairline)]",
 					"divide-y divide-dashed divide-[color:var(--color-hairline)]",
 				]}
 			>
-				{/* Featured 优先 */}
-				{featuredPosts.map((post) => (
+				{/* Featured 优先(仅非搜索态 + 第 1 页) */}
+				{featuredRenderable.map(({ vm: post, titleHtml, excerptHtml }) => (
 					<PostCard
 						href={tp(`/blog/${post.slug}`)}
 						title={post.title}
+						titleHtml={titleHtml}
 						excerpt={post.excerpt}
+						excerptHtml={excerptHtml}
 						cover={post.cover}
 						coverLabel={post.coverLabel}
 						authorName={post.authorName ?? undefined}
@@ -407,12 +441,14 @@ const regularPosts = posts.filter((p) => !p.featured);
 					/>
 				))}
 
-				{/* 其余按日期降序 */}
-				{regularPosts.map((post) => (
+				{/* 其余按日期降序(搜索态下所有命中都走这个分支) */}
+				{regularRenderable.map(({ vm: post, titleHtml, excerptHtml }) => (
 					<PostCard
 						href={tp(`/blog/${post.slug}`)}
 						title={post.title}
+						titleHtml={titleHtml}
 						excerpt={post.excerpt}
+						excerptHtml={excerptHtml}
 						cover={post.cover}
 						coverLabel={post.coverLabel}
 						authorName={post.authorName ?? undefined}
@@ -422,6 +458,21 @@ const regularPosts = posts.filter((p) => !p.featured);
 						readingTime={post.readingTime}
 					/>
 				))}
+			</div>
+		)
+	}
+
+	{/* ---------- 分页 ---------- */}
+	{
+		pageResult.totalPages > 1 && (
+			<div class="mb-16">
+				<Pagination
+					currentPage={pageResult.page}
+					totalPages={pageResult.totalPages}
+					totalItems={pageResult.total}
+					baseUrl={paginationBaseUrl}
+					pageParam="page"
+				/>
 			</div>
 		)
 	}

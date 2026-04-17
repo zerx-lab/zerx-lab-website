@@ -2722,6 +2722,66 @@ export interface paths {
         patch: operations["updateSingleItemsPagesTranslations"];
         trace?: never;
     };
+    "/items/ai_prompts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Items
+         * @description List the ai_prompts items.
+         */
+        get: operations["readItemsAIPrompts"];
+        put?: never;
+        /**
+         * Create an Item
+         * @description Create a new ai_prompts item.
+         */
+        post: operations["createItemsAIPrompts"];
+        /**
+         * Delete Multiple Items
+         * @description Delete multiple existing ai_prompts items.
+         */
+        delete: operations["deleteItemsAIPrompts"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Multiple Items
+         * @description Update multiple ai_prompts items at the same time.
+         */
+        patch: operations["updateItemsAIPrompts"];
+        trace?: never;
+    };
+    "/items/ai_prompts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve an Item
+         * @description Retrieve a single ai_prompts item by unique identifier.
+         */
+        get: operations["readSingleItemsAIPrompts"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an Item
+         * @description Delete an existing ai_prompts item.
+         */
+        delete: operations["deleteSingleItemsAIPrompts"];
+        options?: never;
+        head?: never;
+        /**
+         * Update an Item
+         * @description Update an existing ai_prompts item.
+         */
+        patch: operations["updateSingleItemsAIPrompts"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3734,11 +3794,8 @@ export interface components {
         ItemsSiteSettings: {
             id?: number;
             site_name?: string;
-            /**
-             * Format: uuid
-             * @description 默认 OG 分享图
-             */
-            og_image?: string | null;
+            /** @description 默认 OG 分享图 */
+            og_image?: (string | components["schemas"]["Files"]) | null;
             /** @description GitHub 组织/账户链接 */
             social_github?: string | null;
             social_x?: string | null;
@@ -3762,11 +3819,8 @@ export interface components {
             /** @description URL 安全 slug,用作路由 */
             slug: string;
             name: string;
-            /**
-             * Format: uuid
-             * @description 头像
-             */
-            avatar?: string | null;
+            /** @description 头像 */
+            avatar?: (string | components["schemas"]["Files"]) | null;
             github?: string | null;
             x?: string | null;
             email?: string | null;
@@ -3824,8 +3878,7 @@ export interface components {
             /** @description URL 安全 slug,用作路由 */
             slug: string;
             name: string;
-            /** Format: uuid */
-            cover?: string | null;
+            cover?: (string | components["schemas"]["Files"]) | null;
             /** @description 技术栈标签数组,如 ["Go", "Rust"] */
             tech_stack?: unknown;
             kind?: string | null;
@@ -3849,11 +3902,8 @@ export interface components {
             sort?: number | null;
             /** @description URL 安全 slug,用作路由 */
             slug: string;
-            /**
-             * Format: uuid
-             * @description 封面图
-             */
-            cover?: string | null;
+            /** @description 封面图 */
+            cover?: (string | components["schemas"]["Files"]) | null;
             /** @description 阅读时长(分钟) */
             reading_time?: number | null;
             featured?: boolean;
@@ -3941,6 +3991,17 @@ export interface components {
             languages_code?: (string | components["schemas"]["ItemsLanguages"]) | null;
             title: string;
             content?: string | null;
+        };
+        ItemsAIPrompts: {
+            id?: number;
+            /** @description Prompt 标识,建议用 slug 风格(小写 + 连字符) */
+            name: string;
+            /** @description Prompt 的简短说明,供 AI 客户端展示 */
+            description?: string | null;
+            /** @description System prompt 内容(Markdown) */
+            system_prompt?: string | null;
+            /** @description Prompt 的 role/text 消息序列 */
+            messages?: unknown;
         };
     };
     responses: {
@@ -13152,6 +13213,228 @@ export interface operations {
                 content: {
                     "application/json": {
                         data?: components["schemas"]["ItemsPagesTranslations"];
+                    };
+                };
+            };
+            401: components["responses"]["UnauthorizedError"];
+            404: components["responses"]["NotFoundError"];
+        };
+    };
+    readItemsAIPrompts: {
+        parameters: {
+            query?: {
+                /** @description Control what fields are being returned in the object. */
+                fields?: components["parameters"]["Fields"];
+                /** @description A limit on the number of objects that are returned. */
+                limit?: components["parameters"]["Limit"];
+                /** @description What metadata to return in the response. */
+                meta?: components["parameters"]["Meta"];
+                /** @description How many items to skip when fetching data. */
+                offset?: components["parameters"]["Offset"];
+                /** @description How to sort the returned items. `sort` is a CSV of fields used to sort the fetched items. Sorting defaults to ascending (ASC) order but a minus sign (` - `) can be used to reverse this to descending (DESC) order. Fields are prioritized by their order in the CSV. You can also use a ` ? ` to sort randomly. */
+                sort?: components["parameters"]["Sort"];
+                /** @description Select items in collection by given conditions. */
+                filter?: components["parameters"]["Filter"];
+                /** @description Filter by items that contain the given search query in one of their fields. */
+                search?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["ItemsAIPrompts"][];
+                        meta?: components["schemas"]["x-metadata"];
+                    };
+                };
+            };
+            401: components["responses"]["UnauthorizedError"];
+        };
+    };
+    createItemsAIPrompts: {
+        parameters: {
+            query?: {
+                /** @description What metadata to return in the response. */
+                meta?: components["parameters"]["Meta"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ItemsAIPrompts"][] | components["schemas"]["ItemsAIPrompts"];
+            };
+        };
+        responses: {
+            /** @description Successful request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["ItemsAIPrompts"][];
+                    };
+                };
+            };
+            401: components["responses"]["UnauthorizedError"];
+        };
+    };
+    deleteItemsAIPrompts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["UnauthorizedError"];
+        };
+    };
+    updateItemsAIPrompts: {
+        parameters: {
+            query?: {
+                /** @description Control what fields are being returned in the object. */
+                fields?: components["parameters"]["Fields"];
+                /** @description A limit on the number of objects that are returned. */
+                limit?: components["parameters"]["Limit"];
+                /** @description What metadata to return in the response. */
+                meta?: components["parameters"]["Meta"];
+                /** @description How many items to skip when fetching data. */
+                offset?: components["parameters"]["Offset"];
+                /** @description How to sort the returned items. `sort` is a CSV of fields used to sort the fetched items. Sorting defaults to ascending (ASC) order but a minus sign (` - `) can be used to reverse this to descending (DESC) order. Fields are prioritized by their order in the CSV. You can also use a ` ? ` to sort randomly. */
+                sort?: components["parameters"]["Sort"];
+                /** @description Select items in collection by given conditions. */
+                filter?: components["parameters"]["Filter"];
+                /** @description Filter by items that contain the given search query in one of their fields. */
+                search?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ItemsAIPrompts"][] | components["schemas"]["ItemsAIPrompts"];
+            };
+        };
+        responses: {
+            /** @description Successful request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["ItemsAIPrompts"][];
+                    };
+                };
+            };
+        };
+    };
+    readSingleItemsAIPrompts: {
+        parameters: {
+            query?: {
+                /** @description Control what fields are being returned in the object. */
+                fields?: components["parameters"]["Fields"];
+                /** @description What metadata to return in the response. */
+                meta?: components["parameters"]["Meta"];
+                /** @description Retrieve an item's state from a specific Content Version. The value corresponds to the "key" of the Content Version. */
+                version?: components["parameters"]["Version"];
+            };
+            header?: never;
+            path: {
+                /** @description Index of the item. */
+                id: number | string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["ItemsAIPrompts"];
+                    };
+                };
+            };
+            401: components["responses"]["UnauthorizedError"];
+            404: components["responses"]["NotFoundError"];
+        };
+    };
+    deleteSingleItemsAIPrompts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Index of the item. */
+                id: number | string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["UnauthorizedError"];
+            404: components["responses"]["NotFoundError"];
+        };
+    };
+    updateSingleItemsAIPrompts: {
+        parameters: {
+            query?: {
+                /** @description Control what fields are being returned in the object. */
+                fields?: components["parameters"]["Fields"];
+                /** @description What metadata to return in the response. */
+                meta?: components["parameters"]["Meta"];
+            };
+            header?: never;
+            path: {
+                /** @description Index of the item. */
+                id: number | string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ItemsAIPrompts"];
+            };
+        };
+        responses: {
+            /** @description Successful request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["ItemsAIPrompts"];
                     };
                 };
             };

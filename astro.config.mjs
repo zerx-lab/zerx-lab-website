@@ -3,17 +3,21 @@ import { defineConfig } from "astro/config";
 import react from "@astrojs/react";
 import mdx from "@astrojs/mdx";
 import sitemap from "@astrojs/sitemap";
+import node from "@astrojs/node";
 import tailwindcss from "@tailwindcss/vite";
 
 // https://astro.build/config
 export default defineConfig({
 	site: process.env.SITE_URL || "https://zerx.dev",
 
-	// Dokploy 部署策略:纯 SSG 静态产物
-	// - 博客/官网场景 100% 可预渲染
-	// - Dokploy 侧用 nginx/静态镜像托管 dist/,无需 Node 运行时
-	// - 内容更新:Directus Webhook → Dokploy Deploy Webhook 触发重新构建
-	output: "static",
+	// 部署策略:全站 SSR (Node standalone)
+	// - 以 Directus 实时数据为准,后台改动立即对用户可见
+	// - 缓存策略在 src/middleware.ts 统一下发 Cache-Control 头,
+	//   由上游 CDN / nginx 做边缘缓存,实时性与源站压力在 HTTP 层平衡
+	// - 运行时需要环境变量:DIRECTUS_URL / DIRECTUS_READ_TOKEN / SITE_URL
+	// - 入口:node ./dist/server/entry.mjs,默认监听 4321
+	output: "server",
+	adapter: node({ mode: "standalone" }),
 
 	// i18n 策略:
 	// --------------------------------------------------------------------------

@@ -215,6 +215,17 @@ async function createFieldIfMissing(
 ): Promise<void> {
 	if (await fieldExists(collection, def.field)) {
 		log.skip(`字段 ${collection}.${def.field} 已存在`);
+		// 字段虽然存在,但可能是早期版本建的、缺 relation(例如 fileField 旧实现
+		// 没带 relation,导致 Data Studio 的文件选择器选完不会写回字段)。
+		// 这里补一次 ensureRelation —— 它内部会先查 /relations/{coll}/{field},
+		// 已存在就 skip,不存在才 POST,所以对正常字段是幂等 no-op。
+		if (def.relation && def.relation.type === "m2o") {
+			await ensureRelation({
+				collection,
+				field: def.field,
+				related_collection: def.relation.related_collection,
+			});
+		}
 		return;
 	}
 
@@ -579,7 +590,13 @@ async function patchRelationMeta(
 	});
 }
 
-/** 文件(图片)字段 - M2O 到 directus_files */
+/** 文件(图片)字段 - M2O 到 directus_files
+ *
+ * 关键:必须显式带 relation,让 createFieldIfMissing 走 ensureRelation 分支,
+ * 在 directus_relations 里建 collection.field → directus_files 的外键。
+ * 否则 Data Studio 的 "从库中选择文件" 抽屉点确认后不会把 file uuid 写回字段
+ * (UI 看起来能选、能点 ✓,但字段始终空白)。
+ */
 function fileField(field: string, sort: number, note?: string): FieldDef {
 	return {
 		field,
@@ -589,6 +606,7 @@ function fileField(field: string, sort: number, note?: string): FieldDef {
 		display: "image",
 		sort,
 		note,
+		relation: { type: "m2o", related_collection: "directus_files" },
 	};
 }
 
@@ -1571,6 +1589,720 @@ async function ensureReaderUser(): Promise<void> {
 }
 
 /* ============================================================================
+ * MCP Prompts 集合隔离
+ * ----------------------------------------------------------------------------
+ * Directus 11 的 Settings → AI 面板里,"MCP Prompts Collection" 如果指向某个
+ * 业务集合(如 posts),Directus 会自动往该集合追加 MCP 专用的 4 个字段:
+ *   name / description / system_prompt / messages
+ * 其中 name 是 required,污染后新增博客必须填一个无关的 "prompt name" 才能保存。
+ *
+ * 本步骤做的(幂等):
+ *   1. 确保存在专用集合 ai_prompts(含 MCP 需要的 4 个字段)
+ *   2. 把 Settings.mcp_prompts_collection 切换到 ai_prompts(已是则跳过)
+ *   3. 清理业务集合(目前只有 posts)里由 MCP 追加的污染字段
+ *
+ * 设计要点:
+ *   - 纯 ensure 语义:已存在/已切换/已清理都跳过,不做任何多余动作
+ *   - 放在最后一步:依赖 posts 已在 Step 2.5 建好,此时可安全检查与清理
+ *   - 即使用户关闭了 MCP(mcp_enabled=false),ai_prompts 集合也无害存在
+ *     —— 未来再启用 MCP 时默认值直接对上,不会再污染 posts
+ * ========================================================================== */
+
+/** MCP 专用集合名。独立于业务语义,只给 AI assistant 存 prompt 模板用 */
+const MCP_COLLECTION = "ai_prompts";
+
+/** 一旦发现 MCP 指向业务集合,就从这些集合里删除下列污染字段 */
+const MCP_POLLUTION_FIELDS: readonly string[] = [
+	"name",
+	"description",
+	"system_prompt",
+	"messages",
+];
+
+/** 需要检查的业务集合列表。将来如果其他集合也被污染,加进来即可 */
+const MCP_POLLUTED_TARGETS: readonly string[] = ["posts"];
+
+async function ensureMcpIsolation(): Promise<void> {
+	log.step(5, "MCP 隔离(专用集合 + 清污)");
+
+	// --- 5.1 ai_prompts 集合 ---
+	if (await collectionExists(MCP_COLLECTION)) {
+		log.skip(`collection ${MCP_COLLECTION} 已存在`);
+	} else {
+		await fetchDirectus("/collections", {
+			method: "POST",
+			body: {
+				collection: MCP_COLLECTION,
+				meta: {
+					icon: "smart_toy",
+					note: "AI / MCP prompt 模板(专用,避免污染业务集合)",
+					collection: MCP_COLLECTION,
+					hidden: false,
+					singleton: false,
+				},
+				schema: {},
+			},
+		});
+		log.success(`创建 collection ${MCP_COLLECTION}`);
+	}
+
+	// 4 个 MCP 预期字段 —— 结构尽量贴近 Directus 自动生成的 schema,
+	// 让 AI 客户端无缝识别
+	await createFieldIfMissing(MCP_COLLECTION, {
+		field: "name",
+		type: "string",
+		nullable: false,
+		unique: true,
+		required: true,
+		interface: "input",
+		options: { slug: true, trim: true },
+		display: "formatted-value",
+		display_options: { font: "monospace" },
+		sort: 1,
+		note: "Prompt 标识,建议用 slug 风格",
+	});
+	await createFieldIfMissing(MCP_COLLECTION, {
+		field: "description",
+		type: "text",
+		interface: "input",
+		sort: 10,
+		note: "Prompt 的简短说明",
+	});
+	await createFieldIfMissing(MCP_COLLECTION, {
+		field: "system_prompt",
+		type: "text",
+		interface: "input-rich-text-md",
+		sort: 11,
+		note: "System prompt 内容(Markdown)",
+	});
+	await createFieldIfMissing(MCP_COLLECTION, {
+		field: "messages",
+		type: "json",
+		special: ["cast-json"],
+		interface: "list",
+		options: {
+			fields: [
+				{
+					field: "role",
+					name: "role",
+					type: "string",
+					meta: {
+						field: "role",
+						width: "full",
+						type: "string",
+						required: true,
+						interface: "select-dropdown",
+						options: {
+							choices: [
+								{ text: "User", value: "user", icon: "person" },
+								{
+									text: "Assistant",
+									value: "assistant",
+									icon: "smart_toy",
+								},
+							],
+						},
+						display: "labels",
+					},
+				},
+				{
+					field: "text",
+					name: "text",
+					type: "text",
+					meta: {
+						field: "text",
+						width: "full",
+						type: "text",
+						required: true,
+						interface: "input-rich-text-md",
+						display: "formatted-value",
+						note: "消息内容,支持 {{placeholder}} 占位符",
+					},
+				},
+			],
+			showConfirmDiscard: true,
+			template: "{{ role }} • {{ text }}",
+			addLabel: "New Message",
+		},
+		display: "formatted-json-value",
+		display_options: { format: "{{ role }} • {{ text }}" },
+		sort: 12,
+		note: "Prompt 的 role/text 消息序列",
+	});
+
+	// --- 5.2 Settings.mcp_prompts_collection → ai_prompts ---
+	const settingsRes = await fetchDirectus<{
+		mcp_enabled?: boolean;
+		mcp_prompts_collection?: string | null;
+	}>("/settings", {
+		query: { fields: "mcp_enabled,mcp_prompts_collection" },
+	});
+	const currentTarget = settingsRes.data?.mcp_prompts_collection ?? null;
+
+	if (currentTarget === MCP_COLLECTION) {
+		log.skip(`mcp_prompts_collection 已是 ${MCP_COLLECTION}`);
+	} else {
+		await fetchDirectus("/settings", {
+			method: "PATCH",
+			body: { mcp_prompts_collection: MCP_COLLECTION },
+		});
+		log.success(
+			`已切换 mcp_prompts_collection: ${currentTarget ?? "null"} → ${MCP_COLLECTION}`,
+		);
+	}
+
+	// --- 5.3 清理业务集合里的污染字段 ---
+	// 注意:DELETE /fields/{collection}/{field} 会同时 ALTER TABLE DROP COLUMN,
+	// 丢失该列所有已有数据。这里只清理 MCP 污染字段,业务数据从未写入过,删除是安全的。
+	for (const collection of MCP_POLLUTED_TARGETS) {
+		if (!(await collectionExists(collection))) {
+			continue;
+		}
+		for (const field of MCP_POLLUTION_FIELDS) {
+			if (!(await fieldExists(collection, field))) {
+				continue;
+			}
+			await fetchDirectus(`/fields/${collection}/${field}`, {
+				method: "DELETE",
+				allowStatuses: [403, 404],
+			});
+			log.success(`清理 ${collection}.${field}(MCP 污染字段)`);
+		}
+	}
+}
+
+/* ============================================================================
+ * AI Blog Writer — 受限 policy + 专用 user + token + System Prompt
+ * ----------------------------------------------------------------------------
+ * 目的:
+ *   给 MCP 客户端(Claude Desktop / Cursor 等)使用的 AI 身份做硬隔离,
+ *   使 AI 只能读写博客相关的表,**禁止**操作其他集合。即使 AI 想改 projects /
+ *   aur_packages / site_settings / users / 或删任何数据,API 层就拒绝。
+ *
+ * 双层防护:
+ *   层 1 (硬性):AI 用专用 token,对应 policy 只授予 posts / posts_translations /
+ *                posts_tags 的读写权限,其他表只读或无权限。
+ *   层 2 (语义):mcp_system_prompt 里写清楚规范,指导 AI 填好所有字段、
+ *                双语不漏、非 posts 操作一律拒绝并要求人工确认。
+ *
+ * 两层独立工作:
+ *   - 层 1 即便 AI 无视 prompt 瞎搞,API 也挡住,物理不可绕过
+ *   - 层 2 保证在允许范围内也不粗心遗漏字段,产出高质量内容
+ *
+ * 默认策略(用户已确认):
+ *   - AI 创建的 post 只能 status = draft(等人审核后手动改为 published)
+ *   - AI 只能选已有 tag / category,不能新建
+ *   - AI 无图片上传权限(directus_files 只读)
+ *   - AI 不能新建或修改作者(authors 只读)
+ *   - AI 不能删除任何东西(mcp_allow_deletes 保持 false)
+ *
+ * 幂等:
+ *   policy / user / permissions / system_prompt 已到位则跳过,重跑安全。
+ *   每次 bootstrap 会轮换 token(跟 reader user 同策略),旧 token 自动失效。
+ *
+ * Token 存放:
+ *   写入 .env 的 DIRECTUS_AI_WRITER_TOKEN —— 用户手动配置到 MCP 客户端
+ *   (Claude Desktop 的 mcp servers config),本站前端不使用。
+ * ========================================================================== */
+
+const AI_WRITER_POLICY_NAME = "AI Blog Writer";
+const AI_WRITER_EMAIL = "mcp-blog-writer@zerx.dev";
+const AI_WRITER_FIRST_NAME = "AI Blog";
+const AI_WRITER_LAST_NAME = "Writer";
+
+/**
+ * System prompt:教会 AI 如何在本项目规范下写博客。
+ *
+ * 结构:
+ *   1. 身份与边界(先定调:你能做什么,不能做什么)
+ *   2. 数据模型速查(字段清单 + 每个字段的写法约束)
+ *   3. 必填 checklist(AI 在每次写入前必须自检)
+ *   4. Markdown 正文规范(代码块语言、TOC、图片等)
+ *   5. 错误处理(字段缺失 / 语言缺失 / 非 posts 请求如何响应)
+ *
+ * 这段文本会被写进 Directus Settings.mcp_system_prompt,MCP 服务器自动
+ * 在每次对话开头注入给 AI。用户不需要在 Claude Desktop 里再配一遍。
+ */
+const AI_WRITER_SYSTEM_PROMPT = `你是 ZerxLab 博客的 AI 写作助手。以下规范为硬性约束,每次响应前必须对照执行。
+
+================================================================
+一、身份与严格边界
+================================================================
+你通过 Directus MCP 与内容仓交互。你的权限范围:
+  ✅ 可读:所有集合(仅用于查询元数据,如 tags、categories、authors 的 id)
+  ✅ 可写:posts / posts_translations / posts_tags(仅这三张表)
+  ❌ 禁止:新建/修改/删除其他任何集合(projects / aur_packages / site_settings /
+          languages / authors / categories / tags / pages / directus_* / ai_prompts)
+  ❌ 禁止:删除任何数据(包括 posts 自身)
+  ❌ 禁止:上传或修改文件(directus_files)
+
+如果用户请求涉及**非 posts 的写操作**(如"帮我加个新标签"、"改下站点名"、
+"删除这篇文章"等),你必须:
+  1. 明确拒绝:"此操作超出我的授权范围(仅 posts 可写)"
+  2. 说明原因:列出具体涉及哪个集合
+  3. 建议替代方案:引导用户在 Directus 后台手动操作,或请求人类管理员批准
+  4. 绝不尝试"绕一下",比如"我试试看能不能行"—— 一律直接拒绝
+
+即便 API 因为某些原因允许了越权操作,你也必须遵循本 prompt 的边界,视为失败。
+
+================================================================
+二、数据模型 — posts 字段清单
+================================================================
+主表 posts(每篇文章对应一行):
+  - status            string   **必填** 'draft' | 'published' | 'archived'
+                               AI 创建时必须 = 'draft',人工审核后手动改 published
+  - slug              string   **必填** URL 关键字,小写 + 连字符,无中文、无空格
+                               一旦发布不可改(会让老链接 404)
+                               例:'my-first-go-tool' / 'wordzero-21x-faster'
+  - featured          boolean  默认 false。只有在用户明确要求"精选"时才 true
+  - reading_time      int      可留空 —— 前端会按正文字数自动算(300 字/分钟)
+  - date_published    ISO 时间 默认 'now' 即可
+  - cover             uuid     **留空**(AI 无图片上传权限,cover 留 null)
+  - author            int/id   M2O,必须是已有 author 的 id。查询 /items/authors?filter[slug][_eq]=zerx 取 id
+  - category          int/id   M2O,必须是已有 category 的 id。可选 slug:engineering / release / notes / meta
+  - tags              M2M 关系 写法见下"五、tags 写法"
+
+子表 posts_translations(每篇文章至少两行:zh-CN + en-US):
+  - posts_id          父表外键,写入时引擎自动填,不用手动给
+  - languages_code    **必填** 'zh-CN' 或 'en-US'
+  - title             string  **必填** 标题。中文写中文,英文写英文,不要机翻互填
+  - excerpt           string  **必填** 1-2 句话摘要。列表卡片 + RSS 描述会用
+  - content           text    **必填** Markdown 正文,规范见下"四、content 规范"
+  - cover_label       string  可选。无 cover 图时列表卡片的大字占位,如 'v1.0 Release'
+  - seo_title         string  可选。覆盖 <title>,不填会用 title
+  - seo_description   string  可选。覆盖 meta description,不填会用 excerpt
+
+================================================================
+三、每次写入前的自检 Checklist
+================================================================
+在调用 createItem("posts", ...) 前,逐项检查:
+  [ ] status 已设置 = 'draft'(永远不要直接 published)
+  [ ] slug 全小写、连字符分隔、无特殊字符、未与已有文章重复
+  [ ] author 的 id 已通过查询 authors 集合获取(不要硬编码)
+  [ ] category 的 id 已通过查询 categories 集合获取
+  [ ] tags 的所有 id 已通过查询 tags 集合获取
+  [ ] translations 数组包含 zh-CN 和 en-US 两条,每条的 title/excerpt/content 均非空
+  [ ] content(Markdown)已按第四节规范编写
+  [ ] date_published 设为当前时间
+  [ ] featured 除非用户明确要求,否则为 false
+  [ ] cover = null(AI 无权上传图片)
+
+任一项未通过,向用户报告并请求补充,不要擅自编造。
+
+================================================================
+四、content(Markdown 正文)规范
+================================================================
+1. 开篇:一段导引,交代"为什么写这篇",不要直接进入 ## 标题
+2. 标题层级:用 ## (二级) 和 ### (三级) 作为主要结构
+   - H1 一般不用(页面顶部会自动用 title 显示)
+   - H2 / H3 会自动进入右侧 TOC 目录,H4+ 不会
+3. 代码块:必须标注语言,例如:
+      \`\`\`go
+      func main() { ... }
+      \`\`\`
+   支持的语言(共 33 个):bash, shell, powershell, javascript, typescript,
+   tsx, jsx, json, jsonc, yaml, toml, markdown, mdx, html, css, scss, astro,
+   go, rust, python, java, c, cpp, csharp, sql, dockerfile, nginx, ini,
+   diff, xml, lua, php, ruby
+   别名:sh/zsh → bash, js → javascript, ts → typescript, py → python,
+         yml → yaml, rs → rust, c++ → cpp, c# → csharp, golang → go
+4. 外链:用 [文字](https://...) 格式,会自动加 target="_blank"
+5. 图片:暂不使用(AI 无上传权限)。如确需引用,用公开外链 ![alt](https://...)
+6. 引用块(> 开头):用于"备注 / 提示 / 警告"
+7. 表格、任务列表([ ]/[x])、删除线(~~~~) 全部支持(GFM)
+8. 不要在正文顶部放 front-matter(--- ... ---),那是 Astro 保留语法
+
+================================================================
+五、tags 写法(M2M 关系)
+================================================================
+tags 是多对多关系,通过中间表 posts_tags 维护。
+SDK 写法(createItem 的 payload 形式):
+  tags: [
+    { tags_id: <tag_id_1> },
+    { tags_id: <tag_id_2> }
+  ]
+其中 tag_id 必须通过先查 /items/tags 取得,**不可新建 tag**。
+如果用户需要的 tag 不存在:
+  - 不要自行创建
+  - 建议用户先在 Directus 后台新建 tag,或改用已有 tag
+  - 列出当前所有可用 tag 的 slug,让用户选
+
+================================================================
+六、双语 translations 的完整性
+================================================================
+每篇文章**必须**有 zh-CN 和 en-US 两条 translation,缺一不可。
+写作顺序建议:
+  1. 先写中文版(title/excerpt/content)
+  2. 再基于中文版做高质量英文翻译(不是直译,要符合英文技术博客习惯)
+  3. 两个版本的 title / excerpt 独立校对,不要一对一直翻
+如果用户只提供了一种语言的内容,明确询问另一种语言怎么处理,
+不要自作主张填 "(untranslated)" 或占位符。
+
+================================================================
+七、常见错误响应
+================================================================
+Q: 用户说"帮我创建一个新分类 'AI 工具'"
+A: 拒绝。"新建分类超出我的权限(只能写 posts)。请在 Directus 后台
+   Settings → Data Model → categories 新建,或告诉我用哪个现有分类。"
+
+Q: 用户说"这篇直接发布吧"
+A: 解释。"我只能创建为 draft 状态,请在 Directus 后台把 status 改为 published。
+   这是一个安全约束,避免未审核内容上线。"
+
+Q: 用户说"把这篇文章的封面换成 xxx.png"
+A: 拒绝。"我没有图片上传权限。请在 Directus 后台上传 cover 图。"
+
+Q: 用户说"删掉 slug 为 old-post 的文章"
+A: 拒绝。"我没有删除权限,也禁止删除任何数据。请在 Directus 后台手动删除,
+   并注意外部链接可能已经引用该 slug。"
+
+Q: 用户没提供英文内容
+A: 询问。"我需要同时创建 zh-CN 和 en-US 两条翻译。请提供英文版的
+   title / excerpt / content,或者授权我基于中文版翻译?"
+
+================================================================
+完。按以上规范执行,不确定时询问,不要猜测或绕过边界。
+`;
+
+/* ----------------------------------------------------------------------------
+ * 6.1 创建/复用 "AI Blog Writer" policy
+ * ----------------------------------------------------------------------------
+ * policy 承载具体的权限规则。绑定到 user 后,user 通过 MCP 调 API 时,
+ * Directus 按这些规则判断能否放行。
+ * ---------------------------------------------------------------------------- */
+
+async function findOrCreateAiWriterPolicy(): Promise<string> {
+	const existing = await fetchDirectus<Array<{ id: string; name: string }>>(
+		"/policies",
+		{
+			query: {
+				filter: JSON.stringify({ name: { _eq: AI_WRITER_POLICY_NAME } }),
+				fields: "id,name",
+				limit: 1,
+			},
+		},
+	);
+	const hit = Array.isArray(existing.data) ? existing.data[0] : undefined;
+	if (hit?.id) {
+		log.skip(`policy "${AI_WRITER_POLICY_NAME}" 已存在 (id=${hit.id})`);
+		return hit.id;
+	}
+
+	const created = await fetchDirectus<{ id: string }>("/policies", {
+		method: "POST",
+		body: {
+			name: AI_WRITER_POLICY_NAME,
+			icon: "smart_toy",
+			description:
+				"MCP 专用的博客写作权限:仅可读写 posts 生态,禁止其他写操作与所有删除操作。",
+			admin_access: false,
+			app_access: false,
+			enforce_tfa: false,
+		},
+	});
+	if (!created.data?.id) {
+		throw new Error("[bootstrap] 创建 AI Blog Writer policy 失败,响应无 id");
+	}
+	log.success(`创建 policy "${AI_WRITER_POLICY_NAME}" (id=${created.data.id})`);
+	return created.data.id;
+}
+
+/* ----------------------------------------------------------------------------
+ * 6.2 同步 AI Writer policy 的权限规则
+ * ----------------------------------------------------------------------------
+ * 规则清单:
+ *   可写(create + update):posts / posts_translations / posts_tags
+ *     posts.create 带 presets: { status: "draft" } —— 兜底,AI 即便传了
+ *     published 也会被后端强行改成 draft。
+ *   只读(read):其他所有业务元数据(authors / categories / tags / ...)
+ *     以及 directus_files(查 cover,但不能改)。
+ *   不给:delete 全部 / 任何 schema 相关操作。
+ *
+ * 幂等:按 (policy, collection, action) 精确判重,已存在跳过。
+ * ---------------------------------------------------------------------------- */
+
+interface AiWriterRule {
+	collection: string;
+	action: "read" | "create" | "update";
+	fields?: string | string[];
+	permissions?: Record<string, unknown>;
+	presets?: Record<string, unknown> | null;
+	validation?: Record<string, unknown> | null;
+}
+
+async function ensureAiWriterPermissions(policyId: string): Promise<void> {
+	// 查已有规则
+	const existingRes = await fetchDirectus<
+		Array<{ id: number; collection: string; action: string; policy: string }>
+	>("/permissions", {
+		query: {
+			filter: JSON.stringify({ policy: { _eq: policyId } }),
+			fields: "id,collection,action,policy",
+			limit: -1,
+		},
+	});
+	const rules: AiWriterRule[] = [
+		// ========== 可写(只限 posts 生态) ==========
+		// posts 创建:status 强制为 draft。
+		//   - presets:默认值(AI 没传 status 时用这个)
+		//   - validation:**强约束**,AI 传 status=published 会被 API 直接 403
+		//   实测 presets 不会覆盖已传值,必须配合 validation 才能"硬拦截"
+		{
+			collection: "posts",
+			action: "create",
+			fields: "*",
+			presets: { status: "draft" },
+			validation: { status: { _eq: "draft" } },
+		},
+		// posts 更新:
+		//   - 限定只能改 status=draft 的文章(permissions 过滤行级权限)
+		//   - 且不能把 status 改成 draft 以外的值(validation 过滤字段级写入)
+		//   双重保障:AI 只能反复修订草稿,不能把草稿标记为 published,
+		//   也不能去动已 published 的文章
+		{
+			collection: "posts",
+			action: "update",
+			fields: "*",
+			permissions: { status: { _eq: "draft" } },
+			validation: { status: { _eq: "draft" } },
+		},
+		{ collection: "posts", action: "read", fields: "*" },
+
+		// posts_translations:create/update/read
+		{ collection: "posts_translations", action: "create", fields: "*" },
+		{ collection: "posts_translations", action: "update", fields: "*" },
+		{ collection: "posts_translations", action: "read", fields: "*" },
+
+		// posts_tags(M2M 中间表):create/update/read
+		{ collection: "posts_tags", action: "create", fields: "*" },
+		{ collection: "posts_tags", action: "update", fields: "*" },
+		{ collection: "posts_tags", action: "read", fields: "*" },
+
+		// ========== 只读(查 id / 元数据用) ==========
+		{ collection: "authors", action: "read", fields: "*" },
+		{ collection: "authors_translations", action: "read", fields: "*" },
+		{ collection: "categories", action: "read", fields: "*" },
+		{ collection: "categories_translations", action: "read", fields: "*" },
+		{ collection: "tags", action: "read", fields: "*" },
+		{ collection: "tags_translations", action: "read", fields: "*" },
+		{ collection: "languages", action: "read", fields: "*" },
+		// 其他业务集合也给读权限,让 AI 能查阅项目整体结构做引用
+		{ collection: "site_settings", action: "read", fields: "*" },
+		{ collection: "site_settings_translations", action: "read", fields: "*" },
+		{ collection: "projects", action: "read", fields: "*" },
+		{ collection: "projects_translations", action: "read", fields: "*" },
+		{ collection: "aur_packages", action: "read", fields: "*" },
+		{ collection: "aur_packages_translations", action: "read", fields: "*" },
+		{ collection: "pages", action: "read", fields: "*" },
+		{ collection: "pages_translations", action: "read", fields: "*" },
+		// 文件只读(让 AI 能查 cover uuid 对应的文件名,但不能写)
+		{ collection: "directus_files", action: "read", fields: "*" },
+		// ai_prompts 读权限,以便 AI 读取额外 prompt 模板(未来可能用到)
+		{ collection: "ai_prompts", action: "read", fields: "*" },
+
+		// ========== 显式不授予 ==========
+		// delete 不在列表里 → AI 无法删除任何东西
+		// 其他业务集合的 create/update 不在列表里 → AI 无法修改它们
+		// 所有 directus_* 系统表的 create/update 不在列表里 → AI 无法改用户 / 权限 / schema
+	];
+
+	// 把已存在规则做成 key → id 映射,便于 PATCH 覆盖
+	const existingById = new Map<string, number>();
+	for (const p of Array.isArray(existingRes.data) ? existingRes.data : []) {
+		existingById.set(`${p.collection}:${p.action}`, p.id);
+	}
+
+	// 策略:
+	//   - 规则不存在 → POST 创建
+	//   - 规则已存在 → PATCH 覆盖(permissions / validation / presets / fields
+	//     每次都用代码声明的最新版本),保证"代码即权限真相",避免 Directus UI
+	//     或上一版脚本留下的陈旧配置继续生效
+	// 这也解决了"presets 不强制、validation 才强制"这类规则迁移问题 ——
+	// 只要代码改了 validation,下次 bootstrap 自动同步到位。
+	let created = 0;
+	let patched = 0;
+	for (const rule of rules) {
+		const key = `${rule.collection}:${rule.action}`;
+		const body = {
+			policy: policyId,
+			collection: rule.collection,
+			action: rule.action,
+			fields: rule.fields ?? "*",
+			permissions: rule.permissions ?? {},
+			validation: rule.validation ?? {},
+			presets: rule.presets ?? null,
+		};
+
+		const existingId = existingById.get(key);
+		if (existingId === undefined) {
+			await fetchDirectus("/permissions", {
+				method: "POST",
+				body,
+			});
+			created++;
+		} else {
+			await fetchDirectus(`/permissions/${existingId}`, {
+				method: "PATCH",
+				body,
+			});
+			patched++;
+		}
+	}
+	if (created === 0 && patched === 0) {
+		log.skip(`AI Writer 权限规则已全部到位 (${rules.length} 条)`);
+	} else {
+		log.success(
+			`AI Writer 权限规则:新增 ${created} / 同步 ${patched} / 共 ${rules.length} 条`,
+		);
+	}
+}
+
+/* ----------------------------------------------------------------------------
+ * 6.3 创建/复用 AI Writer user,轮换 token,写回 .env
+ * ----------------------------------------------------------------------------
+ * 与 ensureReaderUser 同样的策略:
+ *   - 按 email 查找,不存在则创建(不带 token)
+ *   - 始终 PATCH 写入新 token(Directus v11 只认 PATCH 写 token,见 mem 记录)
+ *   - 挂 AI Blog Writer policy
+ *   - 写入 .env 的 DIRECTUS_AI_WRITER_TOKEN
+ * ---------------------------------------------------------------------------- */
+
+async function ensureAiWriterUser(policyId: string): Promise<void> {
+	// 查用户
+	const found = await fetchDirectus<DirectusUser[]>("/users", {
+		query: {
+			filter: JSON.stringify({ email: { _eq: AI_WRITER_EMAIL } }),
+			fields: "id,email,token,status",
+			limit: 1,
+		},
+	});
+	const existingUser = Array.isArray(found.data) ? found.data[0] : undefined;
+
+	const freshToken = randomBytes(32).toString("hex");
+	let userId: string;
+
+	if (existingUser?.id) {
+		userId = existingUser.id;
+		log.skip(`user ${AI_WRITER_EMAIL} 已存在 (id=${userId}),将轮换 token`);
+	} else {
+		const created = await fetchDirectus<DirectusUser>("/users", {
+			method: "POST",
+			body: {
+				email: AI_WRITER_EMAIL,
+				first_name: AI_WRITER_FIRST_NAME,
+				last_name: AI_WRITER_LAST_NAME,
+				status: "active",
+				role: null,
+			},
+		});
+		if (!created.data?.id) {
+			throw new Error("[bootstrap] 创建 AI Blog Writer 用户失败,响应无 id");
+		}
+		userId = created.data.id;
+		log.success(`创建 user ${AI_WRITER_EMAIL} (id=${userId})`);
+	}
+
+	// PATCH token(唯一可靠的写 token 方式)
+	await fetchDirectus(`/users/${userId}`, {
+		method: "PATCH",
+		body: { token: freshToken },
+	});
+	log.success(`写入 AI Writer user.token(${freshToken.length} 字符)`);
+
+	// 绑定 policy(通过 directus_access junction)
+	const accessRes = await fetchDirectus<
+		Array<{ id: number; user: string; policy: string }>
+	>("/access", {
+		query: {
+			filter: JSON.stringify({
+				_and: [{ user: { _eq: userId } }, { policy: { _eq: policyId } }],
+			}),
+			fields: "id,user,policy",
+			limit: 1,
+		},
+	});
+	const alreadyLinked =
+		Array.isArray(accessRes.data) && accessRes.data.length > 0;
+	if (alreadyLinked) {
+		log.skip(`user ↔ AI Blog Writer policy 绑定已存在`);
+	} else {
+		await fetchDirectus("/access", {
+			method: "POST",
+			body: { user: userId, policy: policyId },
+		});
+		log.success(`绑定 user → AI Blog Writer policy`);
+	}
+
+	// 写回 .env
+	const result = await updateDotenv("DIRECTUS_AI_WRITER_TOKEN", freshToken);
+	log.success(
+		`DIRECTUS_AI_WRITER_TOKEN 已${result.action === "replaced" ? "更新" : result.action === "appended" ? "追加" : "写入新文件"}`,
+	);
+	log.info(
+		"把该 token 配置到 MCP 客户端(Claude Desktop 的 mcp server 配置里的 Authorization header)",
+	);
+}
+
+/* ----------------------------------------------------------------------------
+ * 6.4 写入 mcp_system_prompt
+ * ----------------------------------------------------------------------------
+ * 把 AI_WRITER_SYSTEM_PROMPT 常量写到 Directus Settings.mcp_system_prompt,
+ * 并确保 mcp_system_prompt_enabled = true。MCP 服务器会在每次对话开头
+ * 自动把这段 prompt 注入给 AI,不需要用户在客户端重复配置。
+ *
+ * 幂等:如果当前 prompt 内容与目标一致,跳过。
+ * ---------------------------------------------------------------------------- */
+
+async function ensureMcpSystemPrompt(): Promise<void> {
+	const currentRes = await fetchDirectus<{
+		mcp_system_prompt?: string | null;
+		mcp_system_prompt_enabled?: boolean;
+	}>("/settings", {
+		query: { fields: "mcp_system_prompt,mcp_system_prompt_enabled" },
+	});
+	const current = currentRes.data;
+
+	const needUpdatePrompt =
+		current?.mcp_system_prompt !== AI_WRITER_SYSTEM_PROMPT;
+	const needUpdateFlag = current?.mcp_system_prompt_enabled !== true;
+
+	if (!needUpdatePrompt && !needUpdateFlag) {
+		log.skip("mcp_system_prompt 已是最新,跳过");
+		return;
+	}
+
+	await fetchDirectus("/settings", {
+		method: "PATCH",
+		body: {
+			mcp_system_prompt: AI_WRITER_SYSTEM_PROMPT,
+			mcp_system_prompt_enabled: true,
+		},
+	});
+	log.success(
+		`写入 mcp_system_prompt(${AI_WRITER_SYSTEM_PROMPT.length} 字符)` +
+			`+ 启用 mcp_system_prompt_enabled`,
+	);
+}
+
+/* ----------------------------------------------------------------------------
+ * 6. 总装
+ * ---------------------------------------------------------------------------- */
+
+async function ensureAiBlogWriter(): Promise<void> {
+	log.step(6, "AI Blog Writer(MCP 受限身份 + System Prompt)");
+
+	const policyId = await findOrCreateAiWriterPolicy();
+	await ensureAiWriterPermissions(policyId);
+	await ensureAiWriterUser(policyId);
+	await ensureMcpSystemPrompt();
+
+	log.info(
+		"AI 现在仅能对 posts / posts_translations / posts_tags 执行读写," +
+			"其他集合只读,删除一律禁止。",
+	);
+}
+
+/* ============================================================================
  * 入口
  * ========================================================================== */
 
@@ -1595,6 +2327,13 @@ async function main(): Promise<void> {
 
 	// 4. 前端专用只读 user + token,自动写回 .env
 	await ensureReaderUser();
+
+	// 5. MCP 隔离:确保 ai_prompts 专用集合存在、MCP 指向它、posts 未被污染
+	await ensureMcpIsolation();
+
+	// 6. AI Blog Writer:受限 policy + 专用 user + system prompt
+	//    让 MCP 客户端只能按规范写 posts,硬隔离其他表
+	await ensureAiBlogWriter();
 
 	log.info("下一步:`bun run seed` 把 fallback 数据写入 Directus");
 	log.info("     然后:`bun run typegen` 从 Directus schema 重新生成 TS 类型");

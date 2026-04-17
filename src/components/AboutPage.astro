@@ -31,16 +31,16 @@ import MetaRow from "@components/ui/MetaRow.astro";
 import {
 	getLangFromUrl,
 	useTranslations,
+	useTranslatedPath,
 } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 import {
-	FALLBACK_SITE_SETTINGS,
 	FALLBACK_LANGUAGE_STATS,
 	listFallbackProjects,
 	getFallbackCounts,
-	pickLang,
 } from "@lib/fallback-data";
 import { getGithubStatsBatch } from "@lib/github";
+import { loadSiteSettings } from "@lib/queries/site-settings";
 
 /* ----------------------------------------------------------------------------
  * 当前语言 / 翻译工具
@@ -48,12 +48,28 @@ import { getGithubStatsBatch } from "@lib/github";
 
 const lang = getLangFromUrl(Astro.url) as Lang;
 const t = useTranslations(lang);
+const tp = useTranslatedPath(lang);
+
+// RSS feed URL 按当前语言走:
+//   zh → /rss.xml,en → /en/rss.xml
+// 与全站其它路由的语言前缀约定一致(见 src/pages/en/rss.xml.ts)。
+const rssHref = tp("/rss.xml");
 
 /* ----------------------------------------------------------------------------
- * 数据(此页统计值绝大多数来自 fallback:GitHub 实时数据由构建脚本回填)
+ * 数据
+ * ----------------------------------------------------------------------------
+ *   - settings       Directus site_settings 单例(含当前语言的 tagline /
+ *                    description / location / social_*),失败时自动降级到
+ *                    FALLBACK_SITE_SETTINGS。所有字段已按 lang 解包,
+ *                    直接消费(不再需要 pickLang)。
+ *   - projects       项目列表。这里暂用 fallback —— 本页 projects 主要消费
+ *                    是 githubUrl(用于 GitHub stars 聚合),与 fallback 的
+ *                    7 条记录一致,无需引入 Directus 查询。
+ *   - counts         站点统计,来自 fallback 快照 + GitHub 实时聚合覆盖。
+ *   - languageStats  语言占比,设计稿固定 8 条,不迁入 CMS。
  * -------------------------------------------------------------------------- */
 
-const settings = FALLBACK_SITE_SETTINGS;
+const settings = await loadSiteSettings(lang);
 const fallbackCounts = getFallbackCounts();
 const projects = listFallbackProjects();
 const languageStats = FALLBACK_LANGUAGE_STATS;
@@ -92,9 +108,11 @@ const counts = {
 	totalForks: liveTotalForks,
 };
 
-const tagline = pickLang(settings.tagline, lang);
-const description = pickLang(settings.description, lang);
-const location = pickLang(settings.location, lang);
+// settings 里的 tagline / description / location 已在 loadSiteSettings 内部
+// 按 lang 解包完毕,这里只做同名变量映射,尽量少改下面模板的引用点。
+const tagline = settings.tagline;
+const description = settings.description;
+const location = settings.location;
 
 /* ----------------------------------------------------------------------------
  * 格式化辅助
@@ -283,7 +301,7 @@ const joinPlatforms: readonly JoinPlatform[] = [
 		eyebrow: C.joinGithub,
 		description: C.joinGithubDesc,
 		cta: C.joinGithubCta,
-		ctaHref: settings.socialGithub,
+		ctaHref: settings.socialGithub ?? "https://github.com/zerx-lab",
 		external: true,
 		metricLabel: C.joinGithubLabel,
 		metricValue: "zerx-lab",
@@ -416,7 +434,7 @@ const numberStats: readonly NumberStat[] = [
 			</a>
 		)}
 		<a
-			href="/rss.xml"
+			href={rssHref}
 			aria-label="RSS"
 			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
 		>
