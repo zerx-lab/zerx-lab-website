@@ -1,0 +1,781 @@
+---
+/**
+ * ============================================================================
+ * BlogPostPage - 博客详情页共享组件
+ * ----------------------------------------------------------------------------
+ * 为什么抽成独立组件:
+ *   中文 /blog/[slug] 与英文 /en/blog/[slug] 两个动态路由入口复用完全相同
+ *   的渲染逻辑。本组件负责:
+ *     1. 按 slug 从 Directus / Fallback 拉取单篇文章
+ *     2. 把 Bilingual 字段按当前 lang 解包
+ *     3. 渲染 Markdown 正文(含 TOC 抽取、Shiki 代码高亮、字数统计)
+ *     4. 组合左栏(文章 meta)与右栏(正文 + TOC + 上一篇/下一篇)
+ *
+ * 左栏信息布局:
+ *   - 覆盖默认 LabMark,改为展示文章 meta 卡片
+ *   - AUTHOR / PUBLISHED / UPDATED / CATEGORY / READING TIME / TAGS
+ *   - 底部额外一行"回到博客列表"导航
+ *
+ * 右栏信息布局:
+ *   - BLOG · slug 面包屑
+ *   - 文章标题 + excerpt
+ *   - TOC(仅当文章有 H2/H3 时显示)
+ *   - Markdown 正文(prose 样式)
+ *   - 分割线 + 上一篇 / 下一篇导航
+ *
+ * 使用方式(页面文件):
+ *   ---
+ *   import BlogPostPage from "@components/blog/BlogPostPage.astro";
+ *   export async function getStaticPaths() { ... }
+ *   const { slug } = Astro.params;
+ *   ---
+ *   <BlogPostPage slug={slug} />
+ *
+ * 错误处理:
+ *   - slug 不存在 → 返回 Astro 的 404(由 getStaticPaths 提前保证不会发生)
+ *   - Markdown 渲染失败 → 降级为纯文本 <pre>,不让页面炸
+ * ============================================================================
+ */
+
+import AppShell from "@layouts/AppShell.astro";
+import SectionHeader from "@components/ui/SectionHeader.astro";
+import MetaRow from "@components/ui/MetaRow.astro";
+import TableOfContents from "@components/blog/TableOfContents.astro";
+import Logo from "@components/ui/Logo.astro";
+import {
+	getLangFromUrl,
+	useTranslations,
+	useTranslatedPath,
+	formatDate,
+	formatDateCompact,
+} from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+import {
+	findFallbackPost,
+	findAuthor,
+	findCategory,
+	findTag,
+	getAdjacentPosts,
+	pickLang,
+	type FallbackPost,
+} from "@lib/fallback-data";
+import { renderMarkdown, type MarkdownHeading } from "@lib/markdown";
+import "@styles/prose.css";
+
+interface Props {
+	/** 文章 slug(来自 dynamic route 的 Astro.params.slug) */
+	slug: string;
+}
+
+const { slug } = Astro.props;
+
+/* ----------------------------------------------------------------------------
+ * 当前语言 / 翻译工具
+ * -------------------------------------------------------------------------- */
+
+const lang = getLangFromUrl(Astro.url) as Lang;
+const t = useTranslations(lang);
+const tp = useTranslatedPath(lang);
+
+/* ----------------------------------------------------------------------------
+ * 加载文章
+ * ----------------------------------------------------------------------------
+ * 策略:
+ *   - 优先走 Fallback(这是唯一保证"永远有内容"的来源)
+ *   - 未来接入 Directus 的单篇查询时,在此处扩展并在失败时降级到 fallback
+ * -------------------------------------------------------------------------- */
+
+interface PostVM {
+	slug: string;
+	title: string;
+	excerpt: string;
+	content: string;
+	coverLabel: string;
+	cover: string | null;
+	authorName: string | null;
+	authorBio: string | null;
+	authorGithub: string | null;
+	authorAvatar: string | null;
+	categorySlug: string | null;
+	categoryName: string | null;
+	tags: readonly { slug: string; name: string }[];
+	date: string;
+	updatedDate: string | null;
+	readingTime: number;
+	featured: boolean;
+}
+
+function fallbackToVM(post: FallbackPost, currentLang: Lang): PostVM {
+	const author = findAuthor(post.authorSlug);
+	const category = findCategory(post.categorySlug);
+	const tags = post.tagSlugs
+		.map((s) => {
+			const tag = findTag(s);
+			if (!tag) return null;
+			return { slug: tag.slug, name: pickLang(tag.name, currentLang) };
+		})
+		.filter((x): x is { slug: string; name: string } => x !== null);
+
+	return {
+		slug: post.slug,
+		title: pickLang(post.title, currentLang),
+		excerpt: pickLang(post.excerpt, currentLang),
+		content: pickLang(post.content, currentLang),
+		coverLabel: pickLang(post.coverLabel, currentLang),
+		cover: post.cover,
+		authorName: author?.name ?? null,
+		authorBio: author ? pickLang(author.bio, currentLang) : null,
+		authorGithub: author?.github ?? null,
+		authorAvatar: author?.avatar ?? null,
+		categorySlug: category?.slug ?? null,
+		categoryName: category ? pickLang(category.name, currentLang) : null,
+		tags,
+		date: post.date,
+		updatedDate: post.updatedDate,
+		readingTime: post.readingTime,
+		featured: post.featured,
+	};
+}
+
+const fallbackPost = findFallbackPost(slug);
+
+if (!fallbackPost) {
+	// 理论上不会到这里(getStaticPaths 已经过滤过),
+	// 但以防万一:返回 404
+	return new Response(null, { status: 404 });
+}
+
+const post: PostVM = fallbackToVM(fallbackPost, lang);
+
+/* ----------------------------------------------------------------------------
+ * 相邻文章(上一篇/下一篇)
+ * -------------------------------------------------------------------------- */
+
+const { previous: prevPost, next: nextPost } = getAdjacentPosts(slug);
+
+const prevVM = prevPost ? fallbackToVM(prevPost, lang) : null;
+const nextVM = nextPost ? fallbackToVM(nextPost, lang) : null;
+
+/* ----------------------------------------------------------------------------
+ * Markdown 渲染
+ * ----------------------------------------------------------------------------
+ * 失败兜底:渲染失败时降级为转义后的 <pre>,保证文章页永远能打开。
+ * -------------------------------------------------------------------------- */
+
+let renderedHtml = "";
+let headings: readonly MarkdownHeading[] = [];
+let wordCount = 0;
+let readingTimeMin = post.readingTime;
+
+try {
+	const result = await renderMarkdown(post.content);
+	renderedHtml = result.html;
+	headings = result.headings;
+	wordCount = result.wordCount;
+	// 以实际字数推算的阅读时长优先,fallback 到数据字段
+	if (result.readingTimeMin > 0) {
+		readingTimeMin = result.readingTimeMin;
+	}
+} catch (err) {
+	console.warn(
+		`[blog/${slug}] Markdown 渲染失败,降级为纯文本。原因:`,
+		(err as Error)?.message ?? err,
+	);
+	const escaped = post.content
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;");
+	renderedHtml = `<pre>${escaped}</pre>`;
+}
+
+/* ----------------------------------------------------------------------------
+ * 页面级文案
+ * -------------------------------------------------------------------------- */
+
+const COPY = {
+	zh: {
+		blogBreadcrumb: "博客",
+		backToList: "返回博客列表",
+		prev: "上一篇",
+		next: "下一篇",
+		words: "字",
+		author: "作者",
+		published: "发布于",
+		updated: "更新于",
+		category: "分类",
+		readingTime: "阅读时长",
+		tags: "标签",
+		minutes: "分钟",
+		viewAuthor: "查看作者主页",
+	},
+	en: {
+		blogBreadcrumb: "Blog",
+		backToList: "Back to all posts",
+		prev: "Previous",
+		next: "Next",
+		words: "words",
+		author: "Author",
+		published: "Published",
+		updated: "Updated",
+		category: "Category",
+		readingTime: "Reading time",
+		tags: "Tags",
+		minutes: "min",
+		viewAuthor: "View author",
+	},
+} as const;
+
+const C = COPY[lang] ?? COPY.zh;
+
+/* ----------------------------------------------------------------------------
+ * 结构化数据(JSON-LD)—— BlogPosting
+ * ----------------------------------------------------------------------------
+ * 提升搜索引擎对博客内容的理解。仅在文章有作者与日期时生成。
+ * -------------------------------------------------------------------------- */
+
+const siteUrl = (import.meta.env.SITE ?? "https://zerx.dev").replace(
+	/\/$/,
+	"",
+);
+const canonical = `${siteUrl}${Astro.url.pathname}`;
+
+const jsonLd = JSON.stringify({
+	"@context": "https://schema.org",
+	"@type": "BlogPosting",
+	headline: post.title,
+	description: post.excerpt,
+	url: canonical,
+	datePublished: post.date,
+	dateModified: post.updatedDate ?? post.date,
+	author: post.authorName
+		? {
+				"@type": "Person",
+				name: post.authorName,
+				url: post.authorGithub ?? undefined,
+			}
+		: undefined,
+	publisher: {
+		"@type": "Organization",
+		name: "ZerxLab",
+		url: siteUrl,
+	},
+	mainEntityOfPage: {
+		"@type": "WebPage",
+		"@id": canonical,
+	},
+	inLanguage: lang === "zh" ? "zh-CN" : "en-US",
+	wordCount,
+});
+---
+
+<AppShell
+	title={post.title}
+	description={post.excerpt}
+	ogType="article"
+	articlePublishedTime={post.date}
+	articleModifiedTime={post.updatedDate ?? undefined}
+	articleAuthor={post.authorName ?? undefined}
+>
+	{/* ---------- 在 head 注入 BlogPosting JSON-LD ---------- */}
+	<Fragment slot="head">
+		<script
+			type="application/ld+json"
+			is:inline
+			set:html={jsonLd}
+		/>
+	</Fragment>
+
+	{/* ---------- 左栏:完全自定义(覆盖默认 LabMark) ---------- */}
+	<Fragment slot="left">
+		<aside
+			class:list={[
+				"relative flex flex-col",
+				"bg-[color:var(--color-paper)]",
+				"lg:border-r lg:border-dashed lg:border-[color:var(--color-hairline)]",
+				"px-6 sm:px-8 lg:px-10 xl:px-14",
+				"pt-6 lg:pt-8",
+				"pb-10 lg:pb-10",
+				"lg:min-h-screen",
+			]}
+			aria-label={lang === "zh" ? "文章信息栏" : "Post sidebar"}
+		>
+			{/* ---- Logo ---- */}
+			<div class="flex items-center">
+				<Logo size="md" />
+			</div>
+
+			<hr
+				class="border-0 border-t border-dashed border-[color:var(--color-hairline)] mt-6 lg:mt-8"
+				aria-hidden="true"
+			/>
+
+			{/* ---- 返回博客列表的快捷链接 ---- */}
+			<a
+				href={tp("/blog")}
+				class:list={[
+					"group",
+					"mt-6 lg:mt-8",
+					"inline-flex items-center gap-2",
+					"font-[var(--font-mono)]",
+					"text-[10.5px]",
+					"leading-none",
+					"tracking-[var(--tracking-wider)]",
+					"uppercase",
+					"text-[color:var(--color-ink-tertiary)]",
+					"hover:text-[color:var(--color-ink-primary)]",
+					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+					"w-fit",
+				]}
+			>
+				<svg
+					aria-hidden="true"
+					width="11"
+					height="11"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					class:list={[
+						"shrink-0",
+						"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						"group-hover:-translate-x-[2px]",
+					]}
+				>
+					<path d="m12 19-7-7 7-7"></path>
+					<path d="M19 12H5"></path>
+				</svg>
+				<span>{C.backToList}</span>
+			</a>
+
+			{/* ---- 文章标题(大字,左栏主视觉) ---- */}
+			<h1
+				class:list={[
+					"mt-8 lg:mt-10",
+					"font-medium",
+					"text-[color:var(--color-ink-primary)]",
+					"tracking-[-0.02em]",
+					"leading-[1.2]",
+					"text-[26px] sm:text-[30px] lg:text-[32px] xl:text-[34px]",
+				]}
+			>
+				{post.title}
+			</h1>
+
+			{/* ---- 摘要 ---- */}
+			{post.excerpt && (
+				<p
+					class:list={[
+						"mt-4",
+						"text-[color:var(--color-ink-secondary)]",
+						"text-[14px] lg:text-[14.5px]",
+						"leading-[1.65]",
+						"max-w-[40ch]",
+					]}
+				>
+					{post.excerpt}
+				</p>
+			)}
+
+			{/* ---- 作者迷你卡片 ---- */}
+			{post.authorName && (
+				<a
+					href={post.authorGithub ?? "#"}
+					target={post.authorGithub ? "_blank" : undefined}
+					rel={post.authorGithub ? "noopener noreferrer" : undefined}
+					aria-label={C.viewAuthor}
+					class:list={[
+						"mt-7 lg:mt-8",
+						"group",
+						"flex items-center gap-3",
+						"p-3",
+						"border border-dashed border-[color:var(--color-hairline)]",
+						"rounded-[var(--radius-sm)]",
+						"bg-[color:var(--color-paper-muted)]/30",
+						"hover:bg-[color:var(--color-paper-muted)]/60",
+						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						"w-fit",
+						"max-w-full",
+					]}
+				>
+					{post.authorAvatar ? (
+						<img
+							src={post.authorAvatar}
+							alt={post.authorName}
+							loading="lazy"
+							decoding="async"
+							class:list={[
+								"shrink-0",
+								"h-8 w-8",
+								"rounded-full",
+								"border border-[color:var(--color-hairline)]",
+								"bg-[color:var(--color-paper-subtle)]",
+							]}
+						/>
+					) : (
+						<span
+							aria-hidden="true"
+							class:list={[
+								"shrink-0",
+								"inline-flex items-center justify-center",
+								"h-8 w-8 rounded-full",
+								"bg-[color:var(--color-ink-primary)]",
+								"text-[color:var(--color-paper)]",
+								"font-[var(--font-mono)]",
+								"text-[12px] font-semibold",
+								"uppercase tabular-nums",
+							]}
+						>
+							{post.authorName.slice(0, 2)}
+						</span>
+					)}
+
+					<div class="flex flex-col min-w-0">
+						<span
+							class:list={[
+								"mono-label",
+								"text-[9.5px] leading-none",
+								"text-[color:var(--color-ink-tertiary)]",
+								"mb-1",
+							]}
+						>
+							{C.author}
+						</span>
+						<span
+							class:list={[
+								"text-[13px] leading-none",
+								"text-[color:var(--color-ink-primary)]",
+								"font-medium",
+								"truncate",
+								"group-hover:underline",
+								"decoration-[color:var(--color-hairline-strong)]",
+								"underline-offset-2",
+							]}
+						>
+							{post.authorName}
+						</span>
+					</div>
+				</a>
+			)}
+
+			{/* ---- 将后面的 meta 推到底部 ---- */}
+			<div class="flex-1" aria-hidden="true"></div>
+
+			{/* ---- Meta 元信息(底部) ---- */}
+			<div
+				class:list={[
+					"mt-10 lg:mt-12",
+					"pt-4",
+					"border-t border-dashed border-[color:var(--color-hairline)]",
+				]}
+			>
+				<dl class="flex flex-col">
+					<MetaRow label={C.published} value={formatDate(post.date, lang)} />
+					{post.updatedDate && post.updatedDate !== post.date && (
+						<MetaRow
+							label={C.updated}
+							value={formatDate(post.updatedDate, lang)}
+						/>
+					)}
+					{post.categoryName && post.categorySlug && (
+						<MetaRow label={C.category}>
+							<Fragment slot="value">
+								<span class="uppercase">{post.categoryName}</span>
+							</Fragment>
+						</MetaRow>
+					)}
+					<MetaRow label={C.readingTime}>
+						<Fragment slot="value">
+							<span class="tabular-nums">{readingTimeMin}</span>
+							<span class="ml-1 uppercase">{C.minutes}</span>
+						</Fragment>
+					</MetaRow>
+					{wordCount > 0 && (
+						<MetaRow label={lang === "zh" ? "字数" : "Words"}>
+							<Fragment slot="value">
+								<span class="tabular-nums">{wordCount.toLocaleString()}</span>
+								<span class="ml-1 uppercase">{C.words}</span>
+							</Fragment>
+						</MetaRow>
+					)}
+				</dl>
+
+				{/* ---- 标签云 ---- */}
+				{post.tags.length > 0 && (
+					<div class="mt-5">
+						<span
+							class:list={[
+								"mono-label",
+								"text-[10px] leading-none",
+								"text-[color:var(--color-ink-tertiary)]",
+								"tracking-[var(--tracking-wider)]",
+								"uppercase",
+								"block mb-2.5",
+							]}
+						>
+							{C.tags}
+						</span>
+						<ul class="flex flex-wrap gap-1.5 list-none m-0 p-0">
+							{post.tags.map((tag) => (
+								<li class="inline-flex">
+									<span
+										class:list={[
+											"inline-flex items-center",
+											"px-2 py-[3px]",
+											"font-[var(--font-mono)]",
+											"text-[10px]",
+											"leading-none",
+											"tracking-[var(--tracking-wide)]",
+											"text-[color:var(--color-ink-secondary)]",
+											"bg-[color:var(--color-paper-muted)]/60",
+											"border border-[color:var(--color-hairline)]",
+											"rounded-[var(--radius-sm)]",
+										]}
+									>
+										<span
+											aria-hidden="true"
+											class="text-[color:var(--color-ink-muted)] mr-[2px]"
+										>
+											#
+										</span>
+										{tag.name}
+									</span>
+								</li>
+							))}
+						</ul>
+					</div>
+				)}
+			</div>
+		</aside>
+	</Fragment>
+
+	{/* ==========================================================================
+	 *                              右栏主内容
+	 * ========================================================================== */}
+
+	{/* ---- 面包屑 + slug 标签 ---- */}
+	<div
+		class:list={[
+			"flex items-center gap-2",
+			"font-[var(--font-mono)]",
+			"text-[10.5px]",
+			"leading-none",
+			"tracking-[var(--tracking-wider)]",
+			"uppercase",
+			"text-[color:var(--color-ink-tertiary)]",
+			"mb-2",
+		]}
+	>
+		<a
+			href={tp("/blog")}
+			class:list={[
+				"hover:text-[color:var(--color-ink-primary)]",
+				"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+			]}
+		>
+			{C.blogBreadcrumb}
+		</a>
+		<span aria-hidden="true" class="text-[color:var(--color-ink-muted)]">
+			/
+		</span>
+		<span
+			class:list={[
+				"text-[color:var(--color-ink-secondary)]",
+				"truncate max-w-[32ch]",
+			]}
+		>
+			{post.slug}
+		</span>
+	</div>
+
+	{/* ---- 分区头 ---- */}
+	<SectionHeader
+		eyebrow={post.categoryName ?? C.blogBreadcrumb}
+		count={formatDateCompact(post.date)}
+	/>
+
+	{/* ---- 正文 + TOC 的两列布局(仅 xl 以上分两列) ---- */}
+	<div
+		class:list={[
+			"mt-6 lg:mt-8 mb-12",
+			"flex flex-col xl:flex-row",
+			"gap-8 xl:gap-12",
+		]}
+	>
+		{/* Article */}
+		<article
+			class:list={[
+				"prose",
+				"flex-1 min-w-0",
+				"max-w-none xl:max-w-[72ch]",
+			]}
+			set:html={renderedHtml}
+		/>
+
+		{/* TOC(桌面端右侧,平板/移动不占位) */}
+		{headings.length > 0 && (
+			<div
+				class:list={[
+					"xl:w-[240px] xl:shrink-0",
+					// 平板 / 移动端让 TOC 显示在正文上方以免被忽视
+					"order-first xl:order-last",
+				]}
+			>
+				<TableOfContents headings={headings} />
+			</div>
+		)}
+	</div>
+
+	{/* ---- 分割线 ---- */}
+	<hr
+		aria-hidden="true"
+		class="border-0 border-t border-dashed border-[color:var(--color-hairline)] my-8"
+	/>
+
+	{/* ---- 上一篇 / 下一篇 ---- */}
+	{(prevVM || nextVM) && (
+		<nav
+			aria-label={lang === "zh" ? "文章导航" : "Post navigation"}
+			class:list={[
+				"mt-2 mb-16",
+				"grid grid-cols-1 sm:grid-cols-2",
+				"gap-0",
+				"border border-dashed border-[color:var(--color-hairline)]",
+				"divide-x divide-dashed divide-[color:var(--color-hairline)]",
+			]}
+		>
+			{/* 上一篇 */}
+			{prevVM ? (
+				<a
+					href={tp(`/blog/${prevVM.slug}`)}
+					class:list={[
+						"group",
+						"flex flex-col gap-2",
+						"px-5 py-5 lg:px-6 lg:py-6",
+						"hover:bg-[color:var(--color-paper-muted)]/60",
+						"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+						"sm:border-r-0",
+					]}
+				>
+					<span
+						class:list={[
+							"inline-flex items-center gap-1.5",
+							"mono-label",
+							"text-[10px]",
+							"text-[color:var(--color-ink-tertiary)]",
+							"group-hover:text-[color:var(--color-ink-primary)]",
+							"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						]}
+					>
+						<svg
+							aria-hidden="true"
+							width="10"
+							height="10"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.5"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							class:list={[
+								"shrink-0",
+								"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								"group-hover:-translate-x-[2px]",
+							]}
+						>
+							<path d="m12 19-7-7 7-7"></path>
+							<path d="M19 12H5"></path>
+						</svg>
+						{C.prev}
+					</span>
+					<span
+						class:list={[
+							"text-[14px] lg:text-[14.5px]",
+							"leading-[1.45]",
+							"text-[color:var(--color-ink-primary)]",
+							"font-medium",
+							"line-clamp-2",
+						]}
+					>
+						{prevVM.title}
+					</span>
+				</a>
+			) : (
+				<div aria-hidden="true" class="hidden sm:block"></div>
+			)}
+
+			{/* 下一篇 */}
+			{nextVM ? (
+				<a
+					href={tp(`/blog/${nextVM.slug}`)}
+					class:list={[
+						"group",
+						"flex flex-col gap-2 items-end text-right",
+						"px-5 py-5 lg:px-6 lg:py-6",
+						"hover:bg-[color:var(--color-paper-muted)]/60",
+						"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+					]}
+				>
+					<span
+						class:list={[
+							"inline-flex items-center gap-1.5",
+							"mono-label",
+							"text-[10px]",
+							"text-[color:var(--color-ink-tertiary)]",
+							"group-hover:text-[color:var(--color-ink-primary)]",
+							"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						]}
+					>
+						{C.next}
+						<svg
+							aria-hidden="true"
+							width="10"
+							height="10"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.5"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							class:list={[
+								"shrink-0",
+								"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								"group-hover:translate-x-[2px]",
+							]}
+						>
+							<path d="M5 12h14"></path>
+							<path d="m12 5 7 7-7 7"></path>
+						</svg>
+					</span>
+					<span
+						class:list={[
+							"text-[14px] lg:text-[14.5px]",
+							"leading-[1.45]",
+							"text-[color:var(--color-ink-primary)]",
+							"font-medium",
+							"line-clamp-2",
+						]}
+					>
+						{nextVM.title}
+					</span>
+				</a>
+			) : (
+				<div aria-hidden="true" class="hidden sm:block"></div>
+			)}
+		</nav>
+	)}
+</AppShell>
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * line-clamp 兜底(相邻文章标题)
+	 * -------------------------------------------------------------------------- */
+
+	.line-clamp-2 {
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+</style>

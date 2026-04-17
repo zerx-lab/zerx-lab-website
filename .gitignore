@@ -1,0 +1,103 @@
+# ============================================================================
+# ZerxLab Website - Git Ignore
+# ============================================================================
+
+# ---------- Astro ----------
+# 构建产物
+dist/
+# 类型生成目录(Astro 自动维护)
+.astro/
+
+
+# ---------- 依赖 ----------
+node_modules/
+.pnp
+.pnp.js
+
+
+# ---------- 日志 ----------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+logs/
+*.log
+
+
+# ---------- 环境变量(高危,切勿提交) ----------
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+# 仅 .env.example 可以提交
+!.env.example
+
+
+# ---------- Directus schema / 种子数据快照 ----------
+# 脚本产出的临时快照,真正的 schema 源码在 scripts/ 下
+schema-snapshot.json
+schema-backup-*.json
+
+
+# ---------- 编辑器 / IDE ----------
+# JetBrains
+.idea/
+# VS Code 只保留项目级共享配置,忽略个人偏好
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+# Zed
+.zed/
+# Sublime
+*.sublime-project
+*.sublime-workspace
+
+
+# ---------- 操作系统 ----------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+# Linux
+*~
+.directory
+.Trash-*
+
+
+# ---------- 缓存 ----------
+.cache/
+.temp/
+.tmp/
+.vite/
+.turbo/
+# TypeScript
+*.tsbuildinfo
+
+
+# ---------- 测试 ----------
+coverage/
+.nyc_output/
+
+
+# ---------- 部署 ----------
+# Dokploy 本地测试产物
+.dokploy/
+# Docker
+docker-compose.override.yml
+
+
+# ---------- 其他 ----------
+# 本地调试产生的截图/录屏
+screenshots/
+*.local

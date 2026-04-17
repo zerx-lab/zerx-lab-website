@@ -1,0 +1,722 @@
+/* ============================================================================
+ * ZerxLab Website - Markdown 正文样式 (Prose)
+ * ----------------------------------------------------------------------------
+ * 用途:
+ *   为博客详情页、项目介绍页等"文章型"页面的 Markdown 渲染结果提供统一排版。
+ *   不依赖 @tailwindcss/typography 插件,避免与设计 tokens 冲突。
+ *
+ * 视觉基调:
+ *   - 编辑派(Editorial),贴合 better-auth.com / leerob.com 的长文阅读体验
+ *   - 正文字号略大于界面文字,提升阅读舒适度(16-17px)
+ *   - 行高宽松(1.75),段间距克制但分明
+ *   - 标题与正文共用 Sans 字族,靠字重与大小建立层级
+ *   - 内联代码与围栏代码有清晰的差异:内联带轻灰底,围栏为完整 <pre> 块
+ *
+ * 作用域:
+ *   所有样式通过 `.prose` 根类作用域化,避免污染其他区域。
+ *   用法:<article class="prose">...marked 输出的 HTML...</article>
+ *
+ * 暗色模式:
+ *   完全依赖 global.css 已定义的 --color-* 变量;.dark 根类切换时自动反相。
+ *   Shiki 代码高亮使用 CSS 变量模式(see markdown.ts defaultColor: false),
+ *   主题切换靠 html.dark 驱动 --shiki-dark* 变量。
+ * ============================================================================ */
+
+/* ----------------------------------------------------------------------------
+ * 容器基础:正文字号、行高、最大宽度
+ * -------------------------------------------------------------------------- */
+
+.prose {
+	color: var(--color-ink-primary);
+	font-family: var(--font-sans);
+	font-size: 16px;
+	line-height: 1.75;
+	letter-spacing: -0.003em;
+	/* 最佳可读宽度约 65ch;父容器的 max-width 也会约束这里 */
+	max-width: 72ch;
+	word-wrap: break-word;
+	hyphens: auto;
+}
+
+@media (min-width: 1024px) {
+	.prose {
+		font-size: 16.5px;
+	}
+}
+
+/* 容器内部首个与末个元素不额外占 margin,避免双重留白 */
+.prose > :first-child {
+	margin-top: 0;
+}
+.prose > :last-child {
+	margin-bottom: 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * 段落与分段节奏
+ * -------------------------------------------------------------------------- */
+
+.prose p {
+	margin: 1.35em 0;
+	color: var(--color-ink-secondary);
+}
+
+.prose p strong {
+	color: var(--color-ink-primary);
+	font-weight: 600;
+}
+
+/* 首段可选的 drop cap 样式(不主动启用,仅当 .prose--dropcap 时生效) */
+.prose--dropcap > p:first-of-type::first-letter {
+	float: left;
+	font-size: 3.2em;
+	line-height: 0.9;
+	font-weight: 500;
+	padding: 0.1em 0.1em 0 0;
+	color: var(--color-ink-primary);
+}
+
+/* ----------------------------------------------------------------------------
+ * 标题:md-heading 样式来自 markdown.ts 的自定义 renderer
+ * -------------------------------------------------------------------------- */
+
+.prose .md-heading {
+	position: relative;
+	color: var(--color-ink-primary);
+	font-family: var(--font-sans);
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	line-height: 1.25;
+	scroll-margin-top: calc(var(--layout-top-nav-height) + 1.5rem);
+}
+
+.prose .md-heading-1 {
+	/* H1 通常是文章主标题(由页面模板渲染),正文里几乎不出现 H1。
+	   这里给一个兜底样式,即便出现也不会跳出视觉 */
+	font-size: 2em;
+	margin: 2em 0 0.8em;
+}
+
+.prose .md-heading-2 {
+	font-size: 1.55em;
+	margin: 2.25em 0 0.7em;
+	padding-top: 0.2em;
+	/* H2 之上加一条极淡的虚线,强化分节感 */
+	border-top: 1px dashed var(--color-hairline);
+	padding-top: 1.5em;
+}
+
+/* 正文第一个 H2 不画上方虚线(避免紧贴文章 meta 下方双线) */
+.prose > .md-heading-2:first-child {
+	border-top: 0;
+	padding-top: 0;
+	margin-top: 0;
+}
+
+.prose .md-heading-3 {
+	font-size: 1.25em;
+	margin: 1.8em 0 0.5em;
+	font-weight: 600;
+}
+
+.prose .md-heading-4 {
+	font-size: 1.05em;
+	margin: 1.5em 0 0.4em;
+	font-weight: 600;
+}
+
+.prose .md-heading-5,
+.prose .md-heading-6 {
+	font-size: 1em;
+	margin: 1.3em 0 0.3em;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-wide);
+	font-family: var(--font-mono);
+	color: var(--color-ink-tertiary);
+}
+
+/* ----------------------------------------------------------------------------
+ * 标题锚点 (#) —— 默认隐藏,hover 标题行时浮现
+ * --------------------------------------------------------------------------
+ * markdown.ts 给每个 heading 注入一个 <a class="md-anchor">#</a>,
+ * 位置在标题文字之前。此处将其绝对定位到左侧外缘,hover 时显现。
+ * -------------------------------------------------------------------------- */
+
+.prose .md-anchor {
+	position: absolute;
+	left: -1.2em;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 1em;
+	text-align: right;
+	padding-right: 0.2em;
+	font-family: var(--font-mono);
+	font-weight: 400;
+	color: var(--color-ink-muted);
+	text-decoration: none;
+	opacity: 0;
+	transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.prose .md-heading:hover .md-anchor,
+.prose .md-anchor:focus-visible {
+	opacity: 1;
+}
+
+.prose .md-anchor:hover {
+	color: var(--color-ink-primary);
+}
+
+/* 窄屏下锚点无法放到外缘,改为隐藏 */
+@media (max-width: 768px) {
+	.prose .md-anchor {
+		display: none;
+	}
+}
+
+/* ----------------------------------------------------------------------------
+ * 链接
+ * --------------------------------------------------------------------------
+ * 编辑派:默认带下划线,hover 时变墨色实线,外链额外补一个极小箭头
+ * -------------------------------------------------------------------------- */
+
+.prose a {
+	color: var(--color-ink-primary);
+	text-decoration: underline;
+	text-decoration-color: var(--color-hairline-strong);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	transition:
+		color var(--duration-fast) var(--ease-standard),
+		text-decoration-color var(--duration-fast) var(--ease-standard);
+}
+
+.prose a:hover {
+	text-decoration-color: var(--color-ink-primary);
+}
+
+/* 外链末尾的小箭头(marked link renderer 给外链打了 target="_blank") */
+.prose a[target="_blank"]::after {
+	content: "↗";
+	display: inline-block;
+	margin-left: 0.15em;
+	font-size: 0.85em;
+	color: var(--color-ink-muted);
+	transition: transform var(--duration-fast) var(--ease-standard);
+	vertical-align: baseline;
+}
+
+.prose a[target="_blank"]:hover::after {
+	transform: translate(1px, -1px);
+	color: var(--color-ink-primary);
+}
+
+/* 锚点链接(md-anchor)不继承上面的下划线与箭头 */
+.prose a.md-anchor,
+.prose a.md-anchor:hover {
+	text-decoration: none;
+}
+.prose a.md-anchor::after {
+	content: none;
+}
+
+/* ----------------------------------------------------------------------------
+ * 列表
+ * --------------------------------------------------------------------------
+ * 无序列表用小方块项目符(比默认圆点更"工程"),有序列表用等宽数字
+ * -------------------------------------------------------------------------- */
+
+.prose ul,
+.prose ol {
+	margin: 1.25em 0;
+	padding-left: 1.5em;
+	color: var(--color-ink-secondary);
+}
+
+.prose ul {
+	list-style: none;
+}
+
+.prose ul > li {
+	position: relative;
+	margin: 0.45em 0;
+	padding-left: 0.25em;
+}
+
+.prose ul > li::before {
+	content: "";
+	position: absolute;
+	left: -1em;
+	top: 0.7em;
+	width: 4px;
+	height: 4px;
+	background-color: var(--color-ink-muted);
+	border-radius: 0;
+	transform: translateY(-50%);
+}
+
+.prose ol {
+	list-style: none;
+	counter-reset: md-ol-counter;
+}
+
+.prose ol > li {
+	position: relative;
+	margin: 0.45em 0;
+	padding-left: 0.25em;
+	counter-increment: md-ol-counter;
+}
+
+.prose ol > li::before {
+	content: counter(md-ol-counter, decimal-leading-zero);
+	position: absolute;
+	left: -1.8em;
+	top: 0.1em;
+	font-family: var(--font-mono);
+	font-size: 0.75em;
+	font-weight: 500;
+	color: var(--color-ink-muted);
+	letter-spacing: var(--tracking-wide);
+	font-variant-numeric: tabular-nums;
+}
+
+/* 嵌套列表层级 */
+.prose ul ul,
+.prose ul ol,
+.prose ol ul,
+.prose ol ol {
+	margin: 0.4em 0;
+}
+
+.prose li > p {
+	margin: 0.3em 0;
+}
+
+/* GFM 任务列表(- [ ] xxx / - [x] xxx) */
+.prose ul > li > input[type="checkbox"] {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 12px;
+	height: 12px;
+	margin: 0 0.5em 0 -1.5em;
+	vertical-align: middle;
+	border: 1px solid var(--color-hairline-strong);
+	background-color: var(--color-paper);
+	border-radius: 2px;
+	cursor: default;
+	position: relative;
+}
+
+.prose ul > li > input[type="checkbox"]:checked {
+	background-color: var(--color-ink-primary);
+	border-color: var(--color-ink-primary);
+}
+
+.prose ul > li > input[type="checkbox"]:checked::after {
+	content: "";
+	position: absolute;
+	left: 3px;
+	top: 0px;
+	width: 3px;
+	height: 7px;
+	border: solid var(--color-paper);
+	border-width: 0 1.5px 1.5px 0;
+	transform: rotate(45deg);
+}
+
+.prose ul > li:has(> input[type="checkbox"])::before {
+	display: none;
+}
+
+/* ----------------------------------------------------------------------------
+ * 引用块(blockquote)
+ * --------------------------------------------------------------------------
+ * 左侧墨色实线 + 略微下沉的颜色;不使用斜体,避免 CJK 字体变形
+ * -------------------------------------------------------------------------- */
+
+.prose blockquote {
+	margin: 1.5em 0;
+	padding: 0.1em 0 0.1em 1.2em;
+	border-left: 2px solid var(--color-ink-primary);
+	color: var(--color-ink-secondary);
+	font-style: normal;
+}
+
+.prose blockquote p {
+	margin: 0.6em 0;
+	color: inherit;
+}
+
+.prose blockquote p:first-child {
+	margin-top: 0;
+}
+.prose blockquote p:last-child {
+	margin-bottom: 0;
+}
+
+.prose blockquote cite,
+.prose blockquote footer {
+	display: block;
+	margin-top: 0.6em;
+	font-family: var(--font-mono);
+	font-size: 0.85em;
+	color: var(--color-ink-tertiary);
+	font-style: normal;
+	letter-spacing: var(--tracking-wide);
+}
+
+/* ----------------------------------------------------------------------------
+ * 行内代码
+ * --------------------------------------------------------------------------
+ * 与界面上 <code> 基础样式保持一致,略小于正文
+ * -------------------------------------------------------------------------- */
+
+.prose :not(pre) > code {
+	font-family: var(--font-mono);
+	font-size: 0.88em;
+	padding: 0.12em 0.4em;
+	background-color: var(--color-paper-muted);
+	border: 1px solid var(--color-hairline);
+	border-radius: var(--radius-sm);
+	color: var(--color-ink-primary);
+	white-space: nowrap;
+}
+
+/* 链接中的行内代码:继承链接颜色,但不丢失下划线 */
+.prose a > code {
+	color: inherit;
+}
+
+/* ----------------------------------------------------------------------------
+ * 围栏代码块(Shiki 输出)
+ * --------------------------------------------------------------------------
+ * Shiki 输出结构:<pre class="shiki shiki-themes ..."><code>...</code></pre>
+ * 使用 defaultColor: false,通过 html.dark 切换 --shiki-dark* 变量
+ * -------------------------------------------------------------------------- */
+
+.prose pre {
+	margin: 1.75em 0;
+	padding: 1em 1.1em;
+	font-family: var(--font-mono);
+	font-size: 13.5px;
+	line-height: 1.65;
+	overflow-x: auto;
+	background-color: var(--color-paper-muted);
+	border: 1px dashed var(--color-hairline);
+	border-radius: var(--radius-sm);
+	color: var(--color-ink-primary);
+	/* 细款滚动条,与站点风格统一 */
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-hairline-strong) transparent;
+}
+
+.prose pre::-webkit-scrollbar {
+	height: 6px;
+	width: 6px;
+}
+.prose pre::-webkit-scrollbar-track {
+	background: transparent;
+}
+.prose pre::-webkit-scrollbar-thumb {
+	background-color: var(--color-hairline-strong);
+	border-radius: 3px;
+}
+
+.prose pre > code {
+	all: unset;
+	display: block;
+	font-family: inherit;
+	font-size: inherit;
+	line-height: inherit;
+	white-space: pre;
+	background: none;
+	border: none;
+	padding: 0;
+	color: inherit;
+}
+
+/* Shiki 双主题 CSS 变量注入:通过 html.dark 切换 */
+.prose pre.shiki,
+.prose pre.shiki span {
+	color: var(--shiki-light);
+	background-color: var(--shiki-light-bg);
+}
+
+:root.dark .prose pre.shiki,
+:root.dark .prose pre.shiki span {
+	color: var(--shiki-dark);
+	background-color: var(--shiki-dark-bg);
+}
+
+/* 代码块 fallback(语言未识别时由 markdown.ts 生成) */
+.prose pre.md-code-fallback {
+	background-color: var(--color-paper-muted);
+}
+
+.prose pre.md-code-fallback::before {
+	content: attr(data-lang);
+	display: block;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-wider);
+	color: var(--color-ink-muted);
+	margin-bottom: 0.6em;
+	padding-bottom: 0.5em;
+	border-bottom: 1px dashed var(--color-hairline);
+}
+
+/* ----------------------------------------------------------------------------
+ * 水平分隔线
+ * -------------------------------------------------------------------------- */
+
+.prose hr {
+	margin: 2.5em 0;
+	border: 0;
+	border-top: 1px dashed var(--color-hairline);
+	/* 中央放一个小点,编辑派签名细节 */
+	position: relative;
+	overflow: visible;
+}
+
+.prose hr::after {
+	content: "·";
+	position: absolute;
+	top: -0.75em;
+	left: 50%;
+	transform: translateX(-50%);
+	background-color: var(--color-paper);
+	padding: 0 0.5em;
+	color: var(--color-ink-muted);
+	font-family: var(--font-mono);
+	font-size: 14px;
+	line-height: 1;
+}
+
+/* ----------------------------------------------------------------------------
+ * 图片
+ * --------------------------------------------------------------------------
+ * 默认独占一行,带细边框与轻微内阴影,保持"纸上印刷"感
+ * -------------------------------------------------------------------------- */
+
+.prose img {
+	display: block;
+	max-width: 100%;
+	height: auto;
+	margin: 1.75em auto;
+	border: 1px solid var(--color-hairline);
+	border-radius: var(--radius-sm);
+	background-color: var(--color-paper-subtle);
+}
+
+.prose figure {
+	margin: 1.75em 0;
+}
+
+.prose figure > img {
+	margin: 0 auto;
+}
+
+.prose figcaption {
+	margin-top: 0.6em;
+	text-align: center;
+	font-family: var(--font-mono);
+	font-size: 12px;
+	color: var(--color-ink-tertiary);
+	letter-spacing: var(--tracking-wide);
+}
+
+/* ----------------------------------------------------------------------------
+ * 表格
+ * --------------------------------------------------------------------------
+ * GFM 表格;全虚线发丝,与站点整体节奏一致
+ * -------------------------------------------------------------------------- */
+
+.prose table {
+	width: 100%;
+	margin: 1.75em 0;
+	border-collapse: collapse;
+	font-size: 14px;
+	line-height: 1.5;
+	/* 超长表格允许横向滚动 */
+	display: block;
+	overflow-x: auto;
+	border: 1px dashed var(--color-hairline);
+}
+
+.prose thead {
+	background-color: var(--color-paper-muted);
+	border-bottom: 1px dashed var(--color-hairline-strong);
+}
+
+.prose th,
+.prose td {
+	padding: 0.65em 1em;
+	text-align: left;
+	border-bottom: 1px dashed var(--color-hairline);
+	border-right: 1px dashed var(--color-hairline);
+	vertical-align: top;
+}
+
+.prose th:last-child,
+.prose td:last-child {
+	border-right: 0;
+}
+
+.prose tbody tr:last-child th,
+.prose tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.prose th {
+	font-family: var(--font-mono);
+	font-size: 11.5px;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-wider);
+	color: var(--color-ink-tertiary);
+}
+
+.prose td {
+	color: var(--color-ink-secondary);
+}
+
+/* 表格单元格内的数字 / 代码:等宽,tabular-nums */
+.prose td code,
+.prose td:has(> code) {
+	font-variant-numeric: tabular-nums;
+}
+
+/* 斑马纹(轻度,仅 hover 时突出) */
+.prose tbody tr:hover {
+	background-color: var(--color-paper-muted);
+}
+
+/* ----------------------------------------------------------------------------
+ * 键盘按键(<kbd>)
+ * -------------------------------------------------------------------------- */
+
+.prose kbd {
+	display: inline-block;
+	padding: 0.15em 0.5em;
+	font-family: var(--font-mono);
+	font-size: 0.8em;
+	line-height: 1;
+	color: var(--color-ink-primary);
+	background-color: var(--color-paper);
+	border: 1px solid var(--color-hairline-strong);
+	border-bottom-width: 2px;
+	border-radius: var(--radius-sm);
+	vertical-align: middle;
+	white-space: nowrap;
+}
+
+/* ----------------------------------------------------------------------------
+ * 标记文字 / 删除线 / 缩写
+ * -------------------------------------------------------------------------- */
+
+.prose mark {
+	background-color: color-mix(
+		in srgb,
+		var(--color-ink-primary) 12%,
+		transparent
+	);
+	color: var(--color-ink-primary);
+	padding: 0.05em 0.25em;
+	border-radius: 2px;
+}
+
+.prose del,
+.prose s {
+	color: var(--color-ink-muted);
+	text-decoration-thickness: 1px;
+}
+
+.prose abbr[title] {
+	border-bottom: 1px dotted var(--color-hairline-strong);
+	text-decoration: none;
+	cursor: help;
+}
+
+/* ----------------------------------------------------------------------------
+ * 内嵌详情折叠(<details>/<summary>)
+ * -------------------------------------------------------------------------- */
+
+.prose details {
+	margin: 1.5em 0;
+	padding: 0.75em 1em;
+	border: 1px dashed var(--color-hairline);
+	border-radius: var(--radius-sm);
+	background-color: var(--color-paper-muted);
+}
+
+.prose summary {
+	cursor: pointer;
+	font-weight: 500;
+	color: var(--color-ink-primary);
+	list-style: none;
+	display: flex;
+	align-items: center;
+	gap: 0.5em;
+	font-size: 14px;
+}
+
+.prose summary::-webkit-details-marker {
+	display: none;
+}
+
+.prose summary::before {
+	content: "▸";
+	display: inline-block;
+	color: var(--color-ink-muted);
+	font-size: 0.8em;
+	transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.prose details[open] > summary::before {
+	transform: rotate(90deg);
+}
+
+.prose details > :not(summary) {
+	margin-top: 0.75em;
+}
+
+/* ----------------------------------------------------------------------------
+ * 可访问性:禁用动效偏好
+ * -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+	.prose * {
+		transition: none !important;
+	}
+}
+
+/* ----------------------------------------------------------------------------
+ * 打印样式
+ * --------------------------------------------------------------------------
+ * 供读者"保存为 PDF"时拥有干净的文章排版
+ * -------------------------------------------------------------------------- */
+
+@media print {
+	.prose {
+		color: #000;
+		max-width: none;
+	}
+	.prose a {
+		color: #000;
+		text-decoration: underline;
+	}
+	.prose a[target="_blank"]::after {
+		content: "";
+	}
+	.prose pre,
+	.prose code {
+		background: transparent;
+		border-color: #bbb;
+		color: #000;
+	}
+	.prose .md-anchor {
+		display: none;
+	}
+}

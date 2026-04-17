@@ -1,0 +1,28 @@
+---
+/**
+ * ============================================================================
+ * 项目页 (英文)
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /en/projects  → 本文件(en)
+ *   /projects     → src/pages/projects.astro(默认中文,无前缀)
+ *
+ * 实现:
+ *   与中文版完全同构,共用 ProjectsPage 组件。
+ *   ProjectsPage 内部通过 getLangFromUrl(Astro.url) 推断当前语言,
+ *   URL 以 /en/ 开头时自动输出英文文案与英文项目描述/高亮。
+ *
+ * 数据源:
+ *   - Directus projects 集合(已 bootstrap 时)
+ *   - 失败/未 bootstrap 时自动 fallback 到 src/lib/fallback-data.ts
+ *
+ * 维护约定:
+ *   若要修改项目页的结构/样式/数据拉取逻辑,只改
+ *   src/components/projects/ProjectsPage.astro,本文件与中文入口都会受益。
+ * ============================================================================
+ */
+
+import ProjectsPage from "@components/projects/ProjectsPage.astro";
+---
+
+<ProjectsPage />

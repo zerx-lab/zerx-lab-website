@@ -1,0 +1,130 @@
+---
+/**
+ * ============================================================================
+ * Logo - ZerxLab 品牌标识
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com 的左上角 Logo
+ *   - 方块图标(黑色实心方块,代表"实验室单元/模块")
+ *   - 大写无衬线字名
+ *   - 末尾句号(编辑派的签名细节)
+ *
+ * 用法:
+ *   <Logo />
+ *   <Logo size="sm" />
+ *   <Logo href="/" />         // 包裹成链接
+ *   <Logo as="span" />        // 用于已在链接内的场景,避免嵌套 <a>
+ * ============================================================================
+ */
+
+import { getLangFromUrl, useTranslatedPath, useTranslations } from "@i18n/utils";
+
+interface Props {
+	/** 尺寸档位,影响字号与图标大小 */
+	size?: "sm" | "md" | "lg";
+	/** 是否包裹成首页链接。为 false 时渲染为 <span>,用于父级已是链接的场景 */
+	href?: string | false;
+	/** 根元素类型,默认 a(有 href 时)/ div(无 href 时) */
+	as?: "a" | "span" | "div";
+	/** 是否显示末尾的句号(品牌签名元素) */
+	withPeriod?: boolean;
+	/** 额外类名 */
+	class?: string;
+}
+
+const {
+	size = "md",
+	href,
+	as,
+	withPeriod = true,
+	class: className = "",
+} = Astro.props;
+
+// ---------- 计算当前语言首页路径 ----------
+const lang = getLangFromUrl(Astro.url);
+const tp = useTranslatedPath(lang);
+const t = useTranslations(lang);
+
+// href 优先级:显式传入 > 当前语言首页 > 无链接
+const resolvedHref =
+	href === false ? null : typeof href === "string" ? href : tp("/");
+
+// ---------- 决定渲染的根元素 ----------
+const Tag = as ?? (resolvedHref ? "a" : "span");
+
+// ---------- 尺寸映射 ----------
+const sizeMap = {
+	sm: {
+		square: "h-3 w-3",
+		text: "text-sm",
+		gap: "gap-1.5",
+	},
+	md: {
+		square: "h-[14px] w-[14px]",
+		text: "text-[15px]",
+		gap: "gap-2",
+	},
+	lg: {
+		square: "h-4 w-4",
+		text: "text-lg",
+		gap: "gap-2.5",
+	},
+} as const;
+
+const sizes = sizeMap[size];
+
+// ---------- 品牌名(来自 i18n 字典,方便未来可变) ----------
+const brandName = t("brand.name");
+---
+
+<Tag
+	href={Tag === "a" ? resolvedHref : undefined}
+	aria-label={brandName}
+	class:list={[
+		"inline-flex items-center font-semibold tracking-tight",
+		sizes.gap,
+		sizes.text,
+		"text-[color:var(--color-ink-primary)]",
+		"transition-opacity duration-[var(--duration-fast)]",
+		"hover:opacity-70",
+		className,
+	]}
+>
+	{/* 图标:两块错位方块,代表"实验室模块" */}
+	<span
+		aria-hidden="true"
+		class:list={[
+			"relative inline-block shrink-0",
+			sizes.square,
+		]}
+	>
+		<svg
+			viewBox="0 0 16 16"
+			fill="none"
+			xmlns="http://www.w3.org/2000/svg"
+			class="h-full w-full"
+		>
+			{/* 主方块 */}
+			<rect
+				x="0"
+				y="0"
+				width="10"
+				height="10"
+				fill="currentColor"
+			/>
+			{/* 辅方块(错位叠加,营造"堆栈/实验"感) */}
+			<rect
+				x="6"
+				y="6"
+				width="10"
+				height="10"
+				fill="currentColor"
+				fill-opacity="0.35"
+			/>
+		</svg>
+	</span>
+
+	{/* 品牌名 */}
+	<span class="whitespace-nowrap leading-none">
+		{brandName}{withPeriod && <span aria-hidden="true" class="text-[color:var(--color-ink-tertiary)]">.</span>}
+	</span>
+</Tag>

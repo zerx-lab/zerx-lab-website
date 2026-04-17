@@ -1,0 +1,504 @@
+---
+/**
+ * ============================================================================
+ * PostCard - 博客文章列表卡片
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com 的 /blog 列表页
+ *   - 每行一个"横向卡片":左侧封面占位块 + 右侧文字内容
+ *   - 封面若无图,用深色占位块渲染文章"coverLabel"大字(如 v1.6 Release)
+ *   - 标题 + 简介 + 底部 meta(作者 · 日期 · 标签)
+ *   - 整行 hover 时背景变浅,右侧显示浮动箭头
+ *   - 不使用圆角、不使用阴影;靠虚线分割与留白形成节奏
+ *
+ * 典型呈现:
+ *   ┌─────────────────────────────────────────────────────────────┐
+ *   │ ┌──────────┐                                                │
+ *   │ │          │  文章标题                                      │
+ *   │ │  v1.6    │  一句话简介,控制在两行内,超出省略号...        │
+ *   │ │ Release  │                                                │
+ *   │ │          │  Taesu Kim · Apr 7, 2026                       │
+ *   │ └──────────┘  #v1.6  #OpenTelemetry  #passkey       →       │
+ *   └─────────────────────────────────────────────────────────────┘
+ *
+ * 用法:
+ *   <PostCard
+ *     href="/blog/zerxlab-launch"
+ *     title="ZerxLab 正式上线"
+ *     excerpt="一个属于实验室的公开橱窗..."
+ *     coverLabel="v0.1 上线"
+ *     authorName="zerx"
+ *     date="2026-04-17T00:00:00.000Z"
+ *     tags={[{ slug: "astro", name: "Astro" }, { slug: "bun", name: "Bun" }]}
+ *     featured
+ *   />
+ *
+ *   传入真实封面图(优先级高于 coverLabel):
+ *   <PostCard ... cover="/images/post-1.jpg" coverAlt="..." />
+ *
+ * 设计约束:
+ *   - 卡片本身是一个 <a>,整行可点击(不要在内部再嵌套链接)
+ *   - 所有文字支持响应式截断,避免在窄屏下换行炸开
+ *   - 深色占位块仅在 cover 为空时使用,颜色固定为墨色(不随主题反相),
+ *     因为大字标签本身靠"黑底 + 白色弱对比"文本保证可读性
+ * ============================================================================
+ */
+
+import { getLangFromUrl, useTranslations, formatDate } from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+
+/** 标签数据结构(与 FALLBACK_TAGS 解析后的单项一致) */
+export interface PostCardTag {
+	/** URL slug,用于生成跳转链接或作为 key */
+	slug: string;
+	/** 展示名(调用方负责 pickLang 解包) */
+	name: string;
+}
+
+interface Props {
+	/** 文章详情页 URL(通常 `${tp}/blog/${slug}`) */
+	href: string;
+	/** 文章标题 */
+	title: string;
+	/** 简介(控制在 2 行内) */
+	excerpt?: string;
+	/** 封面图 URL(优先级高于 coverLabel) */
+	cover?: string | null;
+	/** 封面图 alt 文本(a11y) */
+	coverAlt?: string;
+	/** 封面占位块上的大字标签(如 "v1.6 Release" / "Benchmark") */
+	coverLabel?: string;
+	/** 作者姓名(不翻译,保持原名) */
+	authorName?: string;
+	/** 发布日期(ISO 8601 字符串或 Date),用 formatDate 本地化 */
+	date: string | Date;
+	/** 标签列表 */
+	tags?: readonly PostCardTag[];
+	/** 分类名(可选,显示在 date 之前) */
+	categoryName?: string;
+	/** 阅读时长(分钟) */
+	readingTime?: number;
+	/** 是否精选(精选卡片背景略有区别) */
+	featured?: boolean;
+	/** 额外类名 */
+	class?: string;
+	/** 最多显示多少个标签,超出省略(默认 3) */
+	maxTags?: number;
+}
+
+const {
+	href,
+	title,
+	excerpt,
+	cover,
+	coverAlt,
+	coverLabel,
+	authorName,
+	date,
+	tags = [],
+	categoryName,
+	readingTime,
+	featured = false,
+	class: className = "",
+	maxTags = 3,
+} = Astro.props;
+
+// ---------- i18n ----------
+const lang = getLangFromUrl(Astro.url) as Lang;
+const t = useTranslations(lang);
+
+// ---------- 格式化 ----------
+const formattedDate = formatDate(date, lang);
+
+// 标签截断(超出 maxTags 的部分用 "+N" 标注)
+const visibleTags = tags.slice(0, maxTags);
+const hiddenTagCount = Math.max(0, tags.length - maxTags);
+
+// 封面模式判定:
+//   - 有 cover URL → 渲染真实图片
+//   - 无 cover 但有 coverLabel → 渲染墨色占位块 + 大字
+//   - 都没有 → 渲染极简占位(仅一个方块 + 斜杠,纯装饰)
+const hasImageCover = Boolean(cover);
+const hasLabelCover = !hasImageCover && Boolean(coverLabel);
+---
+
+<a
+	href={href}
+	aria-label={title}
+	class:list={[
+		"post-card",
+		"group relative",
+		"flex flex-col sm:flex-row items-stretch",
+		"gap-4 sm:gap-5 lg:gap-6",
+		"px-4 sm:px-5 lg:px-6 py-5 lg:py-6",
+		// 整行 hover 背景反馈(精选卡片略亮)
+		featured
+			? "bg-[color:var(--color-paper-muted)]/30"
+			: "bg-transparent",
+		"hover:bg-[color:var(--color-paper-muted)]/60",
+		"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+		// 编辑派:无圆角无阴影
+		"rounded-none",
+		"no-underline",
+		"cursor-pointer",
+		className,
+	]}
+>
+	{/* ================================================================
+	 *                              封面区
+	 * ================================================================ */}
+	<div
+		class:list={[
+			"post-card__cover",
+			"shrink-0",
+			"relative",
+			// 移动端占满宽度 + 固定比例,桌面端左侧固定尺寸
+			"w-full sm:w-[180px] lg:w-[200px]",
+			"aspect-[16/10] sm:aspect-[16/10] lg:aspect-[16/10]",
+			"overflow-hidden",
+			// 统一边框,无论图片还是占位都有一根发丝
+			"border border-[color:var(--color-hairline)]",
+			"bg-[color:var(--color-paper-subtle)]",
+		]}
+	>
+		{hasImageCover ? (
+			<img
+				src={cover!}
+				alt={coverAlt ?? title}
+				loading="lazy"
+				decoding="async"
+				class:list={[
+					"h-full w-full object-cover",
+					"transition-transform duration-[var(--duration-slow)] ease-[var(--ease-standard)]",
+					"group-hover:scale-[1.02]",
+				]}
+			/>
+		) : hasLabelCover ? (
+			<div
+				class:list={[
+					// 墨色占位块,不随主题反相 —— 让列表整体有"卡带/胶片"式识别度
+					"relative h-full w-full",
+					"bg-[#0a0a0a]",
+					"overflow-hidden",
+					"flex flex-col justify-end",
+					"p-3 sm:p-4",
+				]}
+			>
+				{/* 背景装饰:微弱的点阵,模拟噪点纸感,不喧宾夺主 */}
+				<span
+					aria-hidden="true"
+					class:list={[
+						"pointer-events-none absolute inset-0",
+						"opacity-[0.06]",
+					]}
+					style="background-image: radial-gradient(circle, #fff 0.5px, transparent 0.5px); background-size: 6px 6px;"
+				/>
+
+				{/* 大字标签 */}
+				<div
+					class:list={[
+						"relative z-10",
+						"font-[var(--font-sans)]",
+						"font-semibold tracking-[-0.01em]",
+						"text-white",
+						"text-[18px] sm:text-[19px] lg:text-[20px]",
+						"leading-[1.1]",
+						"line-clamp-2",
+					]}
+				>
+					{coverLabel}
+				</div>
+
+				{/* 底部装饰:一条细线 + 小点,仿磁带索引标签 */}
+				<div
+					aria-hidden="true"
+					class:list={[
+						"relative z-10",
+						"flex items-center gap-2",
+						"mt-3",
+					]}
+				>
+					<span class="inline-block h-px flex-1 bg-white/15" />
+					<span class="inline-block h-1.5 w-1.5 rounded-full bg-white/30" />
+				</div>
+			</div>
+		) : (
+			/* 极简占位:仅一条对角斜线,编辑派装饰 */
+			<div
+				aria-hidden="true"
+				class:list={[
+					"h-full w-full relative",
+					"bg-[color:var(--color-paper-subtle)]",
+				]}
+			>
+				<svg
+					class="absolute inset-0 h-full w-full text-[color:var(--color-hairline-strong)]"
+					viewBox="0 0 100 100"
+					preserveAspectRatio="none"
+					aria-hidden="true"
+				>
+					<line
+						x1="0"
+						y1="100"
+						x2="100"
+						y2="0"
+						stroke="currentColor"
+						stroke-width="0.5"
+						stroke-dasharray="2 2"
+						vector-effect="non-scaling-stroke"
+					/>
+				</svg>
+			</div>
+		)}
+	</div>
+
+	{/* ================================================================
+	 *                              文字区
+	 * ================================================================ */}
+	<div class="flex-1 min-w-0 flex flex-col justify-between gap-3">
+		{/* ---------- 顶部:标题 + 简介 ---------- */}
+		<div class="flex flex-col gap-2">
+			<h3
+				class:list={[
+					"font-medium",
+					"text-[color:var(--color-ink-primary)]",
+					"tracking-[-0.015em]",
+					"leading-[1.35]",
+					"text-[17px] sm:text-[18px] lg:text-[19px]",
+					"line-clamp-2",
+					// hover 时标题微妙加深(暗色模式下刚好相反,自动跟随 var)
+					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+				]}
+			>
+				{title}
+			</h3>
+
+			{excerpt && (
+				<p
+					class:list={[
+						"text-[color:var(--color-ink-secondary)]",
+						"text-[13.5px] sm:text-[14px]",
+						"leading-[1.6]",
+						"line-clamp-2",
+						"max-w-[72ch]",
+					]}
+				>
+					{excerpt}
+				</p>
+			)}
+		</div>
+
+		{/* ---------- 底部:meta 行 ---------- */}
+		<div
+			class:list={[
+				"flex items-center justify-between gap-3",
+				"flex-wrap",
+			]}
+		>
+			{/* 左:作者 · 分类 · 日期 · 阅读时长 */}
+			<div
+				class:list={[
+					"flex items-center gap-2",
+					"flex-wrap",
+					"font-[var(--font-mono)]",
+					"text-[10.5px] sm:text-[11px]",
+					"leading-none",
+					"tracking-[var(--tracking-wide)]",
+					"text-[color:var(--color-ink-tertiary)]",
+					"tabular-nums",
+				]}
+			>
+				{authorName && (
+					<>
+						<span class="truncate max-w-[12ch] sm:max-w-[18ch]">
+							{authorName}
+						</span>
+						<span
+							aria-hidden="true"
+							class="text-[color:var(--color-ink-muted)]"
+						>
+							·
+						</span>
+					</>
+				)}
+
+				{categoryName && (
+					<>
+						<span
+							class:list={[
+								"uppercase",
+								"text-[color:var(--color-ink-secondary)]",
+							]}
+						>
+							{categoryName}
+						</span>
+						<span
+							aria-hidden="true"
+							class="text-[color:var(--color-ink-muted)]"
+						>
+							·
+						</span>
+					</>
+				)}
+
+				<time datetime={new Date(date).toISOString()}>
+					{formattedDate}
+				</time>
+
+				{typeof readingTime === "number" && readingTime > 0 && (
+					<>
+						<span
+							aria-hidden="true"
+							class="text-[color:var(--color-ink-muted)]"
+						>
+							·
+						</span>
+						<span class="uppercase">
+							{readingTime} {t("blog.minutes")}
+						</span>
+					</>
+				)}
+			</div>
+
+			{/* 右:标签 */}
+			{tags.length > 0 && (
+				<ul
+					class:list={[
+						"flex items-center gap-2",
+						"flex-wrap",
+						"list-none m-0 p-0",
+					]}
+				>
+					{visibleTags.map((tag) => (
+						<li
+							class:list={[
+								"inline-flex items-center",
+								"font-[var(--font-mono)]",
+								"text-[10.5px] sm:text-[11px]",
+								"leading-none",
+								"tracking-[var(--tracking-wide)]",
+								"text-[color:var(--color-ink-tertiary)]",
+								"group-hover:text-[color:var(--color-ink-secondary)]",
+								"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								"select-none",
+							]}
+						>
+							<span
+								aria-hidden="true"
+								class="text-[color:var(--color-ink-muted)] mr-[2px]"
+							>
+								#
+							</span>
+							<span>{tag.name}</span>
+						</li>
+					))}
+					{hiddenTagCount > 0 && (
+						<li
+							aria-label={
+								lang === "zh"
+									? `另有 ${hiddenTagCount} 个标签`
+									: `${hiddenTagCount} more tags`
+							}
+							class:list={[
+								"inline-flex items-center",
+								"font-[var(--font-mono)]",
+								"text-[10.5px] sm:text-[11px]",
+								"leading-none",
+								"tracking-[var(--tracking-wide)]",
+								"text-[color:var(--color-ink-muted)]",
+								"tabular-nums",
+							]}
+						>
+							+{hiddenTagCount}
+						</li>
+					)}
+				</ul>
+			)}
+		</div>
+	</div>
+
+	{/* ================================================================
+	 *                    右侧悬浮箭头(hover 时显现)
+	 * ================================================================ */}
+	<span
+		aria-hidden="true"
+		class:list={[
+			"post-card__arrow",
+			"hidden sm:flex items-center justify-center",
+			"shrink-0 self-center",
+			"h-7 w-7",
+			"text-[color:var(--color-ink-tertiary)]",
+			"opacity-0 -translate-x-2",
+			"group-hover:opacity-100 group-hover:translate-x-0",
+			"group-hover:text-[color:var(--color-ink-primary)]",
+			"transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+		]}
+	>
+		<svg
+			width="16"
+			height="16"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+		>
+			<path d="M5 12h14" />
+			<path d="m12 5 7 7-7 7" />
+		</svg>
+	</span>
+</a>
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * line-clamp 兜底
+	 * --------------------------------------------------------------------------
+	 * Tailwind v4 的 line-clamp-2 默认基于 @apply 提供,这里再保一次,
+	 * 避免在极少数 PostCSS 配置下失效。
+	 * -------------------------------------------------------------------------- */
+
+	.post-card h3 {
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+
+	.post-card p {
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 精选卡片的左侧强调条(与 FeatureCard 的做法保持一致,形成系列感)
+	 * --------------------------------------------------------------------------
+	 * 精选卡片在 hover 之前就已有一条淡色强调条,hover 后加深并延长;
+	 * 非精选卡片不显示。
+	 * -------------------------------------------------------------------------- */
+
+	.post-card[data-featured="true"] {
+		position: relative;
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 暗色模式下的封面占位:
+	 * 即使主题切换为暗色,墨色占位块(.bg-[#0a0a0a])保持不变,
+	 * 大字标签依然白色 —— 编辑派的"固定标签"不反相,保持一致的视觉识别度。
+	 * -------------------------------------------------------------------------- */
+	:global(:root.dark) .post-card {
+		/* 暗色模式下 hover 背景的不透明度需要微调,防止纸色太亮 */
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 聚焦态:整张卡片可键盘访问
+	 * --------------------------------------------------------------------------
+	 * :focus-visible 沿用全局样式(2px 实线描边),这里仅确保 outline-offset
+	 * 不会被周围的 padding 吃掉导致视觉错乱。
+	 * -------------------------------------------------------------------------- */
+
+	.post-card:focus-visible {
+		outline-offset: -2px;
+	}
+</style>

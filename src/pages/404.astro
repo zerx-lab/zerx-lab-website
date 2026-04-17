@@ -1,0 +1,702 @@
+---
+/**
+ * ============================================================================
+ * 404 - 页面未找到
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   - 静态产物下,未匹配任何 .html 的请求由部署层(Dokploy + nginx)
+ *     转发到 /404.html
+ *   - Astro 在 SSG 模式下会把本文件编译为 /404.html
+ *
+ * 视觉策略:
+ *   与整站保持一致的"双栏 + 编辑派"骨架,但右栏不展示内容卡片,
+ *   而是一块居中的"故障报告"区块 —— 用工程制图 / 终端故障单的风格
+ *   呈现 404,避免任何卡通化处理。
+ *
+ *   ┌────────────────────────────────────────┐
+ *   │  STATUS_CODE ─────── 404               │
+ *   │                                        │
+ *   │  ╳  PAGE NOT FOUND                     │
+ *   │                                        │
+ *   │  你访问的路径不存在或已被移除。        │
+ *   │                                        │
+ *   │  ── 请求路径 ──                         │
+ *   │  $ GET /some/missing/path              │
+ *   │                                        │
+ *   │  [ 返回首页 ]   [ 博客 ]   [ 项目 ]     │
+ *   └────────────────────────────────────────┘
+ *
+ * 双语:
+ *   Astro 的 404.astro 位于 pages 根目录,不走 /en/ 前缀。
+ *   通过 Accept-Language / 用户当前 URL 无法可靠判断,因此页面同时展示
+ *   中英两行文案(上中下英),并在 CTA 按钮区提供中英两套入口。
+ *   这是开箱即用型页面,不求"完美双语",只求"哪种语言来都看得懂"。
+ *
+ * 行为:
+ *   - 动态显示用户当前访问的路径(通过 window.location.pathname 填入)
+ *   - 提供"返回首页 / 博客 / 项目"三个快捷 CTA
+ *   - 包含一个极小的 ASCII 装饰(与 LabMark 的视觉语言呼应)
+ *
+ * 设计约束:
+ *   - 不使用 AppShell 的 LeftPane(没有"页面上下文"需要展示)
+ *   - 只用 AppShell 的 TopNav + BaseHead,body 内容完全自定义
+ *   - 不加任何图片 / 插画 / emoji,保持编辑派调性
+ * ============================================================================
+ */
+
+import BaseHead from "@components/layout/BaseHead.astro";
+import TopNav from "@components/layout/TopNav.astro";
+import Logo from "@components/ui/Logo.astro";
+import "@styles/global.css";
+
+// 404 页面通常不需要索引
+const noindex = true;
+
+// 页面文案:中英并列,不做语言推导
+const COPY = {
+	zh: {
+		eyebrow: "故障报告",
+		title: "页面未找到",
+		description: "你访问的路径不存在,或者已被移除。",
+		pathLabel: "请求路径",
+		methodLabel: "方法",
+		timeLabel: "时间",
+		suggestionTitle: "你可能想去",
+		actionHome: "返回首页",
+		actionBlog: "阅读博客",
+		actionProjects: "浏览项目",
+		actionGithub: "在 GitHub 反馈",
+		footnote:
+			"如果你是通过外部链接到达这里的,这条路径可能已永久失效。欢迎通过 GitHub 告诉我们从哪里来,我们会尽量修复。",
+	},
+	en: {
+		eyebrow: "Error Report",
+		title: "Page not found",
+		description: "The path you visited does not exist or has been removed.",
+		pathLabel: "Requested path",
+		methodLabel: "Method",
+		timeLabel: "Time",
+		suggestionTitle: "You might want to",
+		actionHome: "Back to home",
+		actionBlog: "Read the blog",
+		actionProjects: "Browse projects",
+		actionGithub: "Report on GitHub",
+		footnote:
+			"If you arrived from an external link, the path may be permanently broken. Please tell us where you came from via GitHub so we can fix it.",
+	},
+} as const;
+
+// 品牌/仓库链接(与站点其他位置保持一致)
+const GITHUB_URL = "https://github.com/zerx-lab";
+---
+
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<BaseHead
+			title={`404 · ${COPY.zh.title} / ${COPY.en.title}`}
+			description={COPY.zh.description}
+			noindex={noindex}
+		/>
+		<style is:inline>
+			/* 404 专属:去掉 body 的噪点纹理,让故障报告看起来"干净到异常"。
+			   与正常页面形成质感对比,潜台词:这里"没有内容",自然也没有
+			   纸张的肌理。 */
+			body.err-404 {
+				background-image: none !important;
+			}
+		</style>
+	</head>
+
+	<body
+		class:list={[
+			"err-404",
+			"min-h-screen",
+			"bg-[color:var(--color-paper)]",
+			"text-[color:var(--color-ink-primary)]",
+			"antialiased",
+		]}
+	>
+		{/* ---------- 顶部导航(与主站一致) ---------- */}
+		<div
+			class:list={[
+				"sticky top-0 z-20",
+				"bg-[color:var(--color-paper)]",
+				"border-b border-dashed border-[color:var(--color-hairline)]",
+			]}
+		>
+			<div
+				class:list={[
+					"max-w-[var(--layout-right-pane-max)] mx-auto",
+					"flex items-stretch",
+				]}
+			>
+				{/* 左侧 Logo 占位 */}
+				<div
+					class:list={[
+						"flex items-center",
+						"px-4 sm:px-6 lg:px-8",
+						"border-r border-dashed border-[color:var(--color-hairline)]",
+						"shrink-0",
+					]}
+				>
+					<Logo size="sm" />
+				</div>
+				<div class="flex-1 min-w-0">
+					<TopNav />
+				</div>
+			</div>
+		</div>
+
+		{/* ---------- 主内容:故障报告 ---------- */}
+		<main
+			id="main-content"
+			class:list={[
+				"flex items-start justify-center",
+				"px-4 sm:px-6 lg:px-8",
+				"py-12 lg:py-20",
+				"min-h-[calc(100vh-var(--layout-top-nav-height))]",
+			]}
+		>
+			<article
+				class:list={[
+					"w-full max-w-[640px]",
+					"flex flex-col",
+				]}
+				aria-labelledby="err-title"
+			>
+				{/* ---------- 顶栏:STATUS_CODE ─── 404 ---------- */}
+				<div class="flex items-center gap-3">
+					<span
+						class:list={[
+							"mono-label",
+							"text-[11px] leading-none",
+							"tracking-[var(--tracking-wider)]",
+							"text-[color:var(--color-ink-tertiary)]",
+						]}>STATUS_CODE</span>
+					<span
+						aria-hidden="true"
+						class:list={[
+							"flex-1 h-px",
+							"border-t border-dashed border-[color:var(--color-hairline-strong)]",
+						]}></span>
+					<span
+						class:list={[
+							"mono-num",
+							"text-[11px] leading-none",
+							"tabular-nums",
+							"text-[color:var(--color-ink-secondary)]",
+							"font-semibold",
+						]}>404</span>
+				</div>
+
+				{/* ---------- 巨大的 404 数字(编辑派主视觉) ---------- */}
+				<div
+					class:list={[
+						"mt-6 lg:mt-8",
+						"flex items-baseline justify-between gap-6",
+					]}
+				>
+					<h1
+						id="err-title"
+						class:list={[
+							"font-medium",
+							"text-[color:var(--color-ink-primary)]",
+							"leading-none",
+							"tracking-[-0.04em]",
+							"text-[96px] sm:text-[120px] lg:text-[140px]",
+							"tabular-nums",
+							"select-none",
+						]}
+					>
+						404
+					</h1>
+
+					{/* 右上角极小的 ASCII 装饰,与 LabMark 的视觉语言呼应 */}
+					<pre
+						aria-hidden="true"
+						class:list={[
+							"hidden sm:block",
+							"font-[var(--font-mono)]",
+							"text-[color:var(--color-ink-muted)]",
+							"text-[11px] leading-[1.5]",
+							"tracking-[0.04em]",
+							"m-0 whitespace-pre",
+							"text-right",
+							"select-none",
+						]}>▓ ▒ ░
+▒ ░ ·
+░ · ·</pre>
+				</div>
+
+				{/* ---------- 中英双语标题 ---------- */}
+				<div class="mt-6 lg:mt-8 flex flex-col gap-2">
+					<p
+						lang="zh-CN"
+						class:list={[
+							"text-[color:var(--color-ink-primary)]",
+							"text-[18px] lg:text-[20px]",
+							"leading-[1.4]",
+							"font-medium",
+							"tracking-[-0.01em]",
+						]}
+					>
+						{COPY.zh.title}。{COPY.zh.description}
+					</p>
+					<p
+						lang="en-US"
+						class:list={[
+							"text-[color:var(--color-ink-tertiary)]",
+							"text-[14px] lg:text-[15px]",
+							"leading-[1.5]",
+							"font-[var(--font-mono)]",
+							"tracking-[-0.005em]",
+						]}
+					>
+						{COPY.en.title}. {COPY.en.description}
+					</p>
+				</div>
+
+				{/* ---------- 故障详情卡片 ---------- */}
+				<div
+					class:list={[
+						"mt-8 lg:mt-10",
+						"border border-dashed border-[color:var(--color-hairline)]",
+						"bg-[color:var(--color-paper-muted)]/30",
+						"overflow-hidden",
+					]}
+				>
+					{/* 伪终端头部 */}
+					<div
+						class:list={[
+							"flex items-center gap-3",
+							"px-4 py-2.5",
+							"border-b border-dashed border-[color:var(--color-hairline)]",
+							"bg-[color:var(--color-paper-muted)]/50",
+						]}
+					>
+						<div class="flex items-center gap-1.5">
+							<span
+								aria-hidden="true"
+								class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"
+							></span>
+							<span
+								aria-hidden="true"
+								class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"
+							></span>
+							<span
+								aria-hidden="true"
+								class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"
+							></span>
+						</div>
+						<span
+							class:list={[
+								"mono-label",
+								"text-[10px]",
+								"text-[color:var(--color-ink-tertiary)]",
+							]}>error.log</span>
+						<span
+							aria-hidden="true"
+							class:list={[
+								"ml-auto",
+								"mono-num",
+								"text-[10px]",
+								"text-[color:var(--color-ink-muted)]",
+							]}>R/O</span>
+					</div>
+
+					{/* 详情行 */}
+					<dl
+						class:list={[
+							"flex flex-col",
+							"px-4 py-4 lg:px-5 lg:py-5",
+							"gap-2",
+							"font-[var(--font-mono)]",
+							"text-[12.5px]",
+							"leading-[1.55]",
+						]}
+					>
+						{/* 方法 */}
+						<div class="flex items-baseline gap-3">
+							<dt
+								class:list={[
+									"shrink-0",
+									"uppercase",
+									"text-[color:var(--color-ink-tertiary)]",
+									"tracking-[var(--tracking-wide)]",
+									"w-[88px]",
+									"text-[10.5px]",
+								]}>{COPY.zh.methodLabel} / {COPY.en.methodLabel}</dt>
+							<dd
+								class:list={[
+									"text-[color:var(--color-ink-primary)]",
+									"tabular-nums",
+								]}>GET</dd>
+						</div>
+
+						{/* 路径 */}
+						<div class="flex items-baseline gap-3">
+							<dt
+								class:list={[
+									"shrink-0",
+									"uppercase",
+									"text-[color:var(--color-ink-tertiary)]",
+									"tracking-[var(--tracking-wide)]",
+									"w-[88px]",
+									"text-[10.5px]",
+								]}>{COPY.zh.pathLabel} / {COPY.en.pathLabel}</dt>
+							<dd class="min-w-0 flex-1">
+								<span
+									aria-hidden="true"
+									class="text-[color:var(--color-ink-muted)] select-none mr-1.5"
+								>$</span>
+								<code
+									data-err-path
+									class:list={[
+										"text-[color:var(--color-ink-primary)]",
+										"break-all",
+										"bg-transparent border-0 p-0",
+									]}
+								>
+									/unknown
+								</code>
+							</dd>
+						</div>
+
+						{/* 时间 */}
+						<div class="flex items-baseline gap-3">
+							<dt
+								class:list={[
+									"shrink-0",
+									"uppercase",
+									"text-[color:var(--color-ink-tertiary)]",
+									"tracking-[var(--tracking-wide)]",
+									"w-[88px]",
+									"text-[10.5px]",
+								]}>{COPY.zh.timeLabel} / {COPY.en.timeLabel}</dt>
+							<dd
+								data-err-time
+								class:list={[
+									"text-[color:var(--color-ink-secondary)]",
+									"tabular-nums",
+								]}
+							>
+								—
+							</dd>
+						</div>
+					</dl>
+				</div>
+
+				{/* ---------- 建议导航 ---------- */}
+				<section
+					aria-labelledby="err-suggest"
+					class="mt-10 lg:mt-12"
+				>
+					<div class="flex items-center gap-3 mb-4">
+						<h2
+							id="err-suggest"
+							class:list={[
+								"mono-label",
+								"text-[11px] leading-none",
+								"tracking-[var(--tracking-wider)]",
+								"text-[color:var(--color-ink-secondary)]",
+								"font-medium",
+							]}
+						>
+							{COPY.zh.suggestionTitle} / {COPY.en.suggestionTitle}
+						</h2>
+						<span
+							aria-hidden="true"
+							class:list={[
+								"flex-1 h-px",
+								"border-t border-dashed border-[color:var(--color-hairline)]",
+							]}
+						></span>
+					</div>
+
+					<div
+						class:list={[
+							"grid grid-cols-1 sm:grid-cols-2",
+							"border border-dashed border-[color:var(--color-hairline)]",
+							"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
+						]}
+					>
+						{/* 返回首页 */}
+						<a
+							href="/"
+							class:list={[
+								"group flex items-center justify-between gap-4",
+								"px-5 py-4",
+								"hover:bg-[color:var(--color-paper-muted)]/60",
+								"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							]}
+						>
+							<div class="flex flex-col min-w-0 gap-1">
+								<span
+									class:list={[
+										"mono-label",
+										"text-[10px] leading-none",
+										"text-[color:var(--color-ink-tertiary)]",
+									]}>01</span>
+								<span
+									class:list={[
+										"text-[14px] leading-none",
+										"text-[color:var(--color-ink-primary)]",
+										"font-medium",
+									]}>{COPY.zh.actionHome} / {COPY.en.actionHome}</span>
+							</div>
+							<svg
+								aria-hidden="true"
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class:list={[
+									"shrink-0",
+									"text-[color:var(--color-ink-muted)]",
+									"group-hover:text-[color:var(--color-ink-primary)]",
+									"group-hover:translate-x-[2px]",
+									"transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								]}
+							>
+								<path d="M5 12h14" />
+								<path d="m12 5 7 7-7 7" />
+							</svg>
+						</a>
+
+						{/* 博客 */}
+						<a
+							href="/blog"
+							class:list={[
+								"group flex items-center justify-between gap-4",
+								"px-5 py-4",
+								"hover:bg-[color:var(--color-paper-muted)]/60",
+								"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							]}
+						>
+							<div class="flex flex-col min-w-0 gap-1">
+								<span
+									class:list={[
+										"mono-label",
+										"text-[10px] leading-none",
+										"text-[color:var(--color-ink-tertiary)]",
+									]}>02</span>
+								<span
+									class:list={[
+										"text-[14px] leading-none",
+										"text-[color:var(--color-ink-primary)]",
+										"font-medium",
+									]}>{COPY.zh.actionBlog} / {COPY.en.actionBlog}</span>
+							</div>
+							<svg
+								aria-hidden="true"
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class:list={[
+									"shrink-0",
+									"text-[color:var(--color-ink-muted)]",
+									"group-hover:text-[color:var(--color-ink-primary)]",
+									"group-hover:translate-x-[2px]",
+									"transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								]}
+							>
+								<path d="M5 12h14" />
+								<path d="m12 5 7 7-7 7" />
+							</svg>
+						</a>
+
+						{/* 项目 */}
+						<a
+							href="/projects"
+							class:list={[
+								"group flex items-center justify-between gap-4",
+								"px-5 py-4",
+								"hover:bg-[color:var(--color-paper-muted)]/60",
+								"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							]}
+						>
+							<div class="flex flex-col min-w-0 gap-1">
+								<span
+									class:list={[
+										"mono-label",
+										"text-[10px] leading-none",
+										"text-[color:var(--color-ink-tertiary)]",
+									]}>03</span>
+								<span
+									class:list={[
+										"text-[14px] leading-none",
+										"text-[color:var(--color-ink-primary)]",
+										"font-medium",
+									]}>{COPY.zh.actionProjects} / {COPY.en.actionProjects}</span>
+							</div>
+							<svg
+								aria-hidden="true"
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class:list={[
+									"shrink-0",
+									"text-[color:var(--color-ink-muted)]",
+									"group-hover:text-[color:var(--color-ink-primary)]",
+									"group-hover:translate-x-[2px]",
+									"transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								]}
+							>
+								<path d="M5 12h14" />
+								<path d="m12 5 7 7-7 7" />
+							</svg>
+						</a>
+
+						{/* GitHub 反馈 */}
+						<a
+							href={GITHUB_URL}
+							target="_blank"
+							rel="noopener noreferrer"
+							class:list={[
+								"group flex items-center justify-between gap-4",
+								"px-5 py-4",
+								"hover:bg-[color:var(--color-paper-muted)]/60",
+								"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							]}
+						>
+							<div class="flex flex-col min-w-0 gap-1">
+								<span
+									class:list={[
+										"mono-label",
+										"text-[10px] leading-none",
+										"text-[color:var(--color-ink-tertiary)]",
+									]}>04</span>
+								<span
+									class:list={[
+										"text-[14px] leading-none",
+										"text-[color:var(--color-ink-primary)]",
+										"font-medium",
+									]}>{COPY.zh.actionGithub} / {COPY.en.actionGithub}</span>
+							</div>
+							<svg
+								aria-hidden="true"
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class:list={[
+									"shrink-0",
+									"text-[color:var(--color-ink-muted)]",
+									"group-hover:text-[color:var(--color-ink-primary)]",
+									"group-hover:translate-x-[1px] group-hover:-translate-y-[1px]",
+									"transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								]}
+							>
+								<path d="M7 17L17 7" />
+								<path d="M8 7h9v9" />
+							</svg>
+						</a>
+					</div>
+				</section>
+
+				{/* ---------- 脚注 ---------- */}
+				<footer
+					class:list={[
+						"mt-10 lg:mt-12",
+						"pt-4",
+						"border-t border-dashed border-[color:var(--color-hairline)]",
+					]}
+				>
+					<p
+						lang="zh-CN"
+						class:list={[
+							"text-[color:var(--color-ink-tertiary)]",
+							"text-[12.5px]",
+							"leading-[1.65]",
+							"mb-2",
+						]}
+					>
+						<span
+							aria-hidden="true"
+							class="text-[color:var(--color-ink-muted)] mr-1 select-none"
+						>//</span>
+						{COPY.zh.footnote}
+					</p>
+					<p
+						lang="en-US"
+						class:list={[
+							"text-[color:var(--color-ink-muted)]",
+							"text-[11.5px]",
+							"leading-[1.6]",
+							"font-[var(--font-mono)]",
+						]}
+					>
+						<span
+							aria-hidden="true"
+							class="mr-1 select-none"
+						>//</span>
+						{COPY.en.footnote}
+					</p>
+				</footer>
+			</article>
+		</main>
+
+		{/* ---------- 客户端脚本:填充真实请求路径与时间 ---------- */}
+		<script is:inline>
+			(function () {
+				try {
+					var pathEl = document.querySelector("[data-err-path]");
+					if (pathEl) {
+						var path =
+							window.location.pathname +
+							(window.location.search || "") +
+							(window.location.hash || "");
+						// 限制显示长度,防止超长 URL 破坏布局
+						if (path.length > 140) {
+							path = path.slice(0, 137) + "...";
+						}
+						pathEl.textContent = path || "/";
+					}
+
+					var timeEl = document.querySelector("[data-err-time]");
+					if (timeEl) {
+						// ISO 8601 日期时间,到秒;与伪终端美学一致
+						var now = new Date();
+						var pad = function (n) {
+							return (n < 10 ? "0" : "") + n;
+						};
+						var formatted =
+							now.getFullYear() +
+							"-" +
+							pad(now.getMonth() + 1) +
+							"-" +
+							pad(now.getDate()) +
+							" " +
+							pad(now.getHours()) +
+							":" +
+							pad(now.getMinutes()) +
+							":" +
+							pad(now.getSeconds());
+						timeEl.textContent = formatted;
+					}
+				} catch (_) {
+					/* 静默降级:出错时保留占位 "/unknown" 与 "—" */
+				}
+			})();
+		</script>
+	</body>
+</html>

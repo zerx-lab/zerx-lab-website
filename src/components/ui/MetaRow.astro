@@ -1,0 +1,189 @@
+---
+/**
+ * ============================================================================
+ * MetaRow - 元信息键值对行
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com 左侧底部的 key-value 列表
+ *   - 左侧全大写 Monospace label
+ *   - 右侧等宽数值(tabular-nums 保证数字竖向对齐)
+ *   - 中间用 flex-1 填满,或用点线连接(可选)
+ *   - 行间虚线分割
+ *
+ * 用法:
+ *   <MetaRow label="POSTS" value="12" />
+ *   <MetaRow label="STATUS">
+ *     <Fragment slot="value">
+ *       <span class="dot" />ACTIVE
+ *     </Fragment>
+ *   </MetaRow>
+ *   <MetaRow label="RSS" value="/rss.xml" href="/rss.xml" />
+ *
+ * 设计约束:
+ *   - 不做圆角、不做背景色,保持"编辑派"质感
+ *   - label 自动转大写,无需调用方手动 upper()
+ *   - value 支持字符串、数字,或通过 slot 传入复合内容
+ * ============================================================================
+ */
+
+interface Props {
+	/** 键:左侧 label。组件会自动转大写呈现 */
+	label: string;
+	/** 值:右侧显示内容(字符串或数字)。若需要富内容,使用 value slot 覆盖 */
+	value?: string | number;
+	/** 若传入,整行渲染为链接(外链自动带上箭头图标) */
+	href?: string;
+	/** 是否为外部链接(控制 target/rel 和箭头图标) */
+	external?: boolean;
+	/** 额外类名 */
+	class?: string;
+	/** 是否显示底部虚线(默认 true;列表最后一行可传 false 去除) */
+	divider?: boolean;
+	/** 值的强调样式:normal(默认墨色) / dim(淡灰) / mono-only(仅等宽无颜色变化) */
+	emphasis?: "normal" | "dim" | "mono-only";
+}
+
+const {
+	label,
+	value,
+	href,
+	external,
+	class: className = "",
+	divider = true,
+	emphasis = "normal",
+} = Astro.props;
+
+// 自动判断外链:显式传 external / href 以 http(s) 开头
+const isExternal =
+	external ?? (typeof href === "string" && /^https?:\/\//i.test(href));
+
+// 根元素标签:有 href → <a>,否则 <div>
+const RootTag = href ? "a" : "div";
+
+// 值区域颜色映射
+const valueColorClass =
+	emphasis === "dim"
+		? "text-[color:var(--color-ink-tertiary)]"
+		: emphasis === "mono-only"
+			? "text-[color:var(--color-ink-secondary)]"
+			: "text-[color:var(--color-ink-primary)]";
+
+const hasValueSlot = Astro.slots.has("value");
+---
+
+<RootTag
+	href={href}
+	target={href && isExternal ? "_blank" : undefined}
+	rel={href && isExternal ? "noopener noreferrer" : undefined}
+	class:list={[
+		"meta-row-component",
+		"flex items-baseline justify-between",
+		"gap-3",
+		"py-2",
+		"font-[var(--font-mono)]",
+		"text-[11px]",
+		"leading-[1.4]",
+		"tracking-[var(--tracking-wide)]",
+		divider &&
+			"border-b border-dashed border-[color:var(--color-hairline)]",
+		// 当是链接时,加上 hover 反馈
+		href &&
+			"group cursor-pointer transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)] hover:bg-[color:var(--color-paper-muted)]/40 -mx-2 px-2",
+		className,
+	]}
+>
+	{/* ---------- 左:Label(全大写,低调灰) ---------- */}
+	<span
+		class:list={[
+			"shrink-0",
+			"uppercase",
+			"text-[color:var(--color-ink-tertiary)]",
+			"tracking-[var(--tracking-wider)]",
+			"font-medium",
+			// 链接态时 hover 变墨色
+			href && "group-hover:text-[color:var(--color-ink-secondary)]",
+		]}
+	>
+		{label}
+	</span>
+
+	{/* ---------- 右:Value(等宽,tabular-nums 数字对齐) ---------- */}
+	<span
+		class:list={[
+			"min-w-0 truncate text-right",
+			"font-[var(--font-mono)]",
+			"tabular-nums",
+			valueColorClass,
+			// 链接态时 hover 轻微位移右侧箭头
+			href && "inline-flex items-center gap-1.5 justify-end",
+		]}
+	>
+		{
+			hasValueSlot ? (
+				<slot name="value" />
+			) : (
+				<span class="truncate">{value}</span>
+			)
+		}
+
+		{/* 外链箭头指示(仅在作为链接且为外链时显示) */}
+		{
+			href && isExternal && (
+				<svg
+					aria-hidden="true"
+					width="9"
+					height="9"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					class:list={[
+						"shrink-0",
+						"text-[color:var(--color-ink-muted)]",
+						"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						"group-hover:translate-x-[1px] group-hover:-translate-y-[1px]",
+						"group-hover:text-[color:var(--color-ink-primary)]",
+					]}
+				>
+					<path d="M7 17L17 7" />
+					<path d="M8 7h9v9" />
+				</svg>
+			)
+		}
+
+		{/* 内链小箭头(静态,不跳动) */}
+		{
+			href && !isExternal && (
+				<svg
+					aria-hidden="true"
+					width="9"
+					height="9"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					class:list={[
+						"shrink-0",
+						"text-[color:var(--color-ink-muted)]",
+						"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						"group-hover:translate-x-[2px]",
+						"group-hover:text-[color:var(--color-ink-primary)]",
+					]}
+				>
+					<path d="M5 12h14" />
+					<path d="m12 5 7 7-7 7" />
+				</svg>
+			)
+		}
+	</span>
+</RootTag>
+
+<style>
+	/* 最后一个 MetaRow 自动去掉底部虚线(防止父容器最后一根线与外层线重叠) */
+	.meta-row-component:last-child {
+		border-bottom: 0;
+	}
+</style>

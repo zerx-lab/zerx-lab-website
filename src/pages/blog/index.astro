@@ -1,0 +1,27 @@
+---
+/**
+ * ============================================================================
+ * 博客列表页 (中文,默认无前缀)
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /blog/     → 本文件(zh)
+ *   /en/blog/  → src/pages/en/blog/index.astro(英文)
+ *
+ * 实现:
+ *   全部逻辑抽到 BlogIndexPage 共享组件,本文件仅做入口。
+ *   页面中的语言由 Astro.url 推断(BlogIndexPage 内部调用 getLangFromUrl)。
+ *
+ * 数据源:
+ *   - Directus posts 集合(已 bootstrap 时)
+ *   - 失败/未 bootstrap 时自动 fallback 到 src/lib/fallback-data.ts
+ *
+ * 与首页的关系:
+ *   布局骨架完全复用 AppShell + LeftPane,左栏装置同样是默认 LabMark,
+ *   只在 meta 区展示博客专属计数(POSTS / CATEGORIES / LAST UPDATE / RSS)。
+ * ============================================================================
+ */
+
+import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
+---
+
+<BlogIndexPage />

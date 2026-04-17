@@ -1,0 +1,318 @@
+---
+/**
+ * ============================================================================
+ * FeatureCard - 九宫格特性卡片
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com 首页的 Features 九宫格
+ *   - 每张卡片占网格一格,边框仅靠父容器的 divide-x/divide-y 虚线形成
+ *   - 左上角:全大写 Monospace 编号 (01/02/03...) + 分类/徽标标签
+ *   - 主标题: 中等字号,半粗
+ *   - 副标题: 灰色小字一行
+ *   - 描述: 正文灰色两三行
+ *   - 底部: 可选的展示区(代码片段 / 图标阵列 / 小 UI 预览)
+ *
+ * 设计约束:
+ *   - 卡片本身不加 border、不加 radius、不加 bg —— 边界靠父网格的 divide 虚线
+ *   - 编号前缀 mono-num 是核心视觉元素,不可省略
+ *   - 使用 slot 允许底部塞任意展示内容(代码块/标签组/图标阵列)
+ *
+ * 用法(最简):
+ *   <FeatureCard
+ *     number="01"
+ *     eyebrow="Framework Agnostic"
+ *     title="Works with your stack."
+ *     description="First-class support for Next.js, Nuxt, SvelteKit, Astro, Hono and 20+ more."
+ *   />
+ *
+ * 用法(带徽标 + 底部展示槽):
+ *   <FeatureCard
+ *     number="02"
+ *     eyebrow="Email & Password"
+ *     badge="managed"
+ *     title="Built-in credential auth."
+ *     description="Session management, email verification, and password reset out of the box."
+ *   >
+ *     <div slot="visual">
+ *       <!-- 自定义底部展示:输入框模拟、代码片段、图标阵列等 -->
+ *     </div>
+ *   </FeatureCard>
+ *
+ * 用法(作为链接):
+ *   <FeatureCard number="03" ... href="/projects/wordzero" />
+ * ============================================================================
+ */
+
+interface Props {
+	/** 编号前缀,推荐两位零填充字符串 "01" "02" ... "09" "10" */
+	number?: string | number;
+	/** 眉标签(分类/名称),全大写 Monospace 显示 */
+	eyebrow?: string;
+	/** 小徽标,如 "managed" / "new" / "beta",置于 eyebrow 右侧 */
+	badge?: string;
+	/** 徽标颜色风格 */
+	badgeVariant?: "neutral" | "accent" | "muted";
+	/** 卡片主标题 */
+	title: string;
+	/** 卡片描述段落 */
+	description?: string;
+	/** 若传入,整张卡片成为链接(有 hover 反馈) */
+	href?: string;
+	/** 强制标记为外链(未传时根据 href 自动判断) */
+	external?: boolean;
+	/** 底部留白控制:relaxed 给展示槽更多空间;compact 只保留文字(无 visual slot 时) */
+	density?: "relaxed" | "compact";
+	/** 高亮模式:featured 时更强的 hover 与不同背景(用于"精选"卡片) */
+	featured?: boolean;
+	/** 额外类名 */
+	class?: string;
+}
+
+const {
+	number,
+	eyebrow,
+	badge,
+	badgeVariant = "neutral",
+	title,
+	description,
+	href,
+	external,
+	density = "relaxed",
+	featured = false,
+	class: className = "",
+} = Astro.props;
+
+// 外链判定
+const isExternal =
+	external ?? (typeof href === "string" && /^https?:\/\//i.test(href));
+
+// 根标签:有 href 时为 <a>,否则语义化 <article>
+const RootTag = href ? "a" : "article";
+
+// 编号格式化:数字自动两位零填充
+const formattedNumber =
+	typeof number === "number"
+		? String(number).padStart(2, "0")
+		: number;
+
+// 是否提供了底部展示 slot
+const hasVisualSlot = Astro.slots.has("visual");
+
+// 徽标颜色
+const badgeClass =
+	badgeVariant === "accent"
+		? "text-[color:var(--color-ink-primary)] border-[color:var(--color-ink-primary)]/40"
+		: badgeVariant === "muted"
+			? "text-[color:var(--color-ink-muted)] border-[color:var(--color-ink-faint)]"
+			: "text-[color:var(--color-ink-tertiary)] border-[color:var(--color-hairline-strong)]";
+---
+
+<RootTag
+	href={href}
+	target={href && isExternal ? "_blank" : undefined}
+	rel={href && isExternal ? "noopener noreferrer" : undefined}
+	class:list={[
+		"feature-card",
+		"group relative flex flex-col",
+		"h-full w-full",
+		// 编辑派无 border / 无 radius / 无 bg,靠父网格的 divide 线形成视觉边界
+		// 如果希望独立卡片也有边框,可在父级不做 divide 时传 class="border border-dashed"
+		"p-6 sm:p-7 lg:p-8",
+		density === "relaxed" ? "min-h-[240px] lg:min-h-[260px]" : "min-h-[180px]",
+		"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+		// 精选卡片略微突出
+		featured
+			? "bg-[color:var(--color-paper-muted)]/40"
+			: "bg-transparent",
+		// 链接态 hover 反馈
+		href &&
+			"hover:bg-[color:var(--color-paper-muted)]/60 cursor-pointer",
+		className,
+	]}
+>
+	{/* ---------- 顶部 meta 行:编号 + eyebrow + badge ---------- */}
+	<div
+		class:list={[
+			"flex items-center gap-2",
+			"mb-4 lg:mb-5",
+			"min-h-[14px]",
+		]}
+	>
+		{
+			formattedNumber && (
+				<span
+					aria-hidden="true"
+					class:list={[
+						"mono-num",
+						"text-[10px] sm:text-[11px]",
+						"leading-none",
+						"text-[color:var(--color-ink-muted)]",
+						"tabular-nums",
+					]}
+				>
+					{formattedNumber}
+				</span>
+			)
+		}
+
+		{
+			eyebrow && (
+				<span
+					class:list={[
+						"mono-label",
+						"text-[10px] sm:text-[11px]",
+						"leading-none",
+						"tracking-[var(--tracking-wider)]",
+						"text-[color:var(--color-ink-secondary)]",
+						"font-medium",
+						"truncate",
+					]}
+				>
+					{eyebrow}
+				</span>
+			)
+		}
+
+		{
+			badge && (
+				<span
+					class:list={[
+						"inline-flex items-center",
+						"px-1.5 py-[2px]",
+						"font-[var(--font-mono)]",
+						"text-[9px] sm:text-[10px]",
+						"leading-none",
+						"tracking-[var(--tracking-wide)]",
+						"uppercase",
+						"border border-dashed",
+						"rounded-[var(--radius-sm)]",
+						badgeClass,
+					]}
+				>
+					{badge}
+				</span>
+			)
+		}
+
+		{/* 右侧:链接态时显示小箭头 */}
+		{
+			href && (
+				<span class="ml-auto shrink-0">
+					<svg
+						aria-hidden="true"
+						width="11"
+						height="11"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class:list={[
+							"text-[color:var(--color-ink-muted)]",
+							"opacity-0 group-hover:opacity-100",
+							"transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+							isExternal
+								? "group-hover:translate-x-[1px] group-hover:-translate-y-[1px]"
+								: "group-hover:translate-x-[2px]",
+							"group-hover:text-[color:var(--color-ink-primary)]",
+						]}
+					>
+						{
+							isExternal ? (
+								<>
+									<path d="M7 17L17 7" />
+									<path d="M8 7h9v9" />
+								</>
+							) : (
+								<>
+									<path d="M5 12h14" />
+									<path d="m12 5 7 7-7 7" />
+								</>
+							)
+						}
+					</svg>
+				</span>
+			)
+		}
+	</div>
+
+	{/* ---------- 主标题 ---------- */}
+	<h3
+		class:list={[
+			"font-medium",
+			"text-[color:var(--color-ink-primary)]",
+			"tracking-[-0.01em]",
+			"leading-[1.3]",
+			"text-[16px] sm:text-[17px] lg:text-[18px]",
+			description ? "mb-2" : "mb-0",
+		]}
+	>
+		{title}
+	</h3>
+
+	{/* ---------- 描述 ---------- */}
+	{
+		description && (
+			<p
+				class:list={[
+					"text-[color:var(--color-ink-secondary)]",
+					"text-[13px] sm:text-[13.5px]",
+					"leading-[1.6]",
+					"max-w-[52ch]",
+				]}
+			>
+				{description}
+			</p>
+		)
+	}
+
+	{/* ---------- 底部展示槽(代码片段/标签阵列/小 UI 预览) ---------- */}
+	{
+		hasVisualSlot && (
+			<div
+				class:list={[
+					"mt-auto pt-5 lg:pt-6",
+					// 与上方文字保持视觉分隔(可选的极淡虚线)
+					"border-t border-dashed border-[color:var(--color-hairline)]/60",
+					"-mx-1",
+					"px-1",
+				]}
+			>
+				<slot name="visual" />
+			</div>
+		)
+	}
+
+	{/* ---------- default slot:允许在 description 下方追加任意内容 ---------- */}
+	<slot />
+</RootTag>
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * 精选态的微妙光感(仅在亮色模式下显示,暗色模式不需要)
+	 * -------------------------------------------------------------------------- */
+	.feature-card.feature-card {
+		/* 提高特异性,避免被 utility 覆盖;占位保留,未来加动效用 */
+	}
+
+	/* 链接态时,给整张卡片一个极淡的左侧墨色条作为 hover 指示(编辑派做法) */
+	a.feature-card {
+		position: relative;
+	}
+
+	a.feature-card::before {
+		content: "";
+		position: absolute;
+		top: 1.5rem;
+		bottom: 1.5rem;
+		left: 0;
+		width: 2px;
+		background-color: var(--color-ink-primary);
+		opacity: 0;
+		transition: opacity var(--duration-base) var(--ease-standard);
+	}
+
+	a.feature-card:hover::before {
+		opacity: 1;
+	}
+</style>

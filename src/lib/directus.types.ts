@@ -1,0 +1,373 @@
+/**
+ * ============================================================================
+ * ZerxLab Website - Directus Schema 类型
+ * ----------------------------------------------------------------------------
+ * 本文件描述 Directus 后端的 Collection 结构,供 @directus/sdk 做类型推断。
+ *
+ * 状态: 占位/手写版本
+ *   - 当前 bootstrap 脚本尚未运行,此文件为预先约定的 schema 形状
+ *   - bootstrap 脚本运行后,可通过 `bun run typegen` 从 Directus 真实 schema
+ *     自动覆写此文件(届时会保留 Schema 作为导出入口)
+ *
+ * 命名约定:
+ *   - Collection 接口使用 PascalCase 单数,如 `Post`、`Project`
+ *   - 翻译子表使用 `{Parent}Translation` 形式,如 `PostTranslation`
+ *   - Schema 顶层 key 与 Directus collection key 完全一致(snake_case)
+ *
+ * 关系字段类型说明:
+ *   - M2O (多对一): 字段类型为 `string | T` 二元(ID 或展开后的对象)
+ *   - O2M / M2M (一对多/多对多): 字段类型为 `string[] | T[]`
+ *   - File (图片): 字段类型为 `string | DirectusFile`(UUID 或完整文件对象)
+ *   后续查询时通过 fields 参数控制展开深度,TS 会自动收窄。
+ * ============================================================================ */
+
+/* ----------------------------------------------------------------------------
+ * 通用类型
+ * ---------------------------------------------------------------------------- */
+
+/** 发布状态(draft/published/archived workflow) */
+export type DirectusStatus = "draft" | "published" | "archived";
+
+/** 支持的语言代码(与 src/i18n/ui.ts 保持一致) */
+export type LanguageCode = "zh-CN" | "en-US";
+
+/** ISO 8601 日期时间字符串 */
+export type ISODateTime = string;
+
+/** ISO 8601 日期字符串 */
+export type ISODate = string;
+
+/* ----------------------------------------------------------------------------
+ * Directus 内置系统表(仅暴露我们会用到的字段)
+ * ---------------------------------------------------------------------------- */
+
+/** Directus 文件(图片/附件) */
+export interface DirectusFile {
+	id: string;
+	storage: string;
+	filename_disk: string;
+	filename_download: string;
+	title: string | null;
+	type: string | null;
+	width: number | null;
+	height: number | null;
+	filesize: number | null;
+	description: string | null;
+	uploaded_on: ISODateTime;
+}
+
+/** Directus 语言表(由 Translations 接口自动维护) */
+export interface DirectusLanguage {
+	code: LanguageCode;
+	name: string;
+	direction: "ltr" | "rtl";
+}
+
+/* ----------------------------------------------------------------------------
+ * site_settings (单例) - 站点全局配置
+ * ---------------------------------------------------------------------------- */
+
+export interface SiteSettings {
+	id: number;
+	/** 站点名(品牌名,一般为 ZerxLab,不翻译) */
+	site_name: string;
+	/** 默认 OG 分享图 */
+	og_image: string | DirectusFile | null;
+	/** GitHub 组织/账户链接 */
+	social_github: string | null;
+	/** X (Twitter) 链接 */
+	social_x: string | null;
+	/** Email 地址 */
+	social_email: string | null;
+	/** RSS URL 自定义(一般不填,由站点自动生成) */
+	rss_url: string | null;
+	/** 建立年份,用于左侧元信息 ESTABLISHED */
+	established_year: number | null;
+	/** 所在地,用于元信息 LOCATION,如 "CN" */
+	location: string | null;
+	/** 关注方向,用于元信息 FOCUS,如 "FULL-STACK / RUST / GO" */
+	focus: string | null;
+	/** 多语言字段:tagline / description */
+	translations: SiteSettingsTranslation[];
+}
+
+export interface SiteSettingsTranslation {
+	id: number;
+	site_settings_id: number | SiteSettings;
+	languages_code: LanguageCode | DirectusLanguage;
+	/** 一句话副标题,如 "全栈实验室" */
+	tagline: string;
+	/** 简介段落 */
+	description: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * authors - 作者
+ * ---------------------------------------------------------------------------- */
+
+export interface Author {
+	id: string;
+	sort: number | null;
+	date_created: ISODateTime;
+	date_updated: ISODateTime | null;
+
+	/** 作者 slug,URL 安全,如 "zerx" */
+	slug: string;
+	/** 姓名(不翻译,保持原名) */
+	name: string;
+	/** 头像 */
+	avatar: string | DirectusFile | null;
+	/** GitHub 用户名 */
+	github: string | null;
+	/** X (Twitter) handle */
+	x: string | null;
+	/** Email */
+	email: string | null;
+
+	/** 多语言:bio */
+	translations: AuthorTranslation[];
+}
+
+export interface AuthorTranslation {
+	id: number;
+	authors_id: string | Author;
+	languages_code: LanguageCode | DirectusLanguage;
+	bio: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * categories - 博客分类
+ * ---------------------------------------------------------------------------- */
+
+export interface Category {
+	id: string;
+	sort: number | null;
+	slug: string;
+	/** 多语言:name / description */
+	translations: CategoryTranslation[];
+}
+
+export interface CategoryTranslation {
+	id: number;
+	categories_id: string | Category;
+	languages_code: LanguageCode | DirectusLanguage;
+	name: string;
+	description: string | null;
+}
+
+/* ----------------------------------------------------------------------------
+ * tags - 博客标签
+ * ---------------------------------------------------------------------------- */
+
+export interface Tag {
+	id: string;
+	slug: string;
+	/** 多语言:name */
+	translations: TagTranslation[];
+}
+
+export interface TagTranslation {
+	id: number;
+	tags_id: string | Tag;
+	languages_code: LanguageCode | DirectusLanguage;
+	name: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * posts - 博客文章
+ * ---------------------------------------------------------------------------- */
+
+export interface Post {
+	id: string;
+	status: DirectusStatus;
+	sort: number | null;
+	date_created: ISODateTime;
+	date_updated: ISODateTime | null;
+	date_published: ISODateTime | null;
+
+	/** URL slug(不翻译,两种语言共用一个 URL,靠 /en/ 前缀区分) */
+	slug: string;
+	/** 封面图 */
+	cover: string | DirectusFile | null;
+	/** 阅读时长(分钟,由 hook 自动计算) */
+	reading_time: number | null;
+	/** 是否置顶 */
+	featured: boolean;
+
+	/** 作者 M2O */
+	author: string | Author | null;
+	/** 分类 M2O */
+	category: string | Category | null;
+	/** 标签 M2M(中间表 posts_tags) */
+	tags: PostTag[];
+
+	/** 多语言:title / excerpt / content / seo */
+	translations: PostTranslation[];
+}
+
+export interface PostTranslation {
+	id: number;
+	posts_id: string | Post;
+	languages_code: LanguageCode | DirectusLanguage;
+	title: string;
+	excerpt: string;
+	/** Markdown / MDX 原文 */
+	content: string;
+	/** SEO title override(可选,默认用 title) */
+	seo_title: string | null;
+	/** SEO description(可选,默认用 excerpt) */
+	seo_description: string | null;
+}
+
+/** posts ↔ tags 中间关系表 */
+export interface PostTag {
+	id: number;
+	posts_id: string | Post;
+	tags_id: string | Tag;
+}
+
+/* ----------------------------------------------------------------------------
+ * projects - 开源项目(Lab 展示)
+ * ---------------------------------------------------------------------------- */
+
+export interface Project {
+	id: string;
+	status: DirectusStatus;
+	sort: number | null;
+	date_created: ISODateTime;
+	date_updated: ISODateTime | null;
+
+	/** URL slug */
+	slug: string;
+	/** 项目名(一般等于 GitHub repo 名,不翻译,如 "wordZero") */
+	name: string;
+	/** 封面或主视觉图 */
+	cover: string | DirectusFile | null;
+
+	/** 技术栈标签数组,如 ["Go", "Rust"] */
+	tech_stack: string[] | null;
+	/** 项目分类 */
+	kind: "library" | "tool" | "app" | "experiment" | "service" | null;
+
+	/** 外链 */
+	github_url: string | null;
+	demo_url: string | null;
+	docs_url: string | null;
+	npm_url: string | null;
+
+	/** GitHub 统计(可由定时任务回填,或手动维护) */
+	stars: number | null;
+	forks: number | null;
+
+	/** 是否在首页精选展示 */
+	featured: boolean;
+
+	/** 多语言:description / highlights */
+	translations: ProjectTranslation[];
+}
+
+export interface ProjectTranslation {
+	id: number;
+	projects_id: string | Project;
+	languages_code: LanguageCode | DirectusLanguage;
+	/** 短描述(卡片用) */
+	description: string;
+	/** 长介绍(Markdown,详情页用) */
+	content: string | null;
+	/** 高亮点列表,可 JSON 存 ["零依赖", "21x 更快"] 等 */
+	highlights: string[] | null;
+}
+
+/* ----------------------------------------------------------------------------
+ * aur_packages - AUR 软件包
+ * ---------------------------------------------------------------------------- */
+
+export interface AurPackage {
+	id: string;
+	status: DirectusStatus;
+	sort: number | null;
+	date_created: ISODateTime;
+	date_updated: ISODateTime | null;
+
+	/** AUR 包名,如 "zerx-lab-pencil-bin" */
+	name: string;
+	/** 当前版本 */
+	version: string | null;
+	/** 使用 yay/paru 安装提示,false 时不在页面展示安装指令 */
+	maintained: boolean;
+
+	/** 标签数组,如 ["BIN", "PRODUCTIVITY"] */
+	badges: string[] | null;
+
+	/** 外链 */
+	aur_url: string | null;
+	upstream_url: string | null;
+
+	/** 多语言:description */
+	translations: AurPackageTranslation[];
+}
+
+export interface AurPackageTranslation {
+	id: number;
+	aur_packages_id: string | AurPackage;
+	languages_code: LanguageCode | DirectusLanguage;
+	description: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * pages - 通用静态页(About 等,以 slug 定位)
+ * ---------------------------------------------------------------------------- */
+
+export interface Page {
+	id: string;
+	status: DirectusStatus;
+	date_created: ISODateTime;
+	date_updated: ISODateTime | null;
+
+	slug: string;
+	/** 多语言:title / content */
+	translations: PageTranslation[];
+}
+
+export interface PageTranslation {
+	id: number;
+	pages_id: string | Page;
+	languages_code: LanguageCode | DirectusLanguage;
+	title: string;
+	content: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * Schema - 供 @directus/sdk 作为泛型参数
+ * ----------------------------------------------------------------------------
+ * 命名规则:
+ *   - 顶层 key 必须与 Directus collection key 完全一致(snake_case)
+ *   - 单例集合(如 site_settings)的值为单一对象(SDK 通过 readSingleton 读)
+ *   - 常规集合的值为对象数组
+ * ---------------------------------------------------------------------------- */
+
+export interface Schema {
+	site_settings: SiteSettings;
+
+	authors: Author[];
+	authors_translations: AuthorTranslation[];
+
+	categories: Category[];
+	categories_translations: CategoryTranslation[];
+
+	tags: Tag[];
+	tags_translations: TagTranslation[];
+
+	posts: Post[];
+	posts_translations: PostTranslation[];
+	posts_tags: PostTag[];
+
+	projects: Project[];
+	projects_translations: ProjectTranslation[];
+
+	aur_packages: AurPackage[];
+	aur_packages_translations: AurPackageTranslation[];
+
+	pages: Page[];
+	pages_translations: PageTranslation[];
+}

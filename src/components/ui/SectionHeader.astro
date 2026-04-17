@@ -1,0 +1,243 @@
+---
+/**
+ * ============================================================================
+ * SectionHeader - 分区大标题
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com 内容区每个分区的标题
+ *   - 全大写 Monospace eyebrow 标签(如 "README" / "FEATURES" / "BLOGS")
+ *   - 下方一条虚线分割线贯穿整个内容区
+ *   - 标题本身极简,不加多余装饰
+ *
+ * 典型呈现:
+ *   README                                         ← eyebrow (mono label)
+ *   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─       ← 虚线分割
+ *
+ *   Better Auth is an authentication framework...  ← 可选主标题/描述
+ *
+ * 用法:
+ *   <SectionHeader eyebrow="README" />
+ *
+ *   <SectionHeader eyebrow="FEATURES" title="Core capabilities" />
+ *
+ *   <SectionHeader eyebrow="BLOG">
+ *     <p class="mt-4">描述或介绍文字...</p>
+ *   </SectionHeader>
+ *
+ *   <SectionHeader eyebrow="PROJECTS" count={9} />   ← 右侧显示计数
+ *
+ * 设计约束:
+ *   - 不做圆角、不做背景色,只靠字重/虚线/留白拉出层级
+ *   - eyebrow 会自动转大写,无需调用方手动 upper()
+ *   - 默认是一个语义化的 <section> header 块,可通过 as="div" 换成普通 div
+ * ============================================================================
+ */
+
+interface Props {
+	/** 小眉标签(全大写显示),如 "README" / "FEATURES" / "BLOG" */
+	eyebrow: string;
+	/** 可选的主标题(较大字号,放在虚线下方) */
+	title?: string;
+	/** 可选的描述段落(灰色正文) */
+	description?: string;
+	/** 右侧的计数/徽标文字(如 "9" 表示项目数) */
+	count?: string | number;
+	/** 右侧的可选链接文字(如 "VIEW ALL →") */
+	linkText?: string;
+	/** linkText 对应的 href */
+	linkHref?: string;
+	/** linkHref 是否为外部链接 */
+	linkExternal?: boolean;
+	/** 标题元素标签,默认 h2 */
+	titleTag?: "h1" | "h2" | "h3";
+	/** 顶部是否留额外间距(多个 Section 串联时用) */
+	spacious?: boolean;
+	/** 虚线是否使用实线代替 */
+	solid?: boolean;
+	/** 额外类名 */
+	class?: string;
+	/** id 锚点(便于目录跳转) */
+	id?: string;
+}
+
+const {
+	eyebrow,
+	title,
+	description,
+	count,
+	linkText,
+	linkHref,
+	linkExternal,
+	titleTag = "h2",
+	spacious = false,
+	solid = false,
+	class: className = "",
+	id,
+} = Astro.props;
+
+// 自动判定外链
+const isExternalLink =
+	linkExternal ??
+	(typeof linkHref === "string" && /^https?:\/\//i.test(linkHref));
+
+const TitleTag = titleTag;
+
+// 判断是否有 default slot 追加内容
+const hasDefaultSlot = Astro.slots.has("default");
+---
+
+<header
+	id={id}
+	class:list={[
+		"section-header",
+		"w-full",
+		spacious ? "pt-10 lg:pt-14" : "pt-6 lg:pt-8",
+		className,
+	]}
+>
+	{/* ---------- 顶行:eyebrow 左 / count 或 link 右 ---------- */}
+	<div
+		class:list={[
+			"flex items-baseline justify-between",
+			"gap-4",
+			"mb-3",
+		]}
+	>
+		<span
+			class:list={[
+				"mono-label",
+				"text-[11px] sm:text-xs",
+				"leading-none",
+				"tracking-[var(--tracking-wider)]",
+				"text-[color:var(--color-ink-secondary)]",
+				"font-medium",
+			]}
+		>
+			{eyebrow}
+		</span>
+
+		{/* 右侧:优先显示 linkText,其次 count */}
+		{
+			linkText && linkHref ? (
+				<a
+					href={linkHref}
+					target={isExternalLink ? "_blank" : undefined}
+					rel={isExternalLink ? "noopener noreferrer" : undefined}
+					class:list={[
+						"group",
+						"inline-flex items-center gap-1.5",
+						"mono-label",
+						"text-[11px]",
+						"leading-none",
+						"text-[color:var(--color-ink-tertiary)]",
+						"hover:text-[color:var(--color-ink-primary)]",
+						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+					]}
+				>
+					<span>{linkText}</span>
+					<svg
+						aria-hidden="true"
+						width="10"
+						height="10"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class:list={[
+							"shrink-0",
+							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							isExternalLink
+								? "group-hover:translate-x-[1px] group-hover:-translate-y-[1px]"
+								: "group-hover:translate-x-[2px]",
+						]}
+					>
+						{
+							isExternalLink ? (
+								<>
+									<path d="M7 17L17 7" />
+									<path d="M8 7h9v9" />
+								</>
+							) : (
+								<>
+									<path d="M5 12h14" />
+									<path d="m12 5 7 7-7 7" />
+								</>
+							)
+						}
+					</svg>
+				</a>
+			) : count !== undefined ? (
+				<span
+					class:list={[
+						"mono-num",
+						"text-[11px]",
+						"tabular-nums",
+						"text-[color:var(--color-ink-tertiary)]",
+					]}
+				>
+					{count}
+				</span>
+			) : null
+		}
+	</div>
+
+	{/* ---------- 分割线(虚线 / 实线可切换) ---------- */}
+	<hr
+		aria-hidden="true"
+		class:list={[
+			"border-0 border-t",
+			solid ? "border-solid" : "border-dashed",
+			"border-[color:var(--color-hairline)]",
+			"m-0",
+		]}
+	/>
+
+	{/* ---------- 可选主标题与描述 ---------- */}
+	{
+		(title || description) && (
+			<div class="mt-6 lg:mt-8">
+				{title && (
+					<TitleTag
+						class:list={[
+							"font-medium",
+							"text-[color:var(--color-ink-primary)]",
+							"tracking-[-0.02em]",
+							"leading-[1.2]",
+							titleTag === "h1"
+								? "text-[28px] sm:text-[32px] lg:text-[36px]"
+								: titleTag === "h2"
+									? "text-[22px] sm:text-[24px] lg:text-[28px]"
+									: "text-[18px] sm:text-[20px]",
+							description ? "mb-3" : "",
+						]}
+					>
+						{title}
+					</TitleTag>
+				)}
+
+				{description && (
+					<p
+						class:list={[
+							"text-[color:var(--color-ink-secondary)]",
+							"text-[14px] lg:text-[15px]",
+							"leading-[1.65]",
+							"max-w-[68ch]",
+						]}
+					>
+						{description}
+					</p>
+				)}
+			</div>
+		)
+	}
+
+	{/* ---------- 追加插槽内容(在虚线下方,在 title/description 之后) ---------- */}
+	{
+		hasDefaultSlot && (
+			<div class:list={[title || description ? "mt-6" : "mt-6 lg:mt-8"]}>
+				<slot />
+			</div>
+		)
+	}
+</header>

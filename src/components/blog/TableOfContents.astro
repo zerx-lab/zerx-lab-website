@@ -1,0 +1,590 @@
+---
+/**
+ * ============================================================================
+ * TableOfContents - 博客文章目录(TOC)
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com 文章详情页右上 / 侧边目录
+ *   - 极简 Monospace eyebrow + 虚线分割
+ *   - 每条目录项前带层级缩进(H2 / H3 / H4 分三档)
+ *   - 当前滚动位置对应的条目高亮(墨色 + 左侧短实线锚点)
+ *   - 无圆角、无背景色,仅靠文字颜色与一条左侧锚线承担"当前态"
+ *
+ * 布局策略:
+ *   桌面端 (≥ 1280px):作为文章右侧的 sticky 侧栏,独立滚动
+ *   移动端 / 平板 (< 1280px):作为正文顶部的可折叠区块,默认展开
+ *
+ * 典型呈现(桌面):
+ *   ──────────────────────
+ *   在本页
+ *   ──────────────────────
+ *   │ 引言
+ *   │   为什么要做这个        ← 当前激活(墨色 + 左锚线)
+ *   │ 技术栈
+ *   │   Astro 6
+ *   │   Tailwind v4
+ *   │ 约定
+ *   ──────────────────────
+ *
+ * 用法:
+ *   <TableOfContents
+ *     headings={[
+ *       { level: 2, text: "引言", slug: "intro" },
+ *       { level: 3, text: "为什么要做这个", slug: "why" },
+ *       { level: 2, text: "技术栈", slug: "stack" },
+ *     ]}
+ *   />
+ *
+ * 设计约束:
+ *   - 只展示 H2 / H3(默认);H4 可通过 maxDepth=4 选项启用
+ *   - H1 通常是文章标题本身,不应出现在 TOC(渲染器也不会把 H1 放进 headings)
+ *   - 当条目为 0 时整个组件自动隐藏,不占位
+ *   - 滚动高亮靠 IntersectionObserver,纯客户端,不阻塞首屏渲染
+ * ============================================================================
+ */
+
+import { getLangFromUrl } from "@i18n/utils";
+import type { MarkdownHeading } from "@lib/markdown";
+
+interface Props {
+	/** 标题列表(来自 renderMarkdown 的返回值) */
+	headings: readonly MarkdownHeading[];
+	/** 最小层级(默认 2,即从 H2 开始) */
+	minDepth?: number;
+	/** 最大层级(默认 3,即到 H3 为止) */
+	maxDepth?: number;
+	/** 自定义 eyebrow 文字(默认从 i18n 推导为"在本页" / "On this page") */
+	eyebrow?: string;
+	/** 作为移动端/平板的默认展开状态(默认 true) */
+	defaultOpen?: boolean;
+	/** 额外类名 */
+	class?: string;
+	/** sticky 偏移(距离视口顶部的距离,默认跟随 top-nav 高度) */
+	stickyTopOffset?: string;
+}
+
+const {
+	headings,
+	minDepth = 2,
+	maxDepth = 3,
+	eyebrow,
+	defaultOpen = true,
+	class: className = "",
+	stickyTopOffset,
+} = Astro.props;
+
+// ----------------------------------------------------------------------------
+// 过滤 + 层级归一化
+// ----------------------------------------------------------------------------
+// 只保留 [minDepth, maxDepth] 区间的标题;
+// 把绝对层级映射到"相对缩进层级"(0, 1, 2),方便样式控制:
+//   - level == minDepth   → indent 0
+//   - level == minDepth+1 → indent 1
+//   - level >= maxDepth   → indent 2 (最深)
+// ----------------------------------------------------------------------------
+
+interface TocItem {
+	level: number;
+	indent: 0 | 1 | 2;
+	text: string;
+	slug: string;
+}
+
+const items: readonly TocItem[] = headings
+	.filter(
+		(h: MarkdownHeading) =>
+			h.level >= minDepth && h.level <= maxDepth && h.slug,
+	)
+	.map((h: MarkdownHeading): TocItem => {
+		const offset = h.level - minDepth;
+		const indent = (offset >= 2 ? 2 : offset) as 0 | 1 | 2;
+		return {
+			level: h.level,
+			indent,
+			text: h.text,
+			slug: h.slug,
+		};
+	});
+
+// ----------------------------------------------------------------------------
+// i18n
+// ----------------------------------------------------------------------------
+
+const lang = getLangFromUrl(Astro.url);
+
+const LABELS = {
+	zh: {
+		eyebrow: "在本页",
+		toggleExpand: "展开目录",
+		toggleCollapse: "收起目录",
+		empty: "本文无子标题",
+	},
+	en: {
+		eyebrow: "On this page",
+		toggleExpand: "Expand table of contents",
+		toggleCollapse: "Collapse table of contents",
+		empty: "No subheadings in this article",
+	},
+} as const;
+
+const L = LABELS[lang] ?? LABELS.zh;
+const resolvedEyebrow = eyebrow ?? L.eyebrow;
+
+// 条目为 0 时组件整体不渲染,也不占位(让外部布局收回空间)
+const shouldRender = items.length > 0;
+
+// sticky 顶部偏移:默认 = 顶部导航高度 + 一点呼吸
+const resolvedStickyTop =
+	stickyTopOffset ?? "calc(var(--layout-top-nav-height) + 1.25rem)";
+---
+
+{
+	shouldRender && (
+		<nav
+			aria-label={resolvedEyebrow}
+			class:list={[
+				"toc",
+				"w-full",
+				// 桌面端 sticky + 独立滚动(父级容器需提供足够高度)
+				"xl:sticky xl:self-start",
+				"xl:max-h-[calc(100vh-var(--layout-top-nav-height)-3rem)]",
+				"xl:overflow-y-auto xl:overscroll-contain",
+				"xl:scroll-thin",
+				className,
+			]}
+			style={`--toc-sticky-top: ${resolvedStickyTop};`}
+			data-toc-root
+		>
+			<details
+				class="toc-details"
+				open={defaultOpen || undefined}
+				data-toc-details
+			>
+				<summary
+					class:list={[
+						"toc-summary",
+						"flex items-center justify-between",
+						"gap-3",
+						"py-2",
+						"cursor-pointer select-none",
+						"list-none",
+						// 桌面端:这个 summary 仍然可见,但不承担"折叠"语义(details 恒开)
+						"xl:cursor-default",
+					]}
+				>
+					<span
+						class:list={[
+							"mono-label",
+							"text-[10.5px] sm:text-[11px]",
+							"leading-none",
+							"tracking-[var(--tracking-wider)]",
+							"text-[color:var(--color-ink-secondary)]",
+							"font-medium",
+						]}
+					>
+						{resolvedEyebrow}
+					</span>
+
+					{/* 右侧:条目总数 + 折叠箭头(仅非桌面端显示箭头) */}
+					<span class="flex items-center gap-2">
+						<span
+							class:list={[
+								"mono-num",
+								"text-[10px]",
+								"tabular-nums",
+								"text-[color:var(--color-ink-muted)]",
+							]}
+						>
+							{String(items.length).padStart(2, "0")}
+						</span>
+						<svg
+							aria-hidden="true"
+							width="10"
+							height="10"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.5"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							class:list={[
+								"toc-chevron",
+								"shrink-0",
+								"text-[color:var(--color-ink-tertiary)]",
+								"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								// 桌面端隐藏箭头(details 默认展开,不可交互)
+								"xl:hidden",
+							]}
+						>
+							<path d="m6 9 6 6 6-6" />
+						</svg>
+					</span>
+				</summary>
+
+				{/* 分割线 */}
+				<hr
+					aria-hidden="true"
+					class="border-0 border-t border-dashed border-[color:var(--color-hairline)] my-2"
+				/>
+
+				{/* 目录列表 */}
+				<ol
+					class:list={[
+						"toc-list",
+						"flex flex-col",
+						"list-none m-0 p-0",
+						"py-1",
+					]}
+					data-toc-list
+				>
+					{items.map((item) => (
+						<li
+							class:list={[
+								"toc-item",
+								"relative",
+								`toc-item--indent-${item.indent}`,
+							]}
+							data-toc-item
+							data-slug={item.slug}
+						>
+							<a
+								href={`#${item.slug}`}
+								data-toc-link={item.slug}
+								class:list={[
+									"toc-link",
+									"relative block",
+									"py-1.5",
+									"pr-2",
+									// 缩进靠 padding-left,通过 data attribute 区分档位
+									item.indent === 0 && "pl-3",
+									item.indent === 1 && "pl-6",
+									item.indent === 2 && "pl-9",
+									"text-[12.5px] sm:text-[13px]",
+									"leading-[1.45]",
+									"tracking-[-0.005em]",
+									item.indent === 0
+										? "text-[color:var(--color-ink-secondary)]"
+										: "text-[color:var(--color-ink-tertiary)]",
+									"hover:text-[color:var(--color-ink-primary)]",
+									"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+									// 文本截断,避免超长标题破坏布局
+									"truncate",
+								]}
+								title={item.text}
+							>
+								<span
+									aria-hidden="true"
+									class:list={[
+										"toc-link__marker",
+										"absolute",
+										"left-0 top-1/2 -translate-y-1/2",
+										"w-[2px] h-[10px]",
+										"bg-transparent",
+										"transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+									]}
+								/>
+								{item.text}
+							</a>
+						</li>
+					))}
+				</ol>
+			</details>
+		</nav>
+	)
+}
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * sticky 顶部偏移
+	 * --------------------------------------------------------------------------
+	 * 通过 CSS 变量 --toc-sticky-top 驱动,默认对齐右栏 TopNav 高度。
+	 * -------------------------------------------------------------------------- */
+
+	.toc {
+		top: var(--toc-sticky-top, 4.5rem);
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * <summary> 默认的三角符号隐藏 —— 我们使用自定义 chevron 图标
+	 * -------------------------------------------------------------------------- */
+
+	.toc-summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.toc-summary::marker {
+		content: "";
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 展开态:chevron 旋转
+	 * -------------------------------------------------------------------------- */
+
+	.toc-details[open] .toc-chevron {
+		transform: rotate(180deg);
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 桌面端强制展开(details 在 xl 断点下忽略 open 状态,始终展开)
+	 * --------------------------------------------------------------------------
+	 * 技术细节:<details> 的折叠靠 open 属性,CSS 无法直接强制其内容展开。
+	 * 但我们可以用 ::details-content 未被广泛支持,这里采用"视觉覆盖"方案:
+	 * 当 viewport 达到 xl 时,把内容显式 display: block,
+	 * 同时把 summary 的 cursor 取消(上面已经处理)。
+	 * -------------------------------------------------------------------------- */
+
+	@media (min-width: 1280px) {
+		.toc-details > :not(.toc-summary) {
+			display: block !important;
+		}
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 激活态(当前滚动到的章节)
+	 * --------------------------------------------------------------------------
+	 * 通过 JS 给命中的 <a data-toc-link="xxx"> 加 data-active="true";
+	 * 样式靠属性选择器,不依赖 JS 手动改 class。
+	 * -------------------------------------------------------------------------- */
+
+	.toc-link[data-active="true"] {
+		color: var(--color-ink-primary);
+		font-weight: 500;
+	}
+
+	.toc-link[data-active="true"] .toc-link__marker {
+		background-color: var(--color-ink-primary);
+	}
+
+	/* 暗色模式下,激活态的左侧锚线反相(随 --color-ink-primary 自动切换) */
+
+	/* ----------------------------------------------------------------------------
+	 * 条目缩进档位(三档:0 / 1 / 2)
+	 * --------------------------------------------------------------------------
+	 * 已经用 Tailwind utility 控制 padding-left,这里额外给最深层级
+	 * 一个额外的左侧点缀符,提高层级可读性。
+	 * -------------------------------------------------------------------------- */
+
+	.toc-item--indent-1 > .toc-link::before,
+	.toc-item--indent-2 > .toc-link::before {
+		content: "";
+		position: absolute;
+		top: 50%;
+		width: 8px;
+		height: 1px;
+		background: var(--color-hairline-strong);
+		transform: translateY(-50%);
+		transition: background-color var(--duration-fast) var(--ease-standard);
+	}
+
+	.toc-item--indent-1 > .toc-link::before {
+		left: 12px;
+	}
+
+	.toc-item--indent-2 > .toc-link::before {
+		left: 24px;
+	}
+
+	.toc-link[data-active="true"]::before {
+		background: var(--color-ink-primary);
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 动效可访问性兜底
+	 * -------------------------------------------------------------------------- */
+
+	@media (prefers-reduced-motion: reduce) {
+		.toc-chevron,
+		.toc-link,
+		.toc-link__marker,
+		.toc-link::before {
+			transition: none !important;
+		}
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 自定义细滚动条(仅 toc 内部)
+	 * -------------------------------------------------------------------------- */
+
+	.toc.scroll-thin {
+		scrollbar-width: thin;
+		scrollbar-color: var(--color-hairline-strong) transparent;
+	}
+
+	.toc.scroll-thin::-webkit-scrollbar {
+		width: 6px;
+	}
+	.toc.scroll-thin::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	.toc.scroll-thin::-webkit-scrollbar-thumb {
+		background: transparent;
+		border-radius: 3px;
+	}
+	.toc.scroll-thin:hover::-webkit-scrollbar-thumb {
+		background: var(--color-hairline-strong);
+	}
+</style>
+
+<script>
+	/**
+	 * =========================================================================
+	 * 滚动联动 —— 当前阅读到的章节对应的 TOC 条目高亮
+	 * -------------------------------------------------------------------------
+	 * 策略:
+	 *   1. 页面加载后,收集文章区内所有 <h*>(与 TOC 的 slug 一一对应)
+	 *   2. 用 IntersectionObserver 监听这些标题进入"关注区间"(视口中上 1/3)
+	 *   3. 维护一个"当前激活 slug"栈,取栈顶作为 active
+	 *   4. 通过给对应 <a data-toc-link="slug"> 加 data-active 属性驱动样式
+	 *
+	 * 兼容性:
+	 *   - Astro View Transitions:在 astro:after-swap 重新初始化,
+	 *     避免切页后旧 observer 留在内存
+	 *   - prefers-reduced-motion:不影响此逻辑(只是观察,无动效)
+	 * ========================================================================= */
+
+	interface TocController {
+		destroy(): void;
+	}
+
+	function initToc(): TocController | null {
+		const root = document.querySelector<HTMLElement>("[data-toc-root]");
+		if (!root) return null;
+
+		const links = Array.from(
+			root.querySelectorAll<HTMLAnchorElement>("[data-toc-link]"),
+		);
+		if (links.length === 0) return null;
+
+		// 收集所有 slug → 对应的 heading 元素
+		const slugToHeading = new Map<string, HTMLElement>();
+		for (const link of links) {
+			const slug = link.getAttribute("data-toc-link");
+			if (!slug) continue;
+			// heading 的 id 由 renderMarkdown 注入,与 slug 完全一致
+			const heading = document.getElementById(slug);
+			if (heading) {
+				slugToHeading.set(slug, heading);
+			}
+		}
+
+		if (slugToHeading.size === 0) return null;
+
+		// 记录每个 slug 是否"当前可见"
+		const visibleSet = new Set<string>();
+
+		/** 根据 visibleSet 计算当前激活的 slug(取文档顺序中第一个可见) */
+		function getActiveSlug(): string | null {
+			// 按照 slugToHeading 的插入顺序(= 文档顺序)找第一个 visible
+			for (const slug of slugToHeading.keys()) {
+				if (visibleSet.has(slug)) return slug;
+			}
+			return null;
+		}
+
+		/** 应用激活态 */
+		function applyActive(slug: string | null): void {
+			for (const link of links) {
+				const isActive = link.getAttribute("data-toc-link") === slug;
+				if (isActive) {
+					link.setAttribute("data-active", "true");
+				} else {
+					link.removeAttribute("data-active");
+				}
+			}
+		}
+
+		// 当页面加载时,默认激活第一个标题
+		const initialSlug = slugToHeading.keys().next().value ?? null;
+		applyActive(initialSlug);
+
+		// IntersectionObserver:视口中上 1/3 作为"关注区域"
+		// rootMargin: "0px 0px -70% 0px" 意味着只有当标题进入视口顶部 30%
+		// 范围内才算 visible
+		const observer = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const id = entry.target.id;
+					if (!id) continue;
+					if (entry.isIntersecting) {
+						visibleSet.add(id);
+					} else {
+						visibleSet.delete(id);
+					}
+				}
+				const active = getActiveSlug();
+				if (active !== null) {
+					applyActive(active);
+				} else {
+					// 所有标题都不在关注区域内时,取最近一次滚过的那个
+					// 降级:用 scrollY 找到最后一个在视口上方的 heading
+					const scrollTop = window.scrollY + 120;
+					let lastPassed: string | null = null;
+					for (const [slug, heading] of slugToHeading) {
+						const top =
+							heading.getBoundingClientRect().top + window.scrollY;
+						if (top <= scrollTop) {
+							lastPassed = slug;
+						} else {
+							break;
+						}
+					}
+					applyActive(lastPassed ?? initialSlug);
+				}
+			},
+			{
+				rootMargin: "0px 0px -70% 0px",
+				threshold: 0,
+			},
+		);
+
+		for (const heading of slugToHeading.values()) {
+			observer.observe(heading);
+		}
+
+		// 平滑滚动(点击 TOC 链接时)—— 交给浏览器原生 scroll-behavior: smooth 处理,
+		// 这里额外拦截一下,避免 hash 变化导致 history 堆积
+		function onClick(e: MouseEvent): void {
+			const target = e.target as HTMLElement | null;
+			if (!target) return;
+			const link = target.closest<HTMLAnchorElement>("[data-toc-link]");
+			if (!link) return;
+
+			const slug = link.getAttribute("data-toc-link");
+			if (!slug) return;
+			const heading = slugToHeading.get(slug);
+			if (!heading) return;
+
+			e.preventDefault();
+			heading.scrollIntoView({ behavior: "smooth", block: "start" });
+			// 手动更新 hash,不触发 scroll
+			history.replaceState(null, "", `#${slug}`);
+			// 立刻把激活态切过去,免去等 observer 回调
+			applyActive(slug);
+		}
+
+		root.addEventListener("click", onClick);
+
+		return {
+			destroy(): void {
+				observer.disconnect();
+				root.removeEventListener("click", onClick);
+			},
+		};
+	}
+
+	// 单例控制器,View Transitions 切页时重建
+	let controller: TocController | null = null;
+
+	function setup(): void {
+		if (controller) {
+			controller.destroy();
+			controller = null;
+		}
+		controller = initToc();
+	}
+
+	// 首次加载
+	setup();
+
+	// Astro View Transitions 兼容:每次页面切换后重新初始化
+	document.addEventListener("astro:after-swap", setup);
+</script>

@@ -1,0 +1,512 @@
+---
+/**
+ * ============================================================================
+ * Pagination - 通用分页组件
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com 的编辑派风格
+ *   - 虚线发丝分割 + Monospace 编号
+ *   - "上一页 / 下一页"作为主操作,中间是页码
+ *   - 当前页黑底白字,其他页淡灰,hover 时变墨色
+ *   - 省略号用 · · · 而不是 ... (编辑派细节)
+ *
+ * 典型呈现:
+ *   ← Previous    01 · 02 · [03] · 04 · · · 12    Next →
+ *    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+ *    Page 3 of 12 · 84 items                   ↑ 底部元信息
+ *
+ * 用法:
+ *   <Pagination
+ *     currentPage={3}
+ *     totalPages={12}
+ *     totalItems={84}
+ *     baseUrl="/blog"
+ *   />
+ *
+ *   自定义页面参数键(默认 ?page=2,可改成 ?p=2):
+ *   <Pagination ... pageParam="p" />
+ *
+ *   使用路径分页(/blog/page/2 而非 /blog?page=2):
+ *   <Pagination ... pathPattern="/blog/page/{n}" firstPagePath="/blog" />
+ *
+ * 设计约束:
+ *   - 纯 Astro 静态组件,无 JS,所有链接都是真实的 <a href>
+ *   - 总页数 ≤ 7 时显示全部页码,否则智能省略(首尾 + 当前页邻近)
+ *   - 单页时自动不渲染(返回 null)
+ *   - 完全双语感知,通过 i18n 字典驱动所有 label
+ * ============================================================================
+ */
+
+import { getLangFromUrl, useTranslations } from "@i18n/utils";
+
+interface Props {
+	/** 当前页码(1-indexed) */
+	currentPage: number;
+	/** 总页数 */
+	totalPages: number;
+	/** 总条目数(可选,在底部元信息里显示) */
+	totalItems?: number;
+	/**
+	 * 基础 URL(不含 query),如 "/blog" / "/en/blog"
+	 * 与 pathPattern 二选一,优先 pathPattern
+	 */
+	baseUrl?: string;
+	/** URL 查询参数名,默认 "page" */
+	pageParam?: string;
+	/**
+	 * 路径模式,用 {n} 占位当前页码。
+	 * 如 "/blog/page/{n}" → /blog/page/2
+	 * 设置后忽略 baseUrl + pageParam 组合
+	 */
+	pathPattern?: string;
+	/**
+	 * 首页的专用路径(通常是不带 page 参数的干净 URL)
+	 * 如 pathPattern="/blog/page/{n}" 时, firstPagePath="/blog"
+	 */
+	firstPagePath?: string;
+	/** 在两侧显示的边缘页数,默认 1(首尾各 1 页) */
+	boundaryCount?: number;
+	/** 当前页两侧的邻近页数,默认 1(总共 1 + 1 + 1 = 3 个紧邻页) */
+	siblingCount?: number;
+	/** 是否显示底部元信息行(Page X of Y) */
+	showMeta?: boolean;
+	/** 额外类名 */
+	class?: string;
+}
+
+const {
+	currentPage,
+	totalPages,
+	totalItems,
+	baseUrl,
+	pageParam = "page",
+	pathPattern,
+	firstPagePath,
+	boundaryCount = 1,
+	siblingCount = 1,
+	showMeta = true,
+	class: className = "",
+} = Astro.props;
+
+// ----------------------------------------------------------------------------
+// 参数校验:单页直接不渲染,避免页面冗余
+// ----------------------------------------------------------------------------
+
+if (totalPages < 1 || currentPage < 1 || currentPage > totalPages) {
+	// 无效参数;静默返回,避免影响页面整体
+}
+
+const shouldRender = totalPages > 1 && currentPage >= 1 && currentPage <= totalPages;
+
+// ----------------------------------------------------------------------------
+// i18n
+// ----------------------------------------------------------------------------
+
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+
+// 本组件专用的短语(不放在全局字典,避免污染)
+const LABELS = {
+	zh: {
+		previous: "上一页",
+		next: "下一页",
+		pageOf: "第 {current} 页,共 {total} 页",
+		items: "篇",
+		ellipsis: "更多页",
+		currentPage: "当前页",
+		gotoPage: "跳转到第 {n} 页",
+		firstPage: "第一页",
+		lastPage: "最后一页",
+	},
+	en: {
+		previous: "Previous",
+		next: "Next",
+		pageOf: "Page {current} of {total}",
+		items: "items",
+		ellipsis: "More pages",
+		currentPage: "Current page",
+		gotoPage: "Go to page {n}",
+		firstPage: "First page",
+		lastPage: "Last page",
+	},
+} as const;
+
+const L = LABELS[lang] ?? LABELS.zh;
+
+// ----------------------------------------------------------------------------
+// URL 构造
+// ----------------------------------------------------------------------------
+
+/**
+ * 根据页码生成链接 URL。
+ * 优先级: pathPattern > baseUrl + pageParam
+ *
+ * 第 1 页特殊处理:
+ *   - 使用 firstPagePath(若提供)
+ *   - 否则使用 baseUrl(不带 query),URL 更干净
+ */
+function urlForPage(page: number): string {
+	// 第 1 页:走 firstPagePath / baseUrl 原路径,无分页参数
+	if (page === 1) {
+		if (firstPagePath) return firstPagePath;
+		if (pathPattern && baseUrl) return baseUrl;
+		if (baseUrl) return baseUrl;
+	}
+
+	// pathPattern 模式
+	if (pathPattern) {
+		return pathPattern.replace("{n}", String(page));
+	}
+
+	// baseUrl + ?page=N 模式
+	const base = baseUrl ?? "/";
+	const sep = base.includes("?") ? "&" : "?";
+	return `${base}${sep}${pageParam}=${page}`;
+}
+
+// ----------------------------------------------------------------------------
+// 页码列表生成(含智能省略)
+// ----------------------------------------------------------------------------
+
+/**
+ * 生成要显示的页码数组,使用 "ellipsis" 字符串标记省略位置。
+ *
+ * 规则(以 currentPage=6, totalPages=12, boundary=1, sibling=1 为例):
+ *   结果: [1, 'ellipsis', 5, 6, 7, 'ellipsis', 12]
+ *
+ * 边界情况:
+ *   - 若 totalPages ≤ boundary*2 + sibling*2 + 3, 直接展示所有页码
+ *   - 首尾省略号的出现条件分别独立判断
+ */
+type PageItem = number | "ellipsis-left" | "ellipsis-right";
+
+function buildPageList(
+	current: number,
+	total: number,
+	boundary: number,
+	sibling: number,
+): readonly PageItem[] {
+	// 窗口总长度: 首边界 + 左省略 + 左兄弟 + 当前 + 右兄弟 + 右省略 + 尾边界
+	const windowSize = boundary * 2 + sibling * 2 + 3;
+
+	// 总页数不够支持省略,直接全展开
+	if (total <= windowSize) {
+		return Array.from({ length: total }, (_, i) => i + 1);
+	}
+
+	const leftSiblingStart = Math.max(current - sibling, boundary + 1);
+	const rightSiblingEnd = Math.min(current + sibling, total - boundary);
+
+	// 是否需要显示左侧省略号(左兄弟起点距离首边界超过 1)
+	const showLeftEllipsis = leftSiblingStart > boundary + 2;
+	// 是否需要显示右侧省略号
+	const showRightEllipsis = rightSiblingEnd < total - boundary - 1;
+
+	const items: PageItem[] = [];
+
+	// 首边界 (1..boundary)
+	for (let i = 1; i <= boundary; i++) {
+		items.push(i);
+	}
+
+	if (showLeftEllipsis) {
+		items.push("ellipsis-left");
+	} else {
+		// 不省略则把首边界到兄弟起点之间的页码铺满
+		for (let i = boundary + 1; i < leftSiblingStart; i++) {
+			items.push(i);
+		}
+	}
+
+	// 兄弟 + 当前 (leftSiblingStart..rightSiblingEnd)
+	for (let i = leftSiblingStart; i <= rightSiblingEnd; i++) {
+		items.push(i);
+	}
+
+	if (showRightEllipsis) {
+		items.push("ellipsis-right");
+	} else {
+		for (let i = rightSiblingEnd + 1; i <= total - boundary; i++) {
+			items.push(i);
+		}
+	}
+
+	// 尾边界 (total-boundary+1..total)
+	for (let i = total - boundary + 1; i <= total; i++) {
+		items.push(i);
+	}
+
+	return items;
+}
+
+const pageItems = shouldRender
+	? buildPageList(currentPage, totalPages, boundaryCount, siblingCount)
+	: [];
+
+// ----------------------------------------------------------------------------
+// 前/后页
+// ----------------------------------------------------------------------------
+
+const hasPrevious = currentPage > 1;
+const hasNext = currentPage < totalPages;
+const previousUrl = hasPrevious ? urlForPage(currentPage - 1) : null;
+const nextUrl = hasNext ? urlForPage(currentPage + 1) : null;
+
+// ----------------------------------------------------------------------------
+// 元信息文案渲染
+// ----------------------------------------------------------------------------
+
+const metaText = L.pageOf
+	.replace("{current}", String(currentPage))
+	.replace("{total}", String(totalPages));
+
+const itemsText =
+	typeof totalItems === "number"
+		? lang === "zh"
+			? `${totalItems} ${L.items}`
+			: `${totalItems} ${L.items}`
+		: null;
+
+// 格式化页码(两位零填充:01/02/.../99,超过 99 保持原样)
+function formatPageNumber(n: number): string {
+	return n < 100 ? String(n).padStart(2, "0") : String(n);
+}
+---
+
+{
+	shouldRender && (
+		<nav
+			aria-label={lang === "zh" ? "分页导航" : "Pagination"}
+			class:list={[
+				"pagination",
+				"w-full",
+				"flex flex-col gap-3",
+				className,
+			]}
+		>
+			{/* ---------- 主分页行 ---------- */}
+			<div
+				class:list={[
+					"flex items-center justify-between gap-3",
+					"flex-wrap sm:flex-nowrap",
+					"py-4",
+					"border-t border-dashed border-[color:var(--color-hairline)]",
+					"border-b border-dashed border-[color:var(--color-hairline)]",
+				]}
+			>
+				{/* 上一页按钮 */}
+				<a
+					href={previousUrl ?? undefined}
+					aria-disabled={hasPrevious ? undefined : "true"}
+					aria-label={L.previous}
+					tabindex={hasPrevious ? undefined : -1}
+					class:list={[
+						"pager-btn",
+						"group inline-flex items-center gap-2",
+						"px-3 sm:px-4 py-2",
+						"mono-label",
+						"text-[11px] sm:text-[12px]",
+						"leading-none",
+						"tracking-[var(--tracking-wider)]",
+						"select-none",
+						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						hasPrevious
+							? "text-[color:var(--color-ink-secondary)] hover:text-[color:var(--color-ink-primary)] cursor-pointer"
+							: "text-[color:var(--color-ink-muted)]/50 cursor-not-allowed pointer-events-none",
+					]}
+				>
+					<svg
+						aria-hidden="true"
+						width="12"
+						height="12"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class:list={[
+							"shrink-0",
+							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							hasPrevious && "group-hover:-translate-x-[2px]",
+						]}
+					>
+						<path d="m12 19-7-7 7-7" />
+						<path d="M19 12H5" />
+					</svg>
+					<span class="whitespace-nowrap">{L.previous}</span>
+				</a>
+
+				{/* 页码列表 */}
+				<ol
+					class:list={[
+						"flex items-center",
+						"list-none m-0 p-0",
+						"gap-0.5 sm:gap-1",
+					]}
+				>
+					{pageItems.map((item, idx) => {
+						if (item === "ellipsis-left" || item === "ellipsis-right") {
+							return (
+								<li
+									aria-hidden="true"
+									class:list={[
+										"inline-flex items-center justify-center",
+										"px-2 sm:px-2.5",
+										"font-[var(--font-mono)]",
+										"text-[11px] sm:text-[12px]",
+										"leading-none",
+										"text-[color:var(--color-ink-muted)]",
+										"select-none",
+										"tabular-nums",
+										"tracking-[var(--tracking-wider)]",
+									]}
+									title={L.ellipsis}
+								>
+									· · ·
+								</li>
+							);
+						}
+
+						const isCurrent = item === currentPage;
+						const href = urlForPage(item);
+						const gotoLabel = L.gotoPage.replace("{n}", String(item));
+
+						return (
+							<li class="inline-flex">
+								<a
+									href={isCurrent ? undefined : href}
+									aria-current={isCurrent ? "page" : undefined}
+									aria-label={isCurrent ? L.currentPage : gotoLabel}
+									tabindex={isCurrent ? -1 : undefined}
+									class:list={[
+										"page-item",
+										"inline-flex items-center justify-center",
+										"min-w-[32px] sm:min-w-[36px] h-7 sm:h-8",
+										"px-2",
+										"font-[var(--font-mono)]",
+										"text-[11px] sm:text-[12px]",
+										"leading-none",
+										"tabular-nums",
+										"tracking-[var(--tracking-wide)]",
+										"rounded-[var(--radius-sm)]",
+										"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+										"select-none",
+										isCurrent
+											? // 当前页:黑底白字,贴合 better-auth 的"SIGN-IN 黑块"质感
+												"bg-[color:var(--color-ink-primary)] text-[color:var(--color-paper)] font-semibold cursor-default"
+											: // 非当前页:淡灰,hover 时变墨色 + 轻微背景
+												"text-[color:var(--color-ink-tertiary)] hover:text-[color:var(--color-ink-primary)] hover:bg-[color:var(--color-paper-muted)]/60 cursor-pointer",
+									]}
+								>
+									{formatPageNumber(item)}
+								</a>
+							</li>
+						);
+					})}
+				</ol>
+
+				{/* 下一页按钮 */}
+				<a
+					href={nextUrl ?? undefined}
+					aria-disabled={hasNext ? undefined : "true"}
+					aria-label={L.next}
+					tabindex={hasNext ? undefined : -1}
+					class:list={[
+						"pager-btn",
+						"group inline-flex items-center gap-2",
+						"px-3 sm:px-4 py-2",
+						"mono-label",
+						"text-[11px] sm:text-[12px]",
+						"leading-none",
+						"tracking-[var(--tracking-wider)]",
+						"select-none",
+						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						hasNext
+							? "text-[color:var(--color-ink-secondary)] hover:text-[color:var(--color-ink-primary)] cursor-pointer"
+							: "text-[color:var(--color-ink-muted)]/50 cursor-not-allowed pointer-events-none",
+					]}
+				>
+					<span class="whitespace-nowrap">{L.next}</span>
+					<svg
+						aria-hidden="true"
+						width="12"
+						height="12"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class:list={[
+							"shrink-0",
+							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							hasNext && "group-hover:translate-x-[2px]",
+						]}
+					>
+						<path d="M5 12h14" />
+						<path d="m12 5 7 7-7 7" />
+					</svg>
+				</a>
+			</div>
+
+			{/* ---------- 底部元信息行 ---------- */}
+			{
+				showMeta && (
+					<div
+						class:list={[
+							"flex items-center justify-between gap-3",
+							"flex-wrap",
+							"font-[var(--font-mono)]",
+							"text-[10px] sm:text-[11px]",
+							"leading-none",
+							"tracking-[var(--tracking-wide)]",
+							"text-[color:var(--color-ink-tertiary)]",
+						]}
+					>
+						<span class="tabular-nums">{metaText}</span>
+						{itemsText && (
+							<span class="tabular-nums uppercase">
+								{itemsText}
+							</span>
+						)}
+					</div>
+				)
+			}
+		</nav>
+	)
+}
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * 禁用态的视觉约束
+	 * --------------------------------------------------------------------------
+	 * aria-disabled 的链接仍然可见但不可点击;用 pointer-events-none 兜底,
+	 * 防止用户意外触达。tabindex="-1" 让键盘也跳过。
+	 * -------------------------------------------------------------------------- */
+
+	.pager-btn[aria-disabled="true"] {
+		pointer-events: none;
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 当前页按钮的细节
+	 * --------------------------------------------------------------------------
+	 * 暗色模式下,黑底白字需要反相:用 var 自动切换
+	 * -------------------------------------------------------------------------- */
+
+	:global(:root.dark) .page-item[aria-current="page"] {
+		/* 暗色模式下,白纸色的"黑块"反相为墨色前景;
+		   依赖 global.css 里 --color-ink-primary 和 --color-paper 的 dark 映射 */
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 焦点态:编辑派的一根实线描边,与全局 :focus-visible 一致
+	 * -------------------------------------------------------------------------- */
+
+	.page-item:focus-visible,
+	.pager-btn:focus-visible {
+		outline: 2px solid var(--color-ink-primary);
+		outline-offset: 2px;
+		border-radius: var(--radius-sm);
+	}
+</style>

@@ -1,0 +1,106 @@
+---
+/**
+ * ============================================================================
+ * LanguageToggle - 语言切换器
+ * ----------------------------------------------------------------------------
+ * 视觉: 紧凑的 ZH / EN 两个 Monospace 小标签,当前激活项墨色,非激活项淡灰
+ * 行为: 点击切换时,保留当前页面位置(使用 stripLangFromPath + 语言前缀重组)
+ *
+ * 布局策略:
+ *   [ZH] [·] [EN]       ← 用中点分隔,视觉上像 BBS 时代的分隔符
+ *     ^ active
+ *
+ * 说明:
+ *   - 纯 Astro 静态组件,无 JS 开销
+ *   - 每个语言项是独立链接,点击直接跳转
+ *   - 当用户在 /blog/hello 时点 EN,跳转到 /en/blog/hello
+ * ============================================================================
+ */
+
+import { getLangFromUrl, listLanguageLinks } from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+
+interface Props {
+	/** 额外类名 */
+	class?: string;
+}
+
+const { class: className = "" } = Astro.props;
+
+const currentLang = getLangFromUrl(Astro.url);
+const links = listLanguageLinks(Astro.url);
+
+/** 语言代码 → 显示短标签(固定两个字母,等宽对齐) */
+const shortLabel: Record<Lang, string> = {
+	zh: "ZH",
+	en: "EN",
+};
+---
+
+<div
+	role="group"
+	aria-label={currentLang === "zh" ? "语言切换" : "Language switcher"}
+	class:list={[
+		"lang-toggle",
+		"flex items-center",
+		"h-full",
+		"px-3 sm:px-4",
+		"gap-1.5",
+		"select-none",
+		className,
+	]}
+>
+	{
+		links.map((link, idx) => (
+			<>
+				{idx > 0 && (
+					<span
+						aria-hidden="true"
+						class="text-[color:var(--color-ink-faint)] text-[10px] leading-none"
+					>
+						·
+					</span>
+				)}
+				<a
+					href={link.href}
+					hreflang={link.code === "zh" ? "zh-CN" : "en-US"}
+					aria-current={link.isActive ? "true" : undefined}
+					aria-label={
+						currentLang === "zh"
+							? `切换到 ${link.label}`
+							: `Switch to ${link.label}`
+					}
+					data-lang={link.code}
+					class:list={[
+						"mono-label",
+						"text-[11px] leading-none",
+						"tracking-[var(--tracking-wider)]",
+						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						"hover:text-[color:var(--color-ink-primary)]",
+						link.isActive
+							? "text-[color:var(--color-ink-primary)] font-semibold"
+							: "text-[color:var(--color-ink-muted)]",
+					]}
+				>
+					{shortLabel[link.code]}
+				</a>
+			</>
+		))
+	}
+</div>
+
+<style>
+	/* 激活项下方加一根短细线,作为额外的视觉锚点 */
+	.lang-toggle a[aria-current="true"] {
+		position: relative;
+	}
+	.lang-toggle a[aria-current="true"]::after {
+		content: "";
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: -4px;
+		height: 1px;
+		background: var(--color-ink-primary);
+	}
+</style>

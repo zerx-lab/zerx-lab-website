@@ -1,0 +1,272 @@
+---
+/**
+ * ============================================================================
+ * ThemeToggle - 主题切换器 (light / dark / system)
+ * ----------------------------------------------------------------------------
+ * 视觉: 三段式 Monospace 图标按钮组,当前激活项墨色,其余淡灰
+ *
+ * 布局策略:
+ *   [☀][◑][●]
+ *    ^ light
+ *        ^ system
+ *            ^ dark
+ *
+ * 行为:
+ *   - 纯 Astro 组件 + 内联 JS (无框架开销)
+ *   - 主题状态存 localStorage,key = "zerx-theme",值 = "light" | "dark" | "system"
+ *   - 首次访问默认 "system",跟随 prefers-color-scheme
+ *   - 切换时立即在 <html> 上加 / 去 .dark 类
+ *   - 防闪烁: 关键脚本在 <head> 内同步执行(见 AppShell.astro),本组件仅负责交互
+ *
+ * 说明:
+ *   - 组件渲染后,通过 data-theme-btn 属性绑定点击
+ *   - 激活态由脚本根据 localStorage 动态打 data-active 属性
+ * ============================================================================
+ */
+
+import { getLangFromUrl, useTranslations } from "@i18n/utils";
+
+interface Props {
+	/** 额外类名 */
+	class?: string;
+}
+
+const { class: className = "" } = Astro.props;
+
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+
+/** 三个主题选项,顺序决定显示顺序 */
+const OPTIONS = [
+	{
+		value: "light",
+		label: lang === "zh" ? "浅色" : "Light",
+	},
+	{
+		value: "system",
+		label: lang === "zh" ? "跟随系统" : "System",
+	},
+	{
+		value: "dark",
+		label: lang === "zh" ? "深色" : "Dark",
+	},
+] as const;
+---
+
+<div
+	role="group"
+	aria-label={t("action.toggleTheme")}
+	class:list={[
+		"theme-toggle",
+		"flex items-center",
+		"h-full",
+		"px-2 sm:px-3",
+		"gap-0.5",
+		"select-none",
+		className,
+	]}
+>
+	{
+		OPTIONS.map((opt) => (
+			<button
+				type="button"
+				data-theme-btn={opt.value}
+				aria-label={opt.label}
+				title={opt.label}
+				class:list={[
+					"theme-btn",
+					"inline-flex items-center justify-center",
+					"h-6 w-6",
+					"rounded-[var(--radius-sm)]",
+					"text-[color:var(--color-ink-muted)]",
+					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+					"hover:text-[color:var(--color-ink-primary)]",
+					"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-ink-primary)]",
+					"cursor-pointer",
+				]}
+			>
+				{opt.value === "light" && (
+					<svg
+						aria-hidden="true"
+						width="13"
+						height="13"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<circle cx="12" cy="12" r="4" />
+						<path d="M12 2v2" />
+						<path d="M12 20v2" />
+						<path d="m4.93 4.93 1.41 1.41" />
+						<path d="m17.66 17.66 1.41 1.41" />
+						<path d="M2 12h2" />
+						<path d="M20 12h2" />
+						<path d="m6.34 17.66-1.41 1.41" />
+						<path d="m19.07 4.93-1.41 1.41" />
+					</svg>
+				)}
+				{opt.value === "system" && (
+					<svg
+						aria-hidden="true"
+						width="13"
+						height="13"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<rect x="2" y="4" width="20" height="14" rx="2" />
+						<path d="M8 20h8" />
+						<path d="M12 18v2" />
+					</svg>
+				)}
+				{opt.value === "dark" && (
+					<svg
+						aria-hidden="true"
+						width="13"
+						height="13"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
+					</svg>
+				)}
+			</button>
+		))
+	}
+</div>
+
+<style>
+	/* 激活态: 当前选中项 */
+	.theme-btn[data-active="true"] {
+		background-color: var(--color-paper-muted);
+		color: var(--color-ink-primary);
+	}
+
+	:global(:root.dark) .theme-btn[data-active="true"] {
+		background-color: var(--color-paper-subtle);
+	}
+</style>
+
+<script>
+	/**
+	 * 主题状态管理
+	 * -------------------------------------------------------------------------
+	 * 存储 key: "zerx-theme"
+	 * 可选值: "light" | "dark" | "system"
+	 *
+	 * 逻辑:
+	 *   1. 读取 localStorage,未设置时默认 "system"
+	 *   2. 根据当前值在 <html> 上加/去 .dark 类
+	 *   3. "system" 模式下监听 prefers-color-scheme 变化,自动跟随
+	 *   4. 点击按钮切换,并更新按钮的 data-active 态
+	 *
+	 * 防闪烁: 见 AppShell.astro 中的内联 head 脚本(首屏前同步执行)
+	 *         此文件仅负责组件交互,不承担首屏样式注入
+	 */
+
+	const STORAGE_KEY = "zerx-theme";
+	type ThemeValue = "light" | "dark" | "system";
+
+	function getStoredTheme(): ThemeValue {
+		try {
+			const v = localStorage.getItem(STORAGE_KEY);
+			if (v === "light" || v === "dark" || v === "system") return v;
+		} catch {
+			// localStorage 不可用(隐私模式等),静默降级
+		}
+		return "system";
+	}
+
+	function getSystemPrefersDark(): boolean {
+		return window.matchMedia("(prefers-color-scheme: dark)").matches;
+	}
+
+	function applyTheme(value: ThemeValue): void {
+		const root = document.documentElement;
+		const effectiveDark =
+			value === "dark" ||
+			(value === "system" && getSystemPrefersDark());
+
+		root.classList.toggle("dark", effectiveDark);
+
+		// 同步 color-scheme 让浏览器原生控件(滚动条、表单)也跟随
+		root.style.colorScheme = effectiveDark ? "dark" : "light";
+	}
+
+	function updateButtonsActive(value: ThemeValue): void {
+		const buttons =
+			document.querySelectorAll<HTMLButtonElement>("[data-theme-btn]");
+		buttons.forEach((btn) => {
+			const isActive = btn.getAttribute("data-theme-btn") === value;
+			btn.setAttribute("data-active", String(isActive));
+			btn.setAttribute("aria-pressed", String(isActive));
+		});
+	}
+
+	function setTheme(value: ThemeValue): void {
+		try {
+			localStorage.setItem(STORAGE_KEY, value);
+		} catch {
+			// 忽略存储失败
+		}
+		applyTheme(value);
+		updateButtonsActive(value);
+	}
+
+	function init(): void {
+		const current = getStoredTheme();
+		applyTheme(current);
+		updateButtonsActive(current);
+
+		// 绑定点击
+		const buttons =
+			document.querySelectorAll<HTMLButtonElement>("[data-theme-btn]");
+		buttons.forEach((btn) => {
+			btn.addEventListener("click", () => {
+				const value = btn.getAttribute("data-theme-btn") as ThemeValue;
+				if (value === "light" || value === "dark" || value === "system") {
+					setTheme(value);
+				}
+			});
+		});
+
+		// 监听系统主题变化(仅在 system 模式下响应)
+		const mq = window.matchMedia("(prefers-color-scheme: dark)");
+		const listener = () => {
+			if (getStoredTheme() === "system") {
+				applyTheme("system");
+			}
+		};
+		if (mq.addEventListener) {
+			mq.addEventListener("change", listener);
+		} else if ((mq as MediaQueryList).addListener) {
+			// 旧浏览器兼容
+			(mq as MediaQueryList).addListener(listener);
+		}
+
+		// 跨标签页同步
+		window.addEventListener("storage", (e) => {
+			if (e.key === STORAGE_KEY && e.newValue) {
+				const v = e.newValue as ThemeValue;
+				if (v === "light" || v === "dark" || v === "system") {
+					applyTheme(v);
+					updateButtonsActive(v);
+				}
+			}
+		});
+	}
+
+	// Astro View Transitions 兼容:每次页面切换都重新绑定
+	init();
+	document.addEventListener("astro:after-swap", init);
+</script>

@@ -1,0 +1,370 @@
+/* ============================================================================
+ * ZerxLab Website - Global Styles
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com (黑白极简 / 编辑派 / Monospace 点缀 / 虚线分割)
+ * Tailwind v4 CSS-first 配置: 所有设计 tokens 通过 @theme 定义
+ * ============================================================================ */
+
+@import "tailwindcss";
+
+/* ----------------------------------------------------------------------------
+ * 设计 Tokens (Tailwind v4 @theme)
+ * 通过 @theme 暴露给 Tailwind,可在 class 中使用:
+ *   text-ink-primary / bg-paper / border-hairline 等
+ * -------------------------------------------------------------------------- */
+@theme {
+	/* ---------- 色板 ---------- */
+	/* 纸色系 (背景) - 非纯白,带一丝暖灰,与 better-auth 一致 */
+	--color-paper: #fafaf9;
+	--color-paper-muted: #f5f5f4;
+	--color-paper-subtle: #f0f0ef;
+
+	/* 墨色系 (文字/前景) - 非纯黑 */
+	--color-ink-primary: #0a0a0a;
+	--color-ink-secondary: #3f3f3e;
+	--color-ink-tertiary: #71716f;
+	--color-ink-muted: #a1a19f;
+	--color-ink-faint: #d4d4d2;
+
+	/* 发丝线 (分割线/边框) */
+	--color-hairline: rgba(10, 10, 10, 0.12);
+	--color-hairline-strong: rgba(10, 10, 10, 0.2);
+
+	/* 暗色模式 */
+	--color-paper-dark: #0a0a0a;
+	--color-paper-muted-dark: #131313;
+	--color-paper-subtle-dark: #1a1a1a;
+	--color-ink-primary-dark: #fafaf9;
+	--color-ink-secondary-dark: #c0c0be;
+	--color-ink-tertiary-dark: #8a8a88;
+	--color-ink-muted-dark: #5f5f5d;
+	--color-ink-faint-dark: #2a2a2a;
+	--color-hairline-dark: rgba(250, 250, 249, 0.14);
+	--color-hairline-strong-dark: rgba(250, 250, 249, 0.24);
+
+	/* 品牌色 (极少使用,仅做关键 CTA/高亮锚点) */
+	--color-accent: #0a0a0a;
+
+	/* ---------- 字体族 ---------- */
+	/* 正文: Geist Sans (英文) + Noto Sans SC (中文) 混排 */
+	--font-sans:
+		"Geist", "Noto Sans SC", -apple-system, BlinkMacSystemFont,
+		"Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	/* 等宽: Geist Mono,用于标签/代码/元信息/编号 */
+	--font-mono:
+		"Geist Mono", "JetBrains Mono", "Fira Code",
+		"SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+	/* 衬线: 预留给编辑派大标题 (可选) */
+	--font-serif:
+		"Iowan Old Style", "Apple Garamond", "Palatino Linotype",
+		"Times New Roman", Georgia, serif;
+
+	/* ---------- 字号阶梯 (编辑派:少而准) ---------- */
+	--text-micro: 0.6875rem; /* 11px - 超小标签/角标 */
+	--text-xs: 0.75rem; /* 12px - 元信息/编号 */
+	--text-sm: 0.8125rem; /* 13px - 辅助文字 */
+	--text-base: 0.9375rem; /* 15px - 正文(略小于主流 16px,更有编辑感) */
+	--text-lg: 1.125rem; /* 18px - 段落小标题 */
+	--text-xl: 1.375rem; /* 22px - 卡片标题 */
+	--text-2xl: 1.75rem; /* 28px - 区块标题 */
+	--text-3xl: 2.25rem; /* 36px - 页面 H1 */
+	--text-4xl: 2.75rem; /* 44px - Hero 中等 */
+	--text-5xl: 3.5rem; /* 56px - Hero 大 */
+	--text-6xl: 4.5rem; /* 72px - 展示型标题 */
+
+	/* ---------- 行高 ---------- */
+	--leading-tight: 1.15;
+	--leading-snug: 1.3;
+	--leading-normal: 1.55;
+	--leading-relaxed: 1.75;
+	--leading-loose: 2;
+
+	/* ---------- 字间距 (Monospace 元素专用) ---------- */
+	--tracking-tight: -0.02em;
+	--tracking-normal: 0;
+	--tracking-wide: 0.04em;
+	--tracking-wider: 0.08em; /* 全大写标签: RESOURCES / BLOG */
+	--tracking-widest: 0.14em;
+
+	/* ---------- 空间尺度 ---------- */
+	--spacing-hairline: 1px;
+	--spacing-xs: 0.25rem;
+	--spacing-sm: 0.5rem;
+	--spacing-md: 1rem;
+	--spacing-lg: 1.5rem;
+	--spacing-xl: 2.5rem;
+	--spacing-2xl: 4rem;
+	--spacing-3xl: 6rem;
+
+	/* ---------- 圆角 (编辑派:几乎不用圆角) ---------- */
+	--radius-none: 0;
+	--radius-sm: 2px;
+	--radius-md: 4px;
+	--radius-lg: 6px;
+
+	/* ---------- 过渡 ---------- */
+	--ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+	--ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+	--duration-fast: 120ms;
+	--duration-base: 200ms;
+	--duration-slow: 360ms;
+
+	/* ---------- 布局断点/尺寸 ---------- */
+	--layout-left-pane: 38%; /* 桌面端左栏宽度占比 */
+	--layout-left-pane-max: 460px;
+	--layout-right-pane-max: 960px;
+	--layout-top-nav-height: 56px;
+	--layout-breakpoint-split: 1024px; /* 低于此宽度双栏塌陷为单栏 */
+}
+
+/* ----------------------------------------------------------------------------
+ * 暗色模式变量映射
+ * 使用 .dark 类触发 (JS 在 <html> 上加类)
+ * -------------------------------------------------------------------------- */
+@layer base {
+	:root {
+		color-scheme: light;
+	}
+
+	:root.dark {
+		color-scheme: dark;
+		--color-paper: var(--color-paper-dark);
+		--color-paper-muted: var(--color-paper-muted-dark);
+		--color-paper-subtle: var(--color-paper-subtle-dark);
+		--color-ink-primary: var(--color-ink-primary-dark);
+		--color-ink-secondary: var(--color-ink-secondary-dark);
+		--color-ink-tertiary: var(--color-ink-tertiary-dark);
+		--color-ink-muted: var(--color-ink-muted-dark);
+		--color-ink-faint: var(--color-ink-faint-dark);
+		--color-hairline: var(--color-hairline-dark);
+		--color-hairline-strong: var(--color-hairline-strong-dark);
+		--color-accent: var(--color-ink-primary-dark);
+	}
+}
+
+/* ----------------------------------------------------------------------------
+ * 基础重置 & 全局默认
+ * -------------------------------------------------------------------------- */
+@layer base {
+	* {
+		border-color: var(--color-hairline);
+	}
+
+	html {
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+		text-rendering: optimizeLegibility;
+		font-feature-settings:
+			"ss01", "ss02", "cv11", "ss03";
+		/* 流畅滚动,但锚点跳转仍即时 */
+		scroll-behavior: smooth;
+	}
+
+	body {
+		background-color: var(--color-paper);
+		color: var(--color-ink-primary);
+		font-family: var(--font-sans);
+		font-size: var(--text-base);
+		line-height: var(--leading-normal);
+		letter-spacing: -0.005em;
+		min-height: 100vh;
+		min-height: 100dvh;
+		/* 噪点纹理: 极淡,仅亮色模式下可见,贴合 better-auth 的"纸感" */
+		background-image: url("/textures/noise.svg");
+		background-repeat: repeat;
+		background-size: 240px 240px;
+		background-attachment: fixed;
+	}
+
+	:root.dark body {
+		/* 暗色模式下不使用噪点,避免脏感 */
+		background-image: none;
+	}
+
+	/* 标题字族:与正文一致,靠字重/大小拉层级 */
+	h1, h2, h3, h4, h5, h6 {
+		font-family: var(--font-sans);
+		color: var(--color-ink-primary);
+		letter-spacing: -0.02em;
+		line-height: var(--leading-tight);
+		font-weight: 500;
+	}
+
+	h1 {
+		font-size: var(--text-3xl);
+		font-weight: 500;
+	}
+	h2 {
+		font-size: var(--text-2xl);
+	}
+	h3 {
+		font-size: var(--text-xl);
+	}
+
+	/* 链接: 无下划线,继承颜色,hover 时显墨色 */
+	a {
+		color: inherit;
+		text-decoration: none;
+		transition: color var(--duration-fast) var(--ease-standard);
+	}
+
+	a:hover {
+		color: var(--color-ink-primary);
+	}
+
+	/* 代码段内联 */
+	code {
+		font-family: var(--font-mono);
+		font-size: 0.9em;
+		background-color: var(--color-paper-muted);
+		padding: 0.1em 0.35em;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--color-hairline);
+	}
+
+	pre {
+		font-family: var(--font-mono);
+		font-size: var(--text-sm);
+		line-height: var(--leading-snug);
+		overflow-x: auto;
+	}
+
+	pre code {
+		background: none;
+		border: none;
+		padding: 0;
+	}
+
+	/* 选区 */
+	::selection {
+		background-color: var(--color-ink-primary);
+		color: var(--color-paper);
+	}
+
+	/* 聚焦态:保留默认可达性,但换成墨色虚线描边 */
+	:focus-visible {
+		outline: 2px solid var(--color-ink-primary);
+		outline-offset: 2px;
+		border-radius: var(--radius-sm);
+	}
+
+	/* 图片默认响应 */
+	img, svg, video {
+		max-width: 100%;
+		height: auto;
+	}
+}
+
+/* ----------------------------------------------------------------------------
+ * Utilities (重复使用的原子组合,供 Astro 组件中以 class 形式调用)
+ * -------------------------------------------------------------------------- */
+@layer utilities {
+	/* 全大写 Monospace 标签: 用于导航项、分区标题、元信息 key */
+	.mono-label {
+		font-family: var(--font-mono);
+		font-size: var(--text-xs);
+		text-transform: uppercase;
+		letter-spacing: var(--tracking-wider);
+		color: var(--color-ink-tertiary);
+		font-weight: 500;
+	}
+
+	/* 编号前缀 01 02 03 - 编辑派灵魂 */
+	.mono-num {
+		font-family: var(--font-mono);
+		font-size: var(--text-xs);
+		color: var(--color-ink-muted);
+		letter-spacing: var(--tracking-wide);
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* 虚线发丝分割线(核心视觉元素之一) */
+	.hairline {
+		border: 0;
+		border-top: 1px dashed var(--color-hairline);
+		height: 0;
+	}
+
+	.hairline-solid {
+		border: 0;
+		border-top: 1px solid var(--color-hairline);
+		height: 0;
+	}
+
+	.hairline-v {
+		border: 0;
+		border-left: 1px dashed var(--color-hairline);
+		width: 0;
+		align-self: stretch;
+	}
+
+	/* Key-Value 元信息行: 左 label 右 value,中间点线填充 */
+	.meta-row {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--spacing-sm);
+		font-size: var(--text-xs);
+		font-family: var(--font-mono);
+		letter-spacing: var(--tracking-wide);
+		padding-block: 0.5rem;
+		border-bottom: 1px dashed var(--color-hairline);
+	}
+
+	.meta-row__key {
+		color: var(--color-ink-tertiary);
+		text-transform: uppercase;
+	}
+
+	.meta-row__value {
+		color: var(--color-ink-primary);
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* 容器:右栏内容最大可读宽度 */
+	.prose-container {
+		max-width: var(--layout-right-pane-max);
+		margin-inline: auto;
+		padding-inline: var(--spacing-xl);
+	}
+
+	/* 隐藏滚动条但保留滚动能力 */
+	.scroll-hidden {
+		scrollbar-width: none;
+		-ms-overflow-style: none;
+	}
+	.scroll-hidden::-webkit-scrollbar {
+		display: none;
+	}
+
+	/* 细款滚动条:用于右栏 */
+	.scroll-thin {
+		scrollbar-width: thin;
+		scrollbar-color: var(--color-hairline-strong) transparent;
+	}
+	.scroll-thin::-webkit-scrollbar {
+		width: 8px;
+		height: 8px;
+	}
+	.scroll-thin::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	.scroll-thin::-webkit-scrollbar-thumb {
+		background-color: var(--color-hairline-strong);
+		border-radius: 4px;
+	}
+}
+
+/* ----------------------------------------------------------------------------
+ * 减少动效偏好支持
+ * -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}

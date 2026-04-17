@@ -1,0 +1,53 @@
+---
+/**
+ * ============================================================================
+ * 博客详情页 (中文,默认无前缀)
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /blog/:slug        → 本文件(zh)
+ *   /en/blog/:slug     → src/pages/en/blog/[slug].astro(英文)
+ *
+ * 实现:
+ *   - 通过 getStaticPaths 预生成所有文章页(SSG 构建期枚举)
+ *   - 页面主体全部抽到 BlogPostPage 共享组件,本文件仅负责路由参数与数据源枚举
+ *   - 数据源:fallback-data(Directus 未 bootstrap 时保证可用)
+ *
+ * 为什么用 getStaticPaths:
+ *   本站走 `output: "static"`,动态路由必须在构建期穷举所有可能的 slug,
+ *   否则 Astro 会报 "GetStaticPathsRequired"。
+ *
+ * 维护约定:
+ *   若要修改文章详情页的结构/样式/数据拉取逻辑,只改
+ *   src/components/blog/BlogPostPage.astro,本文件与英文入口都会受益。
+ * ============================================================================
+ */
+
+import BlogPostPage from "@components/blog/BlogPostPage.astro";
+import { listFallbackPosts } from "@lib/fallback-data";
+
+/**
+ * 枚举所有博客 slug。
+ *
+ * 当未来接入 Directus 后,可在此处改为:
+ *   const posts = DIRECTUS_CONFIG.hasReadToken
+ *     ? await loadAllPublishedSlugsFromDirectus()
+ *     : listFallbackPosts();
+ *
+ * 目前阶段只走 fallback,保证静态构建永远能产出所有文章页。
+ */
+export async function getStaticPaths() {
+	const posts = listFallbackPosts();
+	return posts.map((post) => ({
+		params: { slug: post.slug },
+		props: { slug: post.slug },
+	}));
+}
+
+interface Props {
+	slug: string;
+}
+
+const { slug } = Astro.props as Props;
+---
+
+<BlogPostPage slug={slug} />

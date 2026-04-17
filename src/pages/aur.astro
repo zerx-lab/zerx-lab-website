@@ -1,0 +1,27 @@
+---
+/**
+ * ============================================================================
+ * AUR 页 (中文,默认无前缀)
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /aur     → 本文件(zh)
+ *   /en/aur  → src/pages/en/aur.astro(英文)
+ *
+ * 实现:
+ *   全部逻辑抽到 AurPage 共享组件,本文件仅做入口。
+ *   页面中的语言由 Astro.url 推断(AurPage 内部调用 getLangFromUrl)。
+ *
+ * 数据源:
+ *   - Directus aur_packages 集合(已 bootstrap 时)
+ *   - 失败/未 bootstrap 时自动 fallback 到 src/lib/fallback-data.ts
+ *
+ * 维护约定:
+ *   若要修改 AUR 页的结构/样式/数据拉取逻辑,只改
+ *   src/components/aur/AurPage.astro,本文件与英文入口都会受益。
+ * ============================================================================
+ */
+
+import AurPage from "@components/aur/AurPage.astro";
+---
+
+<AurPage />

@@ -1,0 +1,848 @@
+---
+/**
+ * ============================================================================
+ * ProjectsPage - 开源项目列表页共享组件
+ * ----------------------------------------------------------------------------
+ * 为什么抽成独立组件:
+ *   中文 /projects 与英文 /en/projects 两个入口页面 95% 的逻辑相同,
+ *   只有语言推导与少量默认文案不同。本组件负责:
+ *     1. 从 Directus 拉取 projects(失败时 fallback 到 FALLBACK_PROJECTS)
+ *     2. 把 Bilingual 字段按当前 lang 解包
+ *     3. 分类展示:Featured(精选) + All(全部)
+ *     4. 组合左栏(项目统计 meta)与右栏(分区 + 列表)
+ *
+ * 视觉策略(参考 better-auth.com 的"编辑派 + 数据点"组合):
+ *   - Featured 分区:每个项目一张大卡,带编号、stars/forks、语言徽标、外链按钮
+ *   - All 分区:紧凑列表,一行一个项目,只含核心字段
+ *   - 不使用圆角、不使用阴影;靠虚线分割 + Monospace 元素 + 留白拉层级
+ *
+ * 左栏 meta 字段说明:
+ *   - REPOSITORIES  仓库总数
+ *   - TOTAL STARS   汇总 star 数
+ *   - LANGUAGES     占比前 3 的语言
+ *   - LICENSE       统一为 MIT
+ * ============================================================================
+ */
+
+import AppShell from "@layouts/AppShell.astro";
+import SectionHeader from "@components/ui/SectionHeader.astro";
+import MetaRow from "@components/ui/MetaRow.astro";
+import {
+	getLangFromUrl,
+	useTranslations,
+	useTranslatedPath,
+} from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+import {
+	listFallbackProjects,
+	FALLBACK_LANGUAGE_STATS,
+	pickLang,
+	type FallbackProject,
+} from "@lib/fallback-data";
+import { directus, readItems, DIRECTUS_CONFIG } from "@lib/directus";
+
+/* ----------------------------------------------------------------------------
+ * 当前语言 / 翻译工具
+ * -------------------------------------------------------------------------- */
+
+const lang = getLangFromUrl(Astro.url) as Lang;
+const t = useTranslations(lang);
+const tp = useTranslatedPath(lang);
+
+/* ----------------------------------------------------------------------------
+ * 数据适配器
+ * ----------------------------------------------------------------------------
+ * 统一的 ViewModel:无论从 Directus 还是 Fallback 来,列表渲染只认这一个形状。
+ * -------------------------------------------------------------------------- */
+
+interface ProjectVM {
+	slug: string;
+	name: string;
+	description: string;
+	highlights: string;
+	techStack: readonly string[];
+	kind: string;
+	language: string;
+	githubUrl: string;
+	demoUrl: string | null;
+	docsUrl: string | null;
+	npmUrl: string | null;
+	stars: number;
+	forks: number;
+	featured: boolean;
+}
+
+/** 把 FallbackProject 转成 ViewModel(按当前 lang 解包 Bilingual) */
+function fallbackToVM(project: FallbackProject, currentLang: Lang): ProjectVM {
+	return {
+		slug: project.slug,
+		name: project.name,
+		description: pickLang(project.description, currentLang),
+		highlights: pickLang(project.highlights, currentLang),
+		techStack: project.techStack,
+		kind: project.kind,
+		language: project.language,
+		githubUrl: project.githubUrl,
+		demoUrl: project.demoUrl,
+		docsUrl: project.docsUrl,
+		npmUrl: project.npmUrl,
+		stars: project.stars,
+		forks: project.forks,
+		featured: project.featured,
+	};
+}
+
+/* ----------------------------------------------------------------------------
+ * 尝试从 Directus 拉取,失败则走 Fallback
+ * -------------------------------------------------------------------------- */
+
+async function loadProjects(): Promise<readonly ProjectVM[]> {
+	if (!DIRECTUS_CONFIG.hasReadToken) {
+		return listFallbackProjects().map((p) => fallbackToVM(p, lang));
+	}
+
+	try {
+		const client = directus();
+		const langCode = lang === "zh" ? "zh-CN" : "en-US";
+
+		const projectFields: any = [
+			"id",
+			"slug",
+			"name",
+			"tech_stack",
+			"kind",
+			"github_url",
+			"demo_url",
+			"docs_url",
+			"npm_url",
+			"stars",
+			"forks",
+			"featured",
+			"sort",
+			{
+				translations: [
+					"languages_code",
+					"description",
+					"highlights",
+				],
+			},
+		];
+
+		const result = (await client.request(
+			readItems("projects", {
+				filter: { status: { _eq: "published" } },
+				sort: ["-stars", "sort"],
+				fields: projectFields,
+				limit: -1,
+			}),
+		)) as any[];
+
+		return result.map((row): ProjectVM => {
+			const tr = row?.translations?.find(
+				(x: any) =>
+					x.languages_code === langCode ||
+					x.languages_code?.code === langCode,
+			);
+
+			// highlights 可能是数组或字符串,列表展示用一行字符串
+			const rawHighlights = tr?.highlights;
+			const highlightsStr = Array.isArray(rawHighlights)
+				? rawHighlights.join(" · ")
+				: typeof rawHighlights === "string"
+					? rawHighlights
+					: "";
+
+			const techStack: readonly string[] = Array.isArray(row?.tech_stack)
+				? row.tech_stack
+				: [];
+
+			// 推断主语言:优先用 tech_stack 首项,否则 fallback 到 "Unknown"
+			const language =
+				typeof row?.language === "string"
+					? row.language
+					: (techStack[0] ?? "Unknown");
+
+			return {
+				slug: row?.slug ?? "",
+				name: row?.name ?? row?.slug ?? "",
+				description: tr?.description ?? "",
+				highlights: highlightsStr,
+				techStack,
+				kind: row?.kind ?? "library",
+				language,
+				githubUrl: row?.github_url ?? "",
+				demoUrl: row?.demo_url ?? null,
+				docsUrl: row?.docs_url ?? null,
+				npmUrl: row?.npm_url ?? null,
+				stars: typeof row?.stars === "number" ? row.stars : 0,
+				forks: typeof row?.forks === "number" ? row.forks : 0,
+				featured: Boolean(row?.featured),
+			};
+		});
+	} catch (err) {
+		console.warn(
+			"[projects] Directus 读取失败,使用 FALLBACK。原因:",
+			(err as Error)?.message ?? err,
+		);
+		return listFallbackProjects().map((p) => fallbackToVM(p, lang));
+	}
+}
+
+const projects = await loadProjects();
+
+/* ----------------------------------------------------------------------------
+ * 左栏 meta 数据计算
+ * -------------------------------------------------------------------------- */
+
+const totalStars = projects.reduce((sum, p) => sum + (p.stars ?? 0), 0);
+const totalForks = projects.reduce((sum, p) => sum + (p.forks ?? 0), 0);
+
+// 前 3 语言(按 GitHub 统计),紧凑显示
+const topLanguages = FALLBACK_LANGUAGE_STATS.slice(0, 3)
+	.map((l) => l.name)
+	.join(" / ");
+
+const featuredProjects = projects.filter((p) => p.featured);
+const regularProjects = projects.filter((p) => !p.featured);
+
+/* ----------------------------------------------------------------------------
+ * 页面级文案
+ * -------------------------------------------------------------------------- */
+
+const COPY = {
+	zh: {
+		eyebrow: "项目",
+		title: "开源项目",
+		description:
+			"从系统工具到全栈应用,ZerxLab 维护与贡献的开源项目都列在这里。全部 MIT 许可,代码即文档。",
+		empty: "暂无项目。",
+		sectionFeatured: "FEATURED",
+		sectionAll: "ALL PROJECTS",
+		viewSource: "源码",
+		viewDemo: "在线体验",
+		viewDocs: "文档",
+		viewNpm: "NPM",
+		starsLabel: "Stars",
+		forksLabel: "Forks",
+		kindLabel: "类型",
+		kinds: {
+			library: "库",
+			tool: "工具",
+			app: "应用",
+			experiment: "实验",
+			service: "服务",
+		} as Record<string, string>,
+	},
+	en: {
+		eyebrow: "Projects",
+		title: "Open-source projects",
+		description:
+			"From system tools to full-stack apps — every project ZerxLab maintains or actively contributes to. All MIT licensed, code as docs.",
+		empty: "No projects yet.",
+		sectionFeatured: "FEATURED",
+		sectionAll: "ALL PROJECTS",
+		viewSource: "Source",
+		viewDemo: "Demo",
+		viewDocs: "Docs",
+		viewNpm: "NPM",
+		starsLabel: "Stars",
+		forksLabel: "Forks",
+		kindLabel: "Kind",
+		kinds: {
+			library: "Library",
+			tool: "Tool",
+			app: "App",
+			experiment: "Experiment",
+			service: "Service",
+		} as Record<string, string>,
+	},
+} as const;
+
+const C = COPY[lang] ?? COPY.zh;
+
+/* ----------------------------------------------------------------------------
+ * 工具函数:格式化星数(1200 → 1.2k)
+ * -------------------------------------------------------------------------- */
+
+function formatCount(n: number): string {
+	if (n < 1000) return String(n);
+	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+	return `${Math.round(n / 1000)}k`;
+}
+---
+
+<AppShell
+	title={C.title}
+	description={C.description}
+	eyebrow={C.eyebrow}
+	leftTitle={C.title}
+	leftDescription={C.description}
+>
+	{/* ---------- 左栏:社交图标 ---------- */}
+	<Fragment slot="left-social">
+		<a
+			href="https://github.com/zerx-lab"
+			target="_blank"
+			rel="noopener noreferrer"
+			aria-label="GitHub"
+			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="currentColor"
+				aria-hidden="true"
+			>
+				<path
+					d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
+				></path>
+			</svg>
+		</a>
+	</Fragment>
+
+	{/* ---------- 左栏:Meta ---------- */}
+	<Fragment slot="left-meta">
+		<MetaRow
+			label={t("meta.repositories")}
+			value={String(projects.length)}
+		/>
+		<MetaRow
+			label={t("meta.totalStars")}
+			value={formatCount(totalStars)}
+		/>
+		<MetaRow label="FORKS" value={formatCount(totalForks)} />
+		<MetaRow label={t("meta.languages")} value={topLanguages} />
+		<MetaRow label={t("meta.license")} value="MIT" />
+	</Fragment>
+
+	{/* ==========================================================================
+	 *                            右栏主内容
+	 * ========================================================================== */}
+
+	{
+		projects.length === 0 ? (
+			/* 空状态 */
+			<>
+				<SectionHeader eyebrow={C.sectionAll} />
+				<div
+					class:list={[
+						"mt-12 lg:mt-16 mb-16",
+						"flex flex-col items-center justify-center",
+						"py-16 lg:py-20",
+						"border border-dashed border-[color:var(--color-hairline)]",
+						"text-center",
+					]}
+				>
+					<span
+						aria-hidden="true"
+						class:list={[
+							"mono-label",
+							"text-[11px]",
+							"text-[color:var(--color-ink-muted)]",
+							"mb-3",
+						]}
+					>
+						— EMPTY —
+					</span>
+					<p
+						class:list={[
+							"text-[color:var(--color-ink-secondary)]",
+							"text-[14px]",
+							"leading-[1.6]",
+						]}
+					>
+						{C.empty}
+					</p>
+				</div>
+			</>
+		) : (
+			<>
+				{/* ---------- FEATURED 分区 ---------- */}
+				{featuredProjects.length > 0 && (
+					<>
+						<SectionHeader
+							eyebrow={C.sectionFeatured}
+							count={featuredProjects.length}
+						/>
+
+						<div
+							class:list={[
+								"mt-6 lg:mt-8",
+								"grid grid-cols-1 md:grid-cols-2",
+								"border border-dashed border-[color:var(--color-hairline)]",
+								"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
+							]}
+						>
+							{featuredProjects.map((project, idx) => (
+								<article
+									class:list={[
+										"group relative flex flex-col",
+										"p-5 sm:p-6 lg:p-7",
+										"min-h-[260px]",
+										"bg-[color:var(--color-paper-muted)]/20",
+										"hover:bg-[color:var(--color-paper-muted)]/50",
+										"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+									]}
+								>
+									{/* 顶栏:编号 + 类型徽标 + 主语言 */}
+									<div class="flex items-center gap-2 mb-4">
+										<span
+											aria-hidden="true"
+											class:list={[
+												"mono-num",
+												"text-[10.5px] leading-none",
+												"text-[color:var(--color-ink-muted)]",
+												"tabular-nums",
+											]}
+										>
+											{String(idx + 1).padStart(2, "0")}
+										</span>
+
+										<span
+											class:list={[
+												"mono-label",
+												"text-[10px] leading-none",
+												"tracking-[var(--tracking-wider)]",
+												"text-[color:var(--color-ink-tertiary)]",
+												"uppercase",
+											]}
+										>
+											{C.kinds[project.kind] ?? project.kind}
+										</span>
+
+										{/* 主语言徽标 */}
+										<span
+											class:list={[
+												"inline-flex items-center gap-1",
+												"ml-auto",
+												"font-[var(--font-mono)]",
+												"text-[10px] leading-none",
+												"tracking-[var(--tracking-wide)]",
+												"text-[color:var(--color-ink-secondary)]",
+												"border border-[color:var(--color-hairline)]",
+												"rounded-[var(--radius-sm)]",
+												"px-1.5 py-[3px]",
+											]}
+										>
+											<span
+												aria-hidden="true"
+												class="inline-block h-[6px] w-[6px] rounded-full bg-[color:var(--color-ink-secondary)]"
+											></span>
+											{project.language}
+										</span>
+									</div>
+
+									{/* 项目名(大字标题) */}
+									<h3
+										class:list={[
+											"font-medium",
+											"text-[color:var(--color-ink-primary)]",
+											"tracking-[-0.015em]",
+											"leading-[1.25]",
+											"text-[20px] sm:text-[22px] lg:text-[24px]",
+											"font-[var(--font-mono)]",
+											"mb-2",
+										]}
+									>
+										{project.name}
+									</h3>
+
+									{/* 高亮一句话 */}
+									{project.highlights && (
+										<p
+											class:list={[
+												"mono-label",
+												"text-[10.5px] leading-[1.5]",
+												"tracking-[var(--tracking-wide)]",
+												"text-[color:var(--color-ink-tertiary)]",
+												"uppercase",
+												"mb-4",
+											]}
+										>
+											{project.highlights}
+										</p>
+									)}
+
+									{/* 描述 */}
+									<p
+										class:list={[
+											"text-[color:var(--color-ink-secondary)]",
+											"text-[13.5px] sm:text-[14px]",
+											"leading-[1.6]",
+											"mb-5",
+											"flex-1",
+										]}
+									>
+										{project.description}
+									</p>
+
+									{/* 技术栈标签 */}
+									{project.techStack.length > 0 && (
+										<div class="flex flex-wrap gap-1.5 mb-5">
+											{project.techStack.map((tech) => (
+												<span
+													class:list={[
+														"inline-flex items-center",
+														"px-2 py-[3px]",
+														"font-[var(--font-mono)]",
+														"text-[10px]",
+														"leading-none",
+														"tracking-[var(--tracking-wide)]",
+														"text-[color:var(--color-ink-secondary)]",
+														"bg-[color:var(--color-paper-muted)]/60",
+														"border border-[color:var(--color-hairline)]",
+														"rounded-[var(--radius-sm)]",
+													]}
+												>
+													{tech}
+												</span>
+											))}
+										</div>
+									)}
+
+									{/* 底栏:stars / forks + 操作按钮 */}
+									<div
+										class:list={[
+											"flex items-center gap-3",
+											"pt-4",
+											"border-t border-dashed border-[color:var(--color-hairline)]",
+										]}
+									>
+										{/* stars */}
+										<span
+											class:list={[
+												"inline-flex items-center gap-1.5",
+												"font-[var(--font-mono)]",
+												"text-[11px] leading-none",
+												"text-[color:var(--color-ink-tertiary)]",
+												"tabular-nums",
+											]}
+											title={`${project.stars} ${C.starsLabel}`}
+										>
+											<svg
+												aria-hidden="true"
+												width="11"
+												height="11"
+												viewBox="0 0 24 24"
+												fill="currentColor"
+											>
+												<path d="M12 .587l3.668 7.568 8.332 1.151-6.064 5.828 1.48 8.279L12 19.446l-7.416 3.967 1.48-8.279L0 9.306l8.332-1.151z" />
+											</svg>
+											<span>{formatCount(project.stars)}</span>
+										</span>
+
+										{/* forks */}
+										<span
+											class:list={[
+												"inline-flex items-center gap-1.5",
+												"font-[var(--font-mono)]",
+												"text-[11px] leading-none",
+												"text-[color:var(--color-ink-tertiary)]",
+												"tabular-nums",
+											]}
+											title={`${project.forks} ${C.forksLabel}`}
+										>
+											<svg
+												aria-hidden="true"
+												width="11"
+												height="11"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<circle cx="6" cy="5" r="2.5" />
+												<circle cx="18" cy="5" r="2.5" />
+												<circle cx="12" cy="19" r="2.5" />
+												<path d="M6 7.5v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3v-3" />
+												<path d="M12 13.5v3" />
+											</svg>
+											<span>{formatCount(project.forks)}</span>
+										</span>
+
+										{/* 外链按钮组 */}
+										<div
+											class:list={[
+												"flex items-center gap-1",
+												"ml-auto",
+											]}
+										>
+											<a
+												href={project.githubUrl}
+												target="_blank"
+												rel="noopener noreferrer"
+												aria-label={`${project.name} — ${C.viewSource}`}
+												class:list={[
+													"inline-flex items-center gap-1.5",
+													"px-2.5 py-1.5",
+													"mono-label",
+													"text-[10px] leading-none",
+													"tracking-[var(--tracking-wider)]",
+													"text-[color:var(--color-ink-secondary)]",
+													"hover:text-[color:var(--color-ink-primary)]",
+													"hover:bg-[color:var(--color-paper-muted)]",
+													"border border-[color:var(--color-hairline)]",
+													"rounded-[var(--radius-sm)]",
+													"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+												]}
+											>
+												<span>{C.viewSource}</span>
+												<svg
+													aria-hidden="true"
+													width="9"
+													height="9"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.5"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M7 17L17 7" />
+													<path d="M8 7h9v9" />
+												</svg>
+											</a>
+
+											{project.demoUrl && (
+												<a
+													href={project.demoUrl}
+													target="_blank"
+													rel="noopener noreferrer"
+													aria-label={`${project.name} — ${C.viewDemo}`}
+													class:list={[
+														"inline-flex items-center gap-1.5",
+														"px-2.5 py-1.5",
+														"mono-label",
+														"text-[10px] leading-none",
+														"tracking-[var(--tracking-wider)]",
+														"text-[color:var(--color-paper)]",
+														"bg-[color:var(--color-ink-primary)]",
+														"hover:bg-[color:var(--color-ink-secondary)]",
+														"rounded-[var(--radius-sm)]",
+														"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+													]}
+												>
+													<span>{C.viewDemo}</span>
+												</a>
+											)}
+										</div>
+									</div>
+								</article>
+							))}
+						</div>
+					</>
+				)}
+
+				{/* ---------- ALL 分区(紧凑列表,不含已在 featured 展示的项目) ---------- */}
+				{regularProjects.length > 0 && (
+					<>
+						<SectionHeader
+							eyebrow={C.sectionAll}
+							count={regularProjects.length}
+							spacious
+						/>
+
+						<ul
+							class:list={[
+								"mt-6 lg:mt-8 mb-16",
+								"list-none m-0 p-0",
+								"border border-dashed border-[color:var(--color-hairline)]",
+								"divide-y divide-dashed divide-[color:var(--color-hairline)]",
+							]}
+						>
+							{regularProjects.map((project, idx) => (
+								<li>
+									<a
+										href={project.githubUrl}
+										target="_blank"
+										rel="noopener noreferrer"
+										class:list={[
+											"group",
+											"flex flex-col sm:flex-row sm:items-center",
+											"gap-3 sm:gap-5",
+											"px-4 sm:px-5 lg:px-6 py-4 lg:py-5",
+											"hover:bg-[color:var(--color-paper-muted)]/60",
+											"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+										]}
+									>
+										{/* 左:编号 + 名字 + 描述 */}
+										<div class="flex-1 min-w-0 flex items-baseline gap-3">
+											<span
+												aria-hidden="true"
+												class:list={[
+													"mono-num",
+													"text-[10.5px] leading-none",
+													"text-[color:var(--color-ink-muted)]",
+													"tabular-nums",
+													"shrink-0",
+												]}
+											>
+												{String(
+													idx + 1 + featuredProjects.length,
+												).padStart(2, "0")}
+											</span>
+
+											<div class="flex-1 min-w-0">
+												<div class="flex items-baseline gap-2 flex-wrap">
+													<h4
+														class:list={[
+															"font-[var(--font-mono)]",
+															"text-[14px] sm:text-[15px]",
+															"leading-none",
+															"font-semibold",
+															"text-[color:var(--color-ink-primary)]",
+															"tracking-[-0.005em]",
+															"truncate",
+														]}
+													>
+														{project.name}
+													</h4>
+
+													<span
+														class:list={[
+															"mono-label",
+															"text-[9.5px] leading-none",
+															"text-[color:var(--color-ink-muted)]",
+															"uppercase",
+														]}
+													>
+														{C.kinds[project.kind] ?? project.kind}
+													</span>
+												</div>
+
+												<p
+													class:list={[
+														"text-[color:var(--color-ink-secondary)]",
+														"text-[13px]",
+														"leading-[1.55]",
+														"mt-1.5",
+														"line-clamp-2 sm:line-clamp-1",
+														"max-w-[72ch]",
+													]}
+												>
+													{project.description}
+												</p>
+											</div>
+										</div>
+
+										{/*
+										 * 右:stars + 语言 + 箭头
+										 * --------------------------------------------------------
+										 * 为了让不同项目之间 stars 数字与语言标签竖向对齐(避免
+										 * ★ 65 / ★ 15 / ★ 0 宽度不一推着语言左右漂),
+										 * 三个槽位各给一个固定宽度:
+						                 *   - stars  列:固定 56px,右对齐
+						                 *   - lang   列:固定 96px,左对齐(大写 Mono 文字)
+						                 *   - arrow  列:固定 14px
+						                 * 移动端 sm 以下仍然只显示 stars(其他隐藏),宽度约束 fit-content
+										 */}
+										<div
+											class:list={[
+												"flex items-center",
+												"gap-3 sm:gap-4",
+												"shrink-0",
+												"pl-8 sm:pl-0",
+											]}
+										>
+											{/* stars 列:右对齐的固定宽度单元格 */}
+											<span
+												class:list={[
+													"inline-flex items-center justify-end gap-1",
+													"font-[var(--font-mono)]",
+													"text-[11px] leading-none",
+													"text-[color:var(--color-ink-tertiary)]",
+													"tabular-nums",
+													"sm:w-[56px]",
+												]}
+												aria-label={`${project.stars} ${C.starsLabel}`}
+											>
+												<svg
+													aria-hidden="true"
+													width="10"
+													height="10"
+													viewBox="0 0 24 24"
+													fill="currentColor"
+													class="shrink-0"
+												>
+													<path d="M12 .587l3.668 7.568 8.332 1.151-6.064 5.828 1.48 8.279L12 19.446l-7.416 3.967 1.48-8.279L0 9.306l8.332-1.151z" />
+												</svg>
+												<span class="tabular-nums">{formatCount(project.stars)}</span>
+											</span>
+
+											{/* 语言 列:左对齐的固定宽度单元格,移动端隐藏 */}
+											<span
+												class:list={[
+													"mono-label",
+													"text-[10px] leading-none",
+													"text-[color:var(--color-ink-secondary)]",
+													"uppercase",
+													"hidden sm:inline-block",
+													"sm:w-[96px]",
+													"truncate",
+												]}
+											>
+												{project.language}
+											</span>
+
+											{/* 箭头 列:固定宽度,hover 时浮现 */}
+											<span
+												aria-hidden="true"
+												class:list={[
+													"hidden sm:inline-flex items-center justify-center",
+													"w-[14px] h-[14px]",
+													"text-[color:var(--color-ink-muted)]",
+												]}
+											>
+												<svg
+													width="12"
+													height="12"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													class:list={[
+														"opacity-0 group-hover:opacity-100",
+														"group-hover:translate-x-[1px] group-hover:-translate-y-[1px]",
+														"transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+													]}
+												>
+													<path d="M7 17L17 7" />
+													<path d="M8 7h9v9" />
+												</svg>
+											</span>
+										</div>
+									</a>
+								</li>
+							))}
+						</ul>
+					</>
+				)}
+			</>
+		)
+	}
+</AppShell>
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * line-clamp 兜底
+	 * -------------------------------------------------------------------------- */
+
+	.line-clamp-1 {
+		display: -webkit-box;
+		-webkit-line-clamp: 1;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+
+	.line-clamp-2 {
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+</style>

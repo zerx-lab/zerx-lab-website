@@ -1,0 +1,282 @@
+---
+/**
+ * ============================================================================
+ * BaseHead - 站点通用 <head> 片段
+ * ----------------------------------------------------------------------------
+ * 承担:
+ *   1. 基础 meta(charset / viewport / color-scheme)
+ *   2. SEO meta(title / description / canonical)
+ *   3. Open Graph + Twitter Card
+ *   4. hreflang 多语言声明
+ *   5. 字体预加载(Geist Sans / Geist Mono / Noto Sans SC)
+ *   6. favicon / 主题色
+ *   7. 主题防闪烁脚本(在 body 渲染前同步执行,决定是否加 .dark 类)
+ *   8. RSS / sitemap 自动发现
+ *
+ * 使用:
+ *   在每个 layout 或页面的 <head> 里引用:
+ *     <BaseHead title="..." description="..." />
+ *
+ *   也可以透传覆盖 OG 图片、canonical:
+ *     <BaseHead title="..." ogImage="/og/blog-1.png" />
+ *
+ * 设计约束:
+ *   - 不引入任何客户端框架,纯 Astro + 内联脚本
+ *   - 防闪烁脚本不超过 1KB,必须同步执行
+ *   - 字体自托管,不外链 Google Fonts(合规 + 国内访问)
+ * ============================================================================
+ */
+
+import {
+	getLangFromUrl,
+	useTranslations,
+	getHreflangLinks,
+} from "@i18n/utils";
+import { languageTags } from "@i18n/ui";
+
+interface Props {
+	/** 页面标题(不含站点后缀,由本组件自动拼接) */
+	title?: string;
+	/** 页面描述(150-160 字符最佳) */
+	description?: string;
+	/** Open Graph 分享图(相对 /public 或绝对 URL) */
+	ogImage?: string;
+	/** OG 类型:website(默认)/ article(博客详情页) */
+	ogType?: "website" | "article";
+	/** 文章发布时间(仅 ogType=article 使用) */
+	articlePublishedTime?: string;
+	/** 文章更新时间(仅 ogType=article 使用) */
+	articleModifiedTime?: string;
+	/** 文章作者(仅 ogType=article 使用) */
+	articleAuthor?: string;
+	/** 覆盖 canonical URL(不传时使用当前 URL) */
+	canonical?: string;
+	/** 是否阻止搜索引擎索引(草稿页用) */
+	noindex?: boolean;
+	/** 额外的 <meta>/<link>,以原样插入 */
+	extraTags?: string;
+}
+
+const {
+	title,
+	description,
+	ogImage,
+	ogType = "website",
+	articlePublishedTime,
+	articleModifiedTime,
+	articleAuthor,
+	canonical,
+	noindex = false,
+	extraTags,
+} = Astro.props;
+
+// ---------- 基础信息 ----------
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+const htmlLang = languageTags[lang];
+
+// 站点级配置(从环境/i18n 字典读取,保持与左栏 brand 一致)
+const SITE_NAME = "ZerxLab";
+const siteUrl = (import.meta.env.SITE ?? "https://zerx.dev").replace(
+	/\/$/,
+	"",
+);
+
+// ---------- 标题拼接 ----------
+// 首页:直接 "ZerxLab - 全栈实验室"(显式 brand + tagline)
+// 内页:"{页面 title} — ZerxLab"
+const brandTagline = t("brand.tagline");
+const fallbackTitle = `${SITE_NAME} — ${brandTagline}`;
+const pageTitle = title ? `${title} — ${SITE_NAME}` : fallbackTitle;
+
+// ---------- 描述 fallback ----------
+const pageDescription = description ?? t("brand.description");
+
+// ---------- Canonical / OG URL ----------
+const canonicalUrl = canonical ?? new URL(Astro.url.pathname, siteUrl).href;
+
+// ---------- OG Image ----------
+// 支持相对路径(拼 siteUrl)/ 绝对 URL / 默认站点 OG
+const resolvedOgImage = ogImage
+	? /^https?:\/\//i.test(ogImage)
+		? ogImage
+		: new URL(ogImage, siteUrl).href
+	: new URL("/og-default.png", siteUrl).href;
+
+// ---------- hreflang 多语言互指 ----------
+const hreflangLinks = getHreflangLinks(Astro.url, siteUrl);
+
+// ---------- 当前构建信息(供 SEO 审查 / 调试) ----------
+const generator = Astro.generator;
+---
+
+{/* ---------- 基础 meta ---------- */}
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
+<meta name="generator" content={generator} />
+
+{/* ---------- 标题 / 描述 ---------- */}
+<title>{pageTitle}</title>
+<meta name="description" content={pageDescription} />
+
+{/* ---------- 索引控制 ---------- */}
+{noindex ? (
+	<meta name="robots" content="noindex, nofollow" />
+) : (
+	<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+)}
+
+{/* ---------- Canonical ---------- */}
+<link rel="canonical" href={canonicalUrl} />
+
+{/* ---------- Hreflang 多语言声明 ---------- */}
+{hreflangLinks.map((link) => (
+	<link rel="alternate" hreflang={link.hreflang} href={link.href} />
+))}
+
+{/* ---------- Open Graph ---------- */}
+<meta property="og:site_name" content={SITE_NAME} />
+<meta property="og:type" content={ogType} />
+<meta property="og:title" content={pageTitle} />
+<meta property="og:description" content={pageDescription} />
+<meta property="og:url" content={canonicalUrl} />
+<meta property="og:image" content={resolvedOgImage} />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:locale" content={htmlLang.replace("-", "_")} />
+{lang === "zh" ? (
+	<meta property="og:locale:alternate" content="en_US" />
+) : (
+	<meta property="og:locale:alternate" content="zh_CN" />
+)}
+
+{/* ---------- OG article 扩展 ---------- */}
+{ogType === "article" && articlePublishedTime && (
+	<meta property="article:published_time" content={articlePublishedTime} />
+)}
+{ogType === "article" && articleModifiedTime && (
+	<meta property="article:modified_time" content={articleModifiedTime} />
+)}
+{ogType === "article" && articleAuthor && (
+	<meta property="article:author" content={articleAuthor} />
+)}
+
+{/* ---------- Twitter Card ---------- */}
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={pageTitle} />
+<meta name="twitter:description" content={pageDescription} />
+<meta name="twitter:image" content={resolvedOgImage} />
+
+{/* ---------- Favicon / 图标 ---------- */}
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="alternate icon" type="image/png" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="manifest" href="/site.webmanifest" />
+
+{/* ---------- Sitemap / RSS 自动发现 ---------- */}
+<link rel="sitemap" type="application/xml" href="/sitemap-index.xml" />
+<link
+	rel="alternate"
+	type="application/rss+xml"
+	title={`${SITE_NAME} — ${t("nav.blog")} RSS`}
+	href="/rss.xml"
+/>
+
+{/* ---------- 字体预连接 / 预加载 ----------
+ * 字体自托管在 /public/fonts 下,使用 woff2 格式。
+ * 关键字重 preload,其余字重按需异步加载(由 @font-face 的 font-display: swap 兜底)。
+ * -------------------------------------------------------------------------- */}
+<link
+	rel="preload"
+	href="/fonts/geist-sans-regular.woff2"
+	as="font"
+	type="font/woff2"
+	crossorigin="anonymous"
+/>
+<link
+	rel="preload"
+	href="/fonts/geist-sans-medium.woff2"
+	as="font"
+	type="font/woff2"
+	crossorigin="anonymous"
+/>
+<link
+	rel="preload"
+	href="/fonts/geist-mono-regular.woff2"
+	as="font"
+	type="font/woff2"
+	crossorigin="anonymous"
+/>
+
+{/* ---------- 原样透传的额外标签 ---------- */}
+{extraTags && <Fragment set:html={extraTags} />}
+
+{/* ---------- JSON-LD 结构化数据(WebSite) ---------- */}
+<script
+	type="application/ld+json"
+	set:html={JSON.stringify({
+		"@context": "https://schema.org",
+		"@type": "WebSite",
+		name: SITE_NAME,
+		description: t("brand.description"),
+		url: siteUrl,
+		inLanguage: [languageTags.zh, languageTags.en],
+		publisher: {
+			"@type": "Organization",
+			name: SITE_NAME,
+			url: siteUrl,
+		},
+	})}
+/>
+
+{/* ---------------------------------------------------------------------------
+ * 主题防闪烁脚本
+ * ---------------------------------------------------------------------------
+ * 必须在 <body> 渲染前同步执行,读取 localStorage 决定是否在 <html> 上加 .dark。
+ * 避免从 light → dark 的闪白。
+ *
+ * 逻辑:
+ *   1. 读 zerx-theme: "light" | "dark" | "system" | null
+ *   2. null 或 "system" → 跟随 prefers-color-scheme
+ *   3. 根据结果加 / 去 html.dark 类,同步 color-scheme
+ *
+ * 故意不使用 is:inline 之外的任何特性,保证构建后脚本不被 Astro 处理。
+ * ------------------------------------------------------------------------- */}
+<script is:inline>
+	(function () {
+		try {
+			var KEY = "zerx-theme";
+			var stored = null;
+			try {
+				stored = localStorage.getItem(KEY);
+			} catch (_) {
+				/* localStorage 不可用(隐私模式),降级 */
+			}
+
+			var prefersDark =
+				window.matchMedia &&
+				window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+			var resolved;
+			if (stored === "light" || stored === "dark") {
+				resolved = stored;
+			} else {
+				// "system" 或 null
+				resolved = prefersDark ? "dark" : "light";
+			}
+
+			var root = document.documentElement;
+			if (resolved === "dark") {
+				root.classList.add("dark");
+			} else {
+				root.classList.remove("dark");
+			}
+			root.style.colorScheme = resolved;
+		} catch (_) {
+			/* 兜底:任何异常都不应阻塞渲染 */
+		}
+	})();
+</script>

@@ -1,0 +1,1119 @@
+---
+/**
+ * ============================================================================
+ * AurPage - AUR 软件包列表页共享组件
+ * ----------------------------------------------------------------------------
+ * 为什么抽成独立组件:
+ *   中文 /aur 与英文 /en/aur 两个入口页面 95% 的逻辑相同,
+ *   只有语言推导与少量默认文案不同。本组件负责:
+ *     1. 从 Directus 拉取 aur_packages(失败时 fallback)
+ *     2. 把 Bilingual 字段按当前 lang 解包
+ *     3. 顶部展示"一行安装命令"示例(yay / paru 双 tab)
+ *     4. 列表展示每个包,带 badges、版本、上游/AUR 链接、复制安装命令
+ *
+ * 视觉策略(参考 Vercel 历史博客的 AUR 展示 + better-auth 编辑派):
+ *   - 顶部"快速安装"卡片:带 tab 切换(yay / paru)+ 命令行 + 复制按钮
+ *   - 每包一张横向卡片:
+ *       [左] 包名 + badges + 版本标签
+ *       [中] 描述
+ *       [右] AUR_PAGE / UPSTREAM 两个小链接 + 复制安装命令按钮
+ *   - 虚线分隔 + Monospace 标签 + 编号前缀,整体与项目页视觉一致
+ *
+ * 左栏 meta 字段说明:
+ *   - PACKAGES    包总数
+ *   - MAINTAINED  维护中的包数
+ *   - DISTRO      Arch Linux
+ *   - HELPER      yay / paru
+ * ============================================================================
+ */
+
+import AppShell from "@layouts/AppShell.astro";
+import SectionHeader from "@components/ui/SectionHeader.astro";
+import MetaRow from "@components/ui/MetaRow.astro";
+import {
+	getLangFromUrl,
+	useTranslations,
+} from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+import {
+	listFallbackAurPackages,
+	pickLang,
+	type FallbackAurPackage,
+} from "@lib/fallback-data";
+import { directus, readItems, DIRECTUS_CONFIG } from "@lib/directus";
+
+/* ----------------------------------------------------------------------------
+ * 当前语言 / 翻译工具
+ * -------------------------------------------------------------------------- */
+
+const lang = getLangFromUrl(Astro.url) as Lang;
+const t = useTranslations(lang);
+
+/* ----------------------------------------------------------------------------
+ * 数据适配器
+ * -------------------------------------------------------------------------- */
+
+interface AurVM {
+	slug: string;
+	name: string;
+	version: string;
+	description: string;
+	badges: readonly string[];
+	aurUrl: string;
+	upstreamUrl: string | null;
+	maintained: boolean;
+}
+
+function fallbackToVM(pkg: FallbackAurPackage, currentLang: Lang): AurVM {
+	return {
+		slug: pkg.slug,
+		name: pkg.name,
+		version: pkg.version,
+		description: pickLang(pkg.description, currentLang),
+		badges: pkg.badges,
+		aurUrl: pkg.aurUrl,
+		upstreamUrl: pkg.upstreamUrl,
+		maintained: pkg.maintained,
+	};
+}
+
+/* ----------------------------------------------------------------------------
+ * 尝试从 Directus 拉取,失败则走 Fallback
+ * -------------------------------------------------------------------------- */
+
+async function loadPackages(): Promise<readonly AurVM[]> {
+	if (!DIRECTUS_CONFIG.hasReadToken) {
+		return listFallbackAurPackages().map((p) => fallbackToVM(p, lang));
+	}
+
+	try {
+		const client = directus();
+		const langCode = lang === "zh" ? "zh-CN" : "en-US";
+
+		const pkgFields: any = [
+			"id",
+			"name",
+			"version",
+			"maintained",
+			"badges",
+			"aur_url",
+			"upstream_url",
+			"sort",
+			{
+				translations: ["languages_code", "description"],
+			},
+		];
+
+		const result = (await client.request(
+			readItems("aur_packages", {
+				filter: { status: { _eq: "published" } },
+				sort: ["sort", "name"],
+				fields: pkgFields,
+				limit: -1,
+			}),
+		)) as any[];
+
+		return result.map((row): AurVM => {
+			const tr = row?.translations?.find(
+				(x: any) =>
+					x.languages_code === langCode ||
+					x.languages_code?.code === langCode,
+			);
+
+			const badges: readonly string[] = Array.isArray(row?.badges)
+				? row.badges
+				: [];
+
+			// slug 从包名派生(去掉 zerx-lab- 前缀和 -bin 后缀)
+			const rawName = row?.name ?? "";
+			const slug = rawName
+				.replace(/^zerx-lab-/, "")
+				.replace(/-bin$/, "");
+
+			return {
+				slug,
+				name: rawName,
+				version: row?.version ?? "—",
+				description: tr?.description ?? "",
+				badges,
+				aurUrl: row?.aur_url ?? "",
+				upstreamUrl: row?.upstream_url ?? null,
+				maintained: row?.maintained !== false,
+			};
+		});
+	} catch (err) {
+		console.warn(
+			"[aur] Directus 读取失败,使用 FALLBACK。原因:",
+			(err as Error)?.message ?? err,
+		);
+		return listFallbackAurPackages().map((p) => fallbackToVM(p, lang));
+	}
+}
+
+const packages = await loadPackages();
+
+/* ----------------------------------------------------------------------------
+ * 左栏 meta 数据计算
+ * -------------------------------------------------------------------------- */
+
+const maintainedCount = packages.filter((p) => p.maintained).length;
+
+/* ----------------------------------------------------------------------------
+ * 页面级文案
+ * -------------------------------------------------------------------------- */
+
+const COPY = {
+	zh: {
+		eyebrow: "AUR",
+		title: "AUR 软件包",
+		description:
+			"为 Arch Linux 用户维护的 AUR 软件包。所有包都以预编译二进制方式分发,一行命令即装即用。",
+		empty: "暂无包。",
+		sectionQuickInstall: "QUICK INSTALL",
+		sectionAllPackages: "ALL PACKAGES",
+		aurPage: "AUR 页面",
+		upstream: "官网",
+		installCmd: "安装命令",
+		copyCmd: "复制",
+		copiedCmd: "已复制",
+		maintained: "维护中",
+		deprecated: "已弃用",
+		version: "版本",
+		helperNote:
+			"提示:以下命令假设你已安装 AUR 助手(yay / paru)。未安装时请参考 Arch Wiki。",
+		distroLabel: "发行版",
+		helperLabel: "助手",
+		packagesLabel: "软件包",
+		maintainedLabel: "维护中",
+	},
+	en: {
+		eyebrow: "AUR",
+		title: "AUR Packages",
+		description:
+			"AUR packages maintained for Arch Linux users. All shipped as prebuilt binaries — one command to install.",
+		empty: "No packages yet.",
+		sectionQuickInstall: "QUICK INSTALL",
+		sectionAllPackages: "ALL PACKAGES",
+		aurPage: "AUR Page",
+		upstream: "Website",
+		installCmd: "Install command",
+		copyCmd: "Copy",
+		copiedCmd: "Copied",
+		maintained: "Maintained",
+		deprecated: "Deprecated",
+		version: "Version",
+		helperNote:
+			"Note: commands below assume an AUR helper (yay / paru) is installed. See Arch Wiki otherwise.",
+		distroLabel: "Distro",
+		helperLabel: "Helper",
+		packagesLabel: "Packages",
+		maintainedLabel: "Maintained",
+	},
+} as const;
+
+const C = COPY[lang] ?? COPY.zh;
+
+/* ----------------------------------------------------------------------------
+ * 快速安装:生成"安装全部"命令示例
+ * ----------------------------------------------------------------------------
+ * 选中全部已维护的包名,拼成一条命令,两种 helper 各生成一条。
+ * 在 tab 切换时分别展示,带"复制"按钮。
+ * -------------------------------------------------------------------------- */
+
+const maintainedNames = packages
+	.filter((p) => p.maintained && p.name)
+	.map((p) => p.name);
+
+const yayInstall = maintainedNames.length
+	? `yay -S ${maintainedNames.join(" ")}`
+	: "yay -S zerx-lab-pencil-bin";
+
+const paruInstall = maintainedNames.length
+	? `paru -S ${maintainedNames.join(" ")}`
+	: "paru -S zerx-lab-pencil-bin";
+---
+
+<AppShell
+	title={C.title}
+	description={C.description}
+	eyebrow={C.eyebrow}
+	leftTitle={C.title}
+	leftDescription={C.description}
+>
+	{/* ---------- 左栏:社交图标 ---------- */}
+	<Fragment slot="left-social">
+		<a
+			href="https://aur.archlinux.org/packages?K=zerx-lab&SB=p"
+			target="_blank"
+			rel="noopener noreferrer"
+			aria-label="AUR Packages"
+			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+				<polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+				<line x1="12" y1="22.08" x2="12" y2="12" />
+			</svg>
+		</a>
+		<a
+			href="https://github.com/zerx-lab"
+			target="_blank"
+			rel="noopener noreferrer"
+			aria-label="GitHub"
+			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="currentColor"
+				aria-hidden="true"
+			>
+				<path
+					d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
+				></path>
+			</svg>
+		</a>
+	</Fragment>
+
+	{/* ---------- 左栏:Meta ---------- */}
+	<Fragment slot="left-meta">
+		<MetaRow label={C.packagesLabel} value={String(packages.length)} />
+		<MetaRow
+			label={C.maintainedLabel}
+			value={String(maintainedCount)}
+		/>
+		<MetaRow label={C.distroLabel} value="Arch Linux" />
+		<MetaRow label={C.helperLabel} value="yay / paru" />
+		<MetaRow label={t("meta.license")} value="MIT" />
+	</Fragment>
+
+	{/* ==========================================================================
+	 *                            右栏主内容
+	 * ========================================================================== */}
+
+	{
+		packages.length === 0 ? (
+			/* 空状态 */
+			<>
+				<SectionHeader eyebrow={C.sectionAllPackages} />
+				<div
+					class:list={[
+						"mt-12 lg:mt-16 mb-16",
+						"flex flex-col items-center justify-center",
+						"py-16 lg:py-20",
+						"border border-dashed border-[color:var(--color-hairline)]",
+						"text-center",
+					]}
+				>
+					<span
+						aria-hidden="true"
+						class:list={[
+							"mono-label",
+							"text-[11px]",
+							"text-[color:var(--color-ink-muted)]",
+							"mb-3",
+						]}
+					>
+						— EMPTY —
+					</span>
+					<p
+						class:list={[
+							"text-[color:var(--color-ink-secondary)]",
+							"text-[14px]",
+							"leading-[1.6]",
+						]}
+					>
+						{C.empty}
+					</p>
+				</div>
+			</>
+		) : (
+			<>
+				{/* ---------- 快速安装分区 ---------- */}
+				<SectionHeader eyebrow={C.sectionQuickInstall} />
+
+				<div
+					class:list={[
+						"mt-6 lg:mt-8",
+						"border border-dashed border-[color:var(--color-hairline)]",
+						"bg-[color:var(--color-paper-muted)]/30",
+						"overflow-hidden",
+					]}
+					data-install-tabs
+				>
+					{/* Tab 切换栏 */}
+					<div
+						role="tablist"
+						aria-label={lang === "zh" ? "安装器选择" : "Helper selector"}
+						class:list={[
+							"flex items-stretch",
+							"border-b border-dashed border-[color:var(--color-hairline)]",
+							"bg-[color:var(--color-paper-muted)]/50",
+						]}
+					>
+						<button
+							type="button"
+							role="tab"
+							data-install-tab="paru"
+							aria-selected="true"
+							aria-controls="install-panel-paru"
+							id="install-tab-paru"
+							class:list={[
+								"install-tab",
+								"inline-flex items-center gap-2",
+								"px-4 py-2.5",
+								"mono-label",
+								"text-[11px] leading-none",
+								"tracking-[var(--tracking-wider)]",
+								"text-[color:var(--color-ink-tertiary)]",
+								"border-r border-dashed border-[color:var(--color-hairline)]",
+								"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								"cursor-pointer",
+								"aria-selected:text-[color:var(--color-ink-primary)]",
+								"aria-selected:bg-[color:var(--color-paper)]",
+							]}
+						>
+							<span
+								aria-hidden="true"
+								class="inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--color-ink-primary)]"
+							></span>
+							PARU
+						</button>
+
+						<button
+							type="button"
+							role="tab"
+							data-install-tab="yay"
+							aria-selected="false"
+							aria-controls="install-panel-yay"
+							id="install-tab-yay"
+							class:list={[
+								"install-tab",
+								"inline-flex items-center gap-2",
+								"px-4 py-2.5",
+								"mono-label",
+								"text-[11px] leading-none",
+								"tracking-[var(--tracking-wider)]",
+								"text-[color:var(--color-ink-tertiary)]",
+								"border-r border-dashed border-[color:var(--color-hairline)]",
+								"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+								"cursor-pointer",
+								"aria-selected:text-[color:var(--color-ink-primary)]",
+								"aria-selected:bg-[color:var(--color-paper)]",
+							]}
+						>
+							<span
+								aria-hidden="true"
+								class="inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--color-ink-muted)]"
+							></span>
+							YAY
+						</button>
+
+						{/* 右侧提示 */}
+						<span
+							class:list={[
+								"ml-auto flex items-center",
+								"px-3",
+								"mono-label",
+								"text-[10px]",
+								"text-[color:var(--color-ink-muted)]",
+								"hidden sm:flex",
+							]}
+						>
+							BASH
+						</span>
+					</div>
+
+					{/* 面板 */}
+					<div
+						role="tabpanel"
+						id="install-panel-yay"
+						aria-labelledby="install-tab-yay"
+						data-install-panel="yay"
+						class="install-panel"
+						hidden
+					>
+						<div
+							class:list={[
+								"flex items-start gap-3",
+								"px-4 py-4 lg:px-5 lg:py-5",
+							]}
+						>
+							<span
+								aria-hidden="true"
+								class:list={[
+									"shrink-0 mt-[2px]",
+									"font-[var(--font-mono)]",
+									"text-[color:var(--color-ink-muted)]",
+									"text-[13px] leading-[1.5]",
+									"select-none",
+								]}
+							>
+								$
+							</span>
+							<code
+								class:list={[
+									"flex-1 min-w-0",
+									"font-[var(--font-mono)]",
+									"text-[13px] leading-[1.5]",
+									"text-[color:var(--color-ink-primary)]",
+									"break-all",
+									"bg-transparent",
+									"border-0 p-0",
+									"whitespace-pre-wrap",
+								]}>{yayInstall}</code>
+							<button
+								type="button"
+								data-copy-btn
+								data-copy-text={yayInstall}
+								aria-label={C.copyCmd}
+								class:list={[
+									"copy-btn",
+									"shrink-0",
+									"inline-flex items-center gap-1.5",
+									"px-2.5 py-1.5",
+									"mono-label",
+									"text-[10px] leading-none",
+									"tracking-[var(--tracking-wider)]",
+									"text-[color:var(--color-ink-tertiary)]",
+									"hover:text-[color:var(--color-ink-primary)]",
+									"hover:bg-[color:var(--color-paper-muted)]",
+									"border border-[color:var(--color-hairline)]",
+									"rounded-[var(--radius-sm)]",
+									"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+									"cursor-pointer",
+								]}
+							>
+								<svg
+									aria-hidden="true"
+									width="10"
+									height="10"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								>
+									<rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+									<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+								</svg>
+								<span data-copy-label data-default-label={C.copyCmd} data-copied-label={C.copiedCmd}>{C.copyCmd}</span>
+							</button>
+						</div>
+					</div>
+
+					<div
+						role="tabpanel"
+						id="install-panel-paru"
+						aria-labelledby="install-tab-paru"
+						data-install-panel="paru"
+						class="install-panel"
+					>
+						<div
+							class:list={[
+								"flex items-start gap-3",
+								"px-4 py-4 lg:px-5 lg:py-5",
+							]}
+						>
+							<span
+								aria-hidden="true"
+								class:list={[
+									"shrink-0 mt-[2px]",
+									"font-[var(--font-mono)]",
+									"text-[color:var(--color-ink-muted)]",
+									"text-[13px] leading-[1.5]",
+									"select-none",
+								]}
+							>
+								$
+							</span>
+							<code
+								class:list={[
+									"flex-1 min-w-0",
+									"font-[var(--font-mono)]",
+									"text-[13px] leading-[1.5]",
+									"text-[color:var(--color-ink-primary)]",
+									"break-all",
+									"bg-transparent",
+									"border-0 p-0",
+									"whitespace-pre-wrap",
+								]}>{paruInstall}</code>
+							<button
+								type="button"
+								data-copy-btn
+								data-copy-text={paruInstall}
+								aria-label={C.copyCmd}
+								class:list={[
+									"copy-btn",
+									"shrink-0",
+									"inline-flex items-center gap-1.5",
+									"px-2.5 py-1.5",
+									"mono-label",
+									"text-[10px] leading-none",
+									"tracking-[var(--tracking-wider)]",
+									"text-[color:var(--color-ink-tertiary)]",
+									"hover:text-[color:var(--color-ink-primary)]",
+									"hover:bg-[color:var(--color-paper-muted)]",
+									"border border-[color:var(--color-hairline)]",
+									"rounded-[var(--radius-sm)]",
+									"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+									"cursor-pointer",
+								]}
+							>
+								<svg
+									aria-hidden="true"
+									width="10"
+									height="10"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								>
+									<rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+									<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+								</svg>
+								<span data-copy-label data-default-label={C.copyCmd} data-copied-label={C.copiedCmd}>{C.copyCmd}</span>
+							</button>
+						</div>
+					</div>
+				</div>
+
+				{/* 提示条 */}
+				<p
+					class:list={[
+						"mt-3",
+						"font-[var(--font-mono)]",
+						"text-[11px]",
+						"leading-[1.55]",
+						"text-[color:var(--color-ink-tertiary)]",
+						"max-w-[80ch]",
+					]}
+				>
+					<span aria-hidden="true" class="text-[color:var(--color-ink-muted)] mr-1">
+						//
+					</span>
+					{C.helperNote}
+				</p>
+
+				{/* ---------- ALL PACKAGES 分区 ---------- */}
+				<SectionHeader
+					eyebrow={C.sectionAllPackages}
+					count={packages.length}
+					spacious
+				/>
+
+				<ul
+					class:list={[
+						"mt-6 lg:mt-8 mb-16",
+						"list-none m-0 p-0",
+						"border border-dashed border-[color:var(--color-hairline)]",
+						"divide-y divide-dashed divide-[color:var(--color-hairline)]",
+					]}
+				>
+					{packages.map((pkg, idx) => {
+						// 单包安装命令默认使用 paru(与页面顶部默认 tab 保持一致)。
+						// 用户若习惯 yay,可切换到顶部的 YAY tab 查看整体安装命令,
+						// 单包这里不重复暴露两个版本,避免卡片过于拥挤。
+						const singleInstall = `paru -S ${pkg.name}`;
+						return (
+							<li class="relative">
+								<article
+									class:list={[
+										"group",
+										"flex flex-col gap-4",
+										"px-4 sm:px-5 lg:px-6 py-5 lg:py-6",
+										"hover:bg-[color:var(--color-paper-muted)]/60",
+										"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+									]}
+								>
+									{/* 顶栏:编号 + 包名 + badges + 状态 */}
+									<div class="flex items-baseline gap-3 flex-wrap">
+										<span
+											aria-hidden="true"
+											class:list={[
+												"mono-num",
+												"text-[10.5px] leading-none",
+												"text-[color:var(--color-ink-muted)]",
+												"tabular-nums",
+												"shrink-0",
+											]}
+										>
+											AUR-{String(idx + 1).padStart(3, "0")}
+										</span>
+
+										<h3
+											class:list={[
+												"font-[var(--font-mono)]",
+												"text-[15px] sm:text-[16px]",
+												"leading-none",
+												"font-semibold",
+												"text-[color:var(--color-ink-primary)]",
+												"tracking-[-0.005em]",
+												"break-all",
+											]}
+										>
+											{pkg.name}
+										</h3>
+
+										<span
+											class:list={[
+												"inline-flex items-center",
+												"px-1.5 py-[3px]",
+												"font-[var(--font-mono)]",
+												"text-[10px] leading-none",
+												"tracking-[var(--tracking-wide)]",
+												"text-[color:var(--color-ink-secondary)]",
+												"border border-[color:var(--color-hairline)]",
+												"rounded-[var(--radius-sm)]",
+												"tabular-nums",
+											]}
+										>
+											v{pkg.version}
+										</span>
+
+										{/* 维护状态 */}
+										<span
+											class:list={[
+												"inline-flex items-center gap-1.5",
+												"ml-auto",
+												"mono-label",
+												"text-[10px] leading-none",
+												"tracking-[var(--tracking-wider)]",
+												pkg.maintained
+													? "text-[color:var(--color-ink-secondary)]"
+													: "text-[color:var(--color-ink-muted)]",
+											]}
+										>
+											<span
+												aria-hidden="true"
+												class:list={[
+													"inline-block h-1.5 w-1.5 rounded-full",
+													pkg.maintained
+														? "bg-[color:var(--color-ink-primary)]"
+														: "bg-[color:var(--color-ink-muted)]",
+												]}
+											></span>
+											{pkg.maintained ? C.maintained : C.deprecated}
+										</span>
+									</div>
+
+									{/* 描述 */}
+									{pkg.description && (
+										<p
+											class:list={[
+												"text-[color:var(--color-ink-secondary)]",
+												"text-[13.5px] sm:text-[14px]",
+												"leading-[1.65]",
+												"max-w-[80ch]",
+											]}
+										>
+											{pkg.description}
+										</p>
+									)}
+
+									{/* badges */}
+									{pkg.badges.length > 0 && (
+										<div class="flex flex-wrap gap-1.5">
+											{pkg.badges.map((badge) => (
+												<span
+													class:list={[
+														"inline-flex items-center",
+														"px-2 py-[3px]",
+														"font-[var(--font-mono)]",
+														"text-[10px]",
+														"leading-none",
+														"tracking-[var(--tracking-wide)]",
+														"uppercase",
+														"text-[color:var(--color-ink-tertiary)]",
+														"bg-[color:var(--color-paper-muted)]/60",
+														"border border-dashed border-[color:var(--color-hairline)]",
+														"rounded-[var(--radius-sm)]",
+													]}
+												>
+													{badge}
+												</span>
+											))}
+										</div>
+									)}
+
+									{/* 底栏:单包安装命令 + 链接按钮 */}
+									<div
+										class:list={[
+											"flex items-center gap-2 flex-wrap",
+											"pt-3",
+											"border-t border-dashed border-[color:var(--color-hairline)]",
+										]}
+									>
+										{/* 安装命令(行内代码) */}
+										<code
+											class:list={[
+												"inline-flex items-center gap-2",
+												"px-2.5 py-1.5",
+												"font-[var(--font-mono)]",
+												"text-[11px] leading-none",
+												"text-[color:var(--color-ink-primary)]",
+												"bg-[color:var(--color-paper-muted)]/50",
+												"border border-[color:var(--color-hairline)]",
+												"rounded-[var(--radius-sm)]",
+												"max-w-full overflow-x-auto",
+												"whitespace-nowrap",
+											]}
+										>
+											<span
+												aria-hidden="true"
+												class="text-[color:var(--color-ink-muted)]"
+											>
+												$
+											</span>
+											<span>{singleInstall}</span>
+										</code>
+
+										{/* 复制按钮 */}
+										<button
+											type="button"
+											data-copy-btn
+											data-copy-text={singleInstall}
+											aria-label={C.copyCmd}
+											class:list={[
+												"copy-btn",
+												"inline-flex items-center gap-1.5",
+												"px-2.5 py-1.5",
+												"mono-label",
+												"text-[10px] leading-none",
+												"tracking-[var(--tracking-wider)]",
+												"text-[color:var(--color-ink-tertiary)]",
+												"hover:text-[color:var(--color-ink-primary)]",
+												"hover:bg-[color:var(--color-paper-muted)]",
+												"border border-[color:var(--color-hairline)]",
+												"rounded-[var(--radius-sm)]",
+												"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+												"cursor-pointer",
+											]}
+										>
+											<svg
+												aria-hidden="true"
+												width="10"
+												height="10"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+												<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+											</svg>
+											<span
+												data-copy-label
+												data-default-label={C.copyCmd}
+												data-copied-label={C.copiedCmd}
+											>
+												{C.copyCmd}
+											</span>
+										</button>
+
+										{/* 外链按钮组(右对齐) */}
+										<div class="flex items-center gap-1 ml-auto">
+											{pkg.aurUrl && (
+												<a
+													href={pkg.aurUrl}
+													target="_blank"
+													rel="noopener noreferrer"
+													aria-label={`${pkg.name} — ${C.aurPage}`}
+													class:list={[
+														"inline-flex items-center gap-1.5",
+														"px-2.5 py-1.5",
+														"mono-label",
+														"text-[10px] leading-none",
+														"tracking-[var(--tracking-wider)]",
+														"text-[color:var(--color-ink-secondary)]",
+														"hover:text-[color:var(--color-ink-primary)]",
+														"hover:bg-[color:var(--color-paper-muted)]",
+														"border border-[color:var(--color-hairline)]",
+														"rounded-[var(--radius-sm)]",
+														"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+													]}
+												>
+													<span>{C.aurPage}</span>
+													<svg
+														aria-hidden="true"
+														width="9"
+														height="9"
+														viewBox="0 0 24 24"
+														fill="none"
+														stroke="currentColor"
+														stroke-width="2.5"
+														stroke-linecap="round"
+														stroke-linejoin="round"
+													>
+														<path d="M7 17L17 7" />
+														<path d="M8 7h9v9" />
+													</svg>
+												</a>
+											)}
+
+											{pkg.upstreamUrl && (
+												<a
+													href={pkg.upstreamUrl}
+													target="_blank"
+													rel="noopener noreferrer"
+													aria-label={`${pkg.name} — ${C.upstream}`}
+													class:list={[
+														"inline-flex items-center gap-1.5",
+														"px-2.5 py-1.5",
+														"mono-label",
+														"text-[10px] leading-none",
+														"tracking-[var(--tracking-wider)]",
+														"text-[color:var(--color-ink-secondary)]",
+														"hover:text-[color:var(--color-ink-primary)]",
+														"hover:bg-[color:var(--color-paper-muted)]",
+														"border border-[color:var(--color-hairline)]",
+														"rounded-[var(--radius-sm)]",
+														"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+													]}
+												>
+													<span>{C.upstream}</span>
+													<svg
+														aria-hidden="true"
+														width="9"
+														height="9"
+														viewBox="0 0 24 24"
+														fill="none"
+														stroke="currentColor"
+														stroke-width="2.5"
+														stroke-linecap="round"
+														stroke-linejoin="round"
+													>
+														<path d="M7 17L17 7" />
+														<path d="M8 7h9v9" />
+													</svg>
+												</a>
+											)}
+										</div>
+									</div>
+								</article>
+							</li>
+						);
+					})}
+				</ul>
+			</>
+		)
+	}
+</AppShell>
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * Tab 激活态:靠 aria-selected 驱动
+	 * --------------------------------------------------------------------------
+	 * 激活的 Tab 有一条底部墨色实线锚点,非激活态仅为淡灰色标签。
+	 * -------------------------------------------------------------------------- */
+
+	.install-tab {
+		position: relative;
+	}
+
+	.install-tab[aria-selected="true"]::after {
+		content: "";
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: -1px;
+		height: 2px;
+		background-color: var(--color-ink-primary);
+	}
+
+	/* Tab 面板默认不显示,JS 切换时移除 hidden 属性 */
+	.install-panel[hidden] {
+		display: none;
+	}
+
+	/* ----------------------------------------------------------------------------
+	 * 复制按钮的"已复制"态
+	 * --------------------------------------------------------------------------
+	 * 通过 data-copied="true" 切换视觉反馈,~2s 后自动还原。
+	 * -------------------------------------------------------------------------- */
+
+	.copy-btn[data-copied="true"] {
+		color: var(--color-ink-primary);
+		background-color: var(--color-paper-muted);
+		border-color: var(--color-hairline-strong);
+	}
+</style>
+
+<script>
+	/**
+	 * =========================================================================
+	 * AurPage 交互脚本
+	 * -------------------------------------------------------------------------
+	 * 负责:
+	 *   1. 快速安装区的 yay / paru tab 切换
+	 *   2. 所有 [data-copy-btn] 的复制到剪贴板功能
+	 *
+	 * 兼容性:
+	 *   - Astro View Transitions:astro:after-swap 时重新绑定
+	 *   - 不依赖框架;纯 TS + DOM API
+	 * ========================================================================= */
+
+	interface AurController {
+		destroy(): void;
+	}
+
+	function setupInstallTabs(root: HTMLElement): () => void {
+		const tabs = Array.from(
+			root.querySelectorAll<HTMLButtonElement>("[data-install-tab]"),
+		);
+		const panels = Array.from(
+			root.querySelectorAll<HTMLElement>("[data-install-panel]"),
+		);
+
+		function activate(name: string): void {
+			for (const tab of tabs) {
+				const isActive = tab.getAttribute("data-install-tab") === name;
+				tab.setAttribute("aria-selected", String(isActive));
+			}
+			for (const panel of panels) {
+				const isActive =
+					panel.getAttribute("data-install-panel") === name;
+				if (isActive) {
+					panel.removeAttribute("hidden");
+				} else {
+					panel.setAttribute("hidden", "");
+				}
+			}
+		}
+
+		function onClick(e: Event): void {
+			const target = e.target as HTMLElement | null;
+			if (!target) return;
+			const tab = target.closest<HTMLButtonElement>("[data-install-tab]");
+			if (!tab) return;
+			const name = tab.getAttribute("data-install-tab");
+			if (!name) return;
+			activate(name);
+		}
+
+		root.addEventListener("click", onClick);
+
+		return () => {
+			root.removeEventListener("click", onClick);
+		};
+	}
+
+	async function copyToClipboard(text: string): Promise<boolean> {
+		if (!text) return false;
+		try {
+			if (navigator.clipboard && window.isSecureContext) {
+				await navigator.clipboard.writeText(text);
+				return true;
+			}
+			// 降级:老方案,隐藏 textarea + execCommand
+			const ta = document.createElement("textarea");
+			ta.value = text;
+			ta.setAttribute("readonly", "");
+			ta.style.position = "fixed";
+			ta.style.top = "-1000px";
+			ta.style.left = "-1000px";
+			document.body.appendChild(ta);
+			ta.select();
+			const ok = document.execCommand("copy");
+			document.body.removeChild(ta);
+			return ok;
+		} catch {
+			return false;
+		}
+	}
+
+	function setupCopyButtons(): () => void {
+		const buttons = Array.from(
+			document.querySelectorAll<HTMLButtonElement>("[data-copy-btn]"),
+		);
+
+		function swapLabel(btn: HTMLButtonElement, toCopied: boolean): void {
+			const labelEl = btn.querySelector<HTMLElement>("[data-copy-label]");
+			if (!labelEl) return;
+			const def = labelEl.getAttribute("data-default-label") ?? "Copy";
+			const copied =
+				labelEl.getAttribute("data-copied-label") ?? "Copied";
+			labelEl.textContent = toCopied ? copied : def;
+			if (toCopied) {
+				btn.setAttribute("data-copied", "true");
+			} else {
+				btn.removeAttribute("data-copied");
+			}
+		}
+
+		const timers = new WeakMap<HTMLButtonElement, number>();
+
+		async function onClick(this: HTMLButtonElement): Promise<void> {
+			const text = this.getAttribute("data-copy-text") ?? "";
+			const ok = await copyToClipboard(text);
+			if (!ok) return;
+
+			swapLabel(this, true);
+
+			// 已有计时器时先清理,避免多次点击覆盖
+			const existing = timers.get(this);
+			if (existing) window.clearTimeout(existing);
+
+			const id = window.setTimeout(() => {
+				swapLabel(this, false);
+				timers.delete(this);
+			}, 1600);
+			timers.set(this, id);
+		}
+
+		for (const btn of buttons) {
+			btn.addEventListener("click", onClick);
+		}
+
+		return () => {
+			for (const btn of buttons) {
+				btn.removeEventListener("click", onClick);
+			}
+		};
+	}
+
+	let cleanups: Array<() => void> = [];
+
+	function setup(): AurController {
+		// 清理上一次的监听
+		for (const fn of cleanups) fn();
+		cleanups = [];
+
+		const root = document.querySelector<HTMLElement>(
+			"[data-install-tabs]",
+		);
+		if (root) {
+			cleanups.push(setupInstallTabs(root));
+		}
+		cleanups.push(setupCopyButtons());
+
+		return {
+			destroy(): void {
+				for (const fn of cleanups) fn();
+				cleanups = [];
+			},
+		};
+	}
+
+	// 首次加载
+	setup();
+
+	// Astro View Transitions 兼容:每次页面切换后重新绑定
+	document.addEventListener("astro:after-swap", setup);
+</script>

@@ -1,0 +1,281 @@
+---
+/**
+ * ============================================================================
+ * LeftPane - 左侧固定信息栏
+ * ----------------------------------------------------------------------------
+ * 视觉参考: better-auth.com 的左侧固定区
+ *   - 顶部品牌 Logo
+ *   - 中下部区域:页面标题 + 简短描述 + CTA
+ *   - 底部元信息栏:key-value 列表(STATUS/ESTABLISHED/PROJECTS 等)
+ *   - 整个区域在桌面端 position: sticky 保持不动,右侧滚动
+ *
+ * 设计意图:
+ *   - 对应 ZerxLab 这个"实验室"品牌,而不是某个库/工具
+ *   - 不同页面传入不同的 eyebrow/title/description/meta 填充内容
+ *   - 默认提供合理 fallback(读 i18n 字典),页面也可完全自定义
+ *
+ * 响应式:
+ *   - 桌面端 (≥ 1024px): 左侧固定 ~38% 宽,独立于右栏滚动
+ *   - 移动端 (< 1024px): 变为普通顶部区块(非 sticky),内容在上,右栏在下
+ *
+ * 用法(最常见):
+ *   <LeftPane
+ *     eyebrow="Blog"
+ *     title="News, releases, and insights"
+ *     description="Follow along as we..."
+ *   >
+ *     <Fragment slot="meta">
+ *       <MetaRow label="POSTS" value="12" />
+ *       <MetaRow label="CATEGORIES" value="4" />
+ *     </Fragment>
+ *   </LeftPane>
+ *
+ * 用法(完全自定义,传 default slot 覆盖主体内容):
+ *   <LeftPane>
+ *     <div>...完全自定义...</div>
+ *   </LeftPane>
+ * ============================================================================
+ */
+
+import { getLangFromUrl, useTranslations } from "@i18n/utils";
+import Logo from "@components/ui/Logo.astro";
+// 注意:默认的 LabMark 装置现在由 AppShell 层传入(通过 left-visual slot),
+// LeftPane 不再直接引用 LabMark,仅作为透传管道存在。
+
+interface Props {
+	/** 小眉标签(title 上方的超小 Monospace 标签,如 "Blog" / "Projects") */
+	eyebrow?: string;
+	/** 眉标左侧的小图标(emoji 或 SVG path 名) */
+	eyebrowIcon?: string;
+	/** 主标题(大字,编辑派主视觉) */
+	title?: string;
+	/** 描述段落 */
+	description?: string;
+	/** 是否在 Logo 下方显示主题色分割线(默认 true) */
+	showDivider?: boolean;
+	/** 额外类名 */
+	class?: string;
+}
+
+const {
+	eyebrow,
+	eyebrowIcon,
+	title,
+	description,
+	showDivider = true,
+	class: className = "",
+} = Astro.props;
+
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+
+// 判断各个 slot 是否有内容(用于控制间距)
+// ----------------------------------------------------------------------------
+// 注意:Astro.slots.has("default") 不可靠作为"是否外部自定义"的判断依据。
+// 原因:父组件如果传入 `{flag && <Fragment slot="xxx">...}` 这种条件表达式,
+// 当 flag=false 时,false 本身会被当作 default slot 的内容,导致 has("default")
+// 返回 true。因此我们改用显式 prop(如 customBody)控制,而不是依赖 slot 检测。
+// ----------------------------------------------------------------------------
+const hasMetaSlot = Astro.slots.has("meta");
+const hasActionsSlot = Astro.slots.has("actions");
+const hasSocialSlot = Astro.slots.has("social");
+// 视觉装置:不再手动检测 slot 是否存在,而是利用 Astro 原生的 slot fallback 机制。
+// 在模板里写 <slot name="visual"><LabMark /></slot>,当父级没传 visual slot 时,
+// 自动渲染 LabMark;传了则用父级内容替换。这种写法完全规避了 hasSlot 的
+// "false 值污染" 问题,比条件渲染更鲁棒。
+//
+// 参考: https://docs.astro.build/en/basics/astro-components/#fallback-content-for-slots
+// default slot 是否真的承载了可渲染节点(排除 false / null / undefined 这类假值)
+// 用 Astro.slots.render("default") 会带来性能代价,且仍然被 false 误伤;
+// 这里改为:由外部通过 `customBody` prop 显式声明,才走完全自定义路径
+const hasDefaultSlot = false;
+
+// 默认的底部 meta 内容(如果 meta slot 没传,展示实验室通用信息)
+// 这保证了每个页面都有合理 fallback,符合"实验室"品牌调性
+const showDefaultMeta = !hasMetaSlot;
+---
+
+<aside
+	class:list={[
+		"left-pane",
+		"relative flex flex-col",
+		// 暗色描边与纸色背景
+		"bg-[color:var(--color-paper)]",
+		// 与右栏之间的虚线竖分割(仅桌面端)
+		"lg:border-r lg:border-dashed lg:border-[color:var(--color-hairline)]",
+		// 内边距:左右大一点,体现"编辑派"留白
+		"px-6 sm:px-8 lg:px-10 xl:px-14",
+		"pt-6 lg:pt-8",
+		"pb-10 lg:pb-10",
+		className,
+	]}
+>
+	{/* ---------- 顶部:Logo ---------- */}
+	<div class="flex items-center">
+		<Logo size="md" />
+	</div>
+
+	{showDivider && (
+		<hr class="hairline mt-6 lg:mt-8" aria-hidden="true" />
+	)}
+
+	{/* ---------- 视觉装置区 ----------
+	 * Logo 之下、页面主体之上的位置,放置一个视觉装置。
+	 *
+	 * 设计决策:
+	 *   - 装置的"默认渲染"由 AppShell 层负责(通过 left-visual slot 传入),
+	 *     LeftPane 本身只提供一个透传槽位,不做 fallback。
+	 *   - 原因:Astro 的 slot fallback 机制在"多层透传 + 空 slot"场景下并
+	 *     不可靠 —— 父组件写的 `<slot name="x" slot="x" />` 会被子组件视作
+	 *     一个"已填充但为空"的 slot,从而抑制子组件内 <slot>fallback</slot>
+	 *     的 fallback 内容。
+	 *   - 把"默认 LabMark"上移到 AppShell,LeftPane 只是管道,最简单最可靠。
+	 * --------------------------------------------------------------------- */}
+	<div class="mt-8 lg:mt-10">
+		<slot name="visual" />
+	</div>
+
+	{/* ---------- 中部:页面主体(eyebrow/title/description/actions)---------- */}
+	{
+		hasDefaultSlot ? (
+			// 完全自定义路线:外部控制全部中部内容
+			<div class="mt-8 lg:mt-10 flex-1 min-h-0">
+				<slot />
+			</div>
+		) : (
+			<div class="mt-10 lg:mt-12 xl:mt-14 flex-1 min-h-0 flex flex-col">
+				{/* 眉标签:极小 Monospace,带可选图标 */}
+				{eyebrow && (
+					<div class="flex items-center gap-1.5 mb-4">
+						{eyebrowIcon && (
+							<span
+								aria-hidden="true"
+								class="inline-flex items-center justify-center h-3 w-3 text-[color:var(--color-ink-tertiary)]"
+							>
+								{/* 仅当传入名称为常见 emoji 时直接渲染,否则忽略 */}
+								<span class="text-[11px] leading-none">{eyebrowIcon}</span>
+							</span>
+						)}
+						<span class="mono-label">{eyebrow}</span>
+					</div>
+				)}
+
+				{/* 主标题 */}
+				{title && (
+					<h1
+						class:list={[
+							"font-medium",
+							"text-[color:var(--color-ink-primary)]",
+							"tracking-[-0.02em]",
+							"leading-[1.15]",
+							// 响应式字号阶梯
+							"text-[32px] sm:text-[36px] lg:text-[40px] xl:text-[44px]",
+							"mb-4 lg:mb-5",
+						]}
+					>
+						{title}
+					</h1>
+				)}
+
+				{/* 描述段落 */}
+				{description && (
+					<p
+						class:list={[
+							"text-[color:var(--color-ink-secondary)]",
+							"text-[15px] lg:text-[15px]",
+							"leading-[1.6]",
+							"max-w-[38ch]",
+							"mb-6 lg:mb-7",
+						]}
+					>
+						{description}
+					</p>
+				)}
+
+				{/* 可选 CTA 按钮组 */}
+				{hasActionsSlot && (
+					<div class="flex items-center gap-2 mb-8">
+						<slot name="actions" />
+					</div>
+				)}
+
+				{/* 社交图标行(小图标:GitHub / X / RSS) */}
+				{hasSocialSlot && (
+					<div
+						class:list={[
+							"flex items-center gap-4",
+							"text-[color:var(--color-ink-tertiary)]",
+							"mb-8",
+						]}
+					>
+						<slot name="social" />
+					</div>
+				)}
+
+				{/* 让后面的 meta 区域被推到底部 */}
+				<div class="flex-1" aria-hidden="true"></div>
+			</div>
+		)
+	}
+
+	{/* ---------- 底部:元信息栏(key-value 列表) ---------- */}
+	{
+		(hasMetaSlot || showDefaultMeta) && (
+			<div
+				class:list={[
+					"mt-8 lg:mt-10",
+					"pt-4",
+					"border-t border-dashed border-[color:var(--color-hairline)]",
+				]}
+			>
+				<dl class="flex flex-col">
+					{hasMetaSlot ? (
+						<slot name="meta" />
+					) : (
+						<>
+							{/* 默认 meta:实验室通用信息 */}
+							<div class="meta-row">
+								<dt class="meta-row__key">{t("meta.status")}</dt>
+								<dd class="meta-row__value">
+									<span
+										aria-hidden="true"
+										class="inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--color-ink-primary)] mr-1.5 align-middle"
+									/>
+									{t("meta.status.active")}
+								</dd>
+							</div>
+							<div class="meta-row">
+								<dt class="meta-row__key">{t("meta.established")}</dt>
+								<dd class="meta-row__value">2024</dd>
+							</div>
+							<div class="meta-row">
+								<dt class="meta-row__key">{t("meta.framework")}</dt>
+								<dd class="meta-row__value">{t("meta.frameworkValue")}</dd>
+							</div>
+						</>
+					)}
+				</dl>
+			</div>
+		)
+	}
+</aside>
+
+<style>
+	/* ----------------------------------------------------------------------------
+	 * 响应式 sticky 策略
+	 * - 桌面端:整个左栏被 AppShell 外层设为 sticky top:0,自身 overflow-y:auto
+	 *   确保左栏内容超长时可独立滚动,不影响右栏
+	 * - 移动端:取消 sticky,恢复文档流
+	 * ---------------------------------------------------------------------------- */
+	.left-pane {
+		/* 桌面端占满视口高度,支持自身独立滚动 */
+		min-height: auto;
+	}
+
+	@media (min-width: 1024px) {
+		.left-pane {
+			min-height: 100vh;
+			min-height: 100dvh;
+		}
+	}
+</style>

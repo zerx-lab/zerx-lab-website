@@ -1,0 +1,55 @@
+---
+/**
+ * ============================================================================
+ * 博客详情页 (英文)
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /en/blog/:slug     → 本文件(en)
+ *   /blog/:slug        → src/pages/blog/[slug].astro(默认中文,无前缀)
+ *
+ * 实现:
+ *   - 与中文版完全同构,共用 BlogPostPage 组件
+ *   - BlogPostPage 内部通过 getLangFromUrl(Astro.url) 推断当前语言,
+ *     URL 以 /en/ 开头时自动输出英文文案与英文分类/标签名
+ *   - 通过 getStaticPaths 预生成所有文章页(SSG 构建期枚举)
+ *
+ * 数据源:
+ *   - 目前阶段只走 fallback-data(Directus 未 bootstrap 时保证可用)
+ *   - 未来接入 Directus 时,可在此处改为优先从 Directus 拉取已发布的 slug 列表
+ *
+ * 维护约定:
+ *   若要修改文章详情页的结构/样式/数据拉取逻辑,只改
+ *   src/components/blog/BlogPostPage.astro,本文件与中文入口都会受益。
+ * ============================================================================
+ */
+
+import BlogPostPage from "@components/blog/BlogPostPage.astro";
+import { listFallbackPosts } from "@lib/fallback-data";
+
+/**
+ * 枚举所有博客 slug。
+ *
+ * 当未来接入 Directus 后,可在此处改为:
+ *   const posts = DIRECTUS_CONFIG.hasReadToken
+ *     ? await loadAllPublishedSlugsFromDirectus()
+ *     : listFallbackPosts();
+ *
+ * 注意:slug 在中英两种语言间共享,URL 靠 /en/ 前缀区分,不做 URL 翻译。
+ * 因此本文件与中文入口的 getStaticPaths 枚举完全一致。
+ */
+export async function getStaticPaths() {
+	const posts = listFallbackPosts();
+	return posts.map((post) => ({
+		params: { slug: post.slug },
+		props: { slug: post.slug },
+	}));
+}
+
+interface Props {
+	slug: string;
+}
+
+const { slug } = Astro.props as Props;
+---
+
+<BlogPostPage slug={slug} />

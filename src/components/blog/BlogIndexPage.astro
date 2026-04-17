@@ -1,0 +1,428 @@
+---
+/**
+ * ============================================================================
+ * BlogIndexPage - 博客列表页共享组件
+ * ----------------------------------------------------------------------------
+ * 为什么抽成独立组件:
+ *   中文 /blog 与英文 /en/blog 两个入口页面 95% 的逻辑相同,
+ *   只有 lang 推导与少量默认文案不同。本组件负责:
+ *     1. 从 Directus 拉取 posts + categories + tags(失败时 fallback)
+ *     2. 把 Bilingual 字段按当前 lang 解包成普通字符串
+ *     3. 组合左栏(LabMark + meta)与右栏(分区 + 列表 + 分页)
+ *
+ * 使用方式(页面文件):
+ *   ---
+ *   import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
+ *   ---
+ *   <BlogIndexPage />
+ *
+ * 左栏 meta 字段说明:
+ *   - POSTS        已发布文章总数
+ *   - CATEGORIES   分类总数
+ *   - LAST UPDATE  最新文章的发布日期(ISO → 本地化)
+ *   - RSS          /rss.xml 外链
+ *
+ * 分页:
+ *   - 当前版本走"单页展示全部"(总量少,不分页),
+ *     若后续文章数超过 20 篇,启用 Pagination 组件(已在 UI 库里预置)
+ * ============================================================================
+ */
+
+import AppShell from "@layouts/AppShell.astro";
+import SectionHeader from "@components/ui/SectionHeader.astro";
+import MetaRow from "@components/ui/MetaRow.astro";
+import PostCard from "@components/ui/PostCard.astro";
+import {
+	getLangFromUrl,
+	useTranslations,
+	useTranslatedPath,
+	formatDateCompact,
+} from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+import {
+	listFallbackPosts,
+	FALLBACK_CATEGORIES,
+	findAuthor,
+	findCategory,
+	findTag,
+	pickLang,
+	type FallbackPost,
+} from "@lib/fallback-data";
+import { directus, readItems, DIRECTUS_CONFIG } from "@lib/directus";
+
+/* ----------------------------------------------------------------------------
+ * 当前语言 / 翻译工具
+ * -------------------------------------------------------------------------- */
+
+const lang = getLangFromUrl(Astro.url) as Lang;
+const t = useTranslations(lang);
+const tp = useTranslatedPath(lang);
+
+/* ----------------------------------------------------------------------------
+ * 数据适配器
+ * ----------------------------------------------------------------------------
+ * 统一的 ViewModel:无论从 Directus 还是 Fallback 来,列表渲染只认这一个形状。
+ * -------------------------------------------------------------------------- */
+
+interface PostVM {
+	slug: string;
+	title: string;
+	excerpt: string;
+	cover: string | null;
+	coverLabel: string;
+	authorName: string | null;
+	categoryName: string | null;
+	tags: readonly { slug: string; name: string }[];
+	date: string;
+	updatedDate: string | null;
+	readingTime: number;
+	featured: boolean;
+}
+
+/** 把 FallbackPost 转成 ViewModel(按当前 lang 解包 Bilingual) */
+function fallbackToVM(post: FallbackPost, currentLang: Lang): PostVM {
+	const author = findAuthor(post.authorSlug);
+	const category = findCategory(post.categorySlug);
+	const tags = post.tagSlugs
+		.map((slug) => {
+			const tag = findTag(slug);
+			if (!tag) return null;
+			return { slug: tag.slug, name: pickLang(tag.name, currentLang) };
+		})
+		.filter((x): x is { slug: string; name: string } => x !== null);
+
+	return {
+		slug: post.slug,
+		title: pickLang(post.title, currentLang),
+		excerpt: pickLang(post.excerpt, currentLang),
+		cover: post.cover,
+		coverLabel: pickLang(post.coverLabel, currentLang),
+		authorName: author?.name ?? null,
+		categoryName: category ? pickLang(category.name, currentLang) : null,
+		tags,
+		date: post.date,
+		updatedDate: post.updatedDate,
+		readingTime: post.readingTime,
+		featured: post.featured,
+	};
+}
+
+/* ----------------------------------------------------------------------------
+ * 尝试从 Directus 拉取,失败则走 Fallback
+ * ----------------------------------------------------------------------------
+ * 策略:
+ *   - 未配置 DIRECTUS_READ_TOKEN 时,直接走 fallback,不发网络请求
+ *   - 有 token 时尝试拉取;任何错误都降级,不影响首屏
+ *   - Directus schema 尚未 bootstrap 时,请求会 404 → 走 fallback
+ *
+ * 具体 fields 写法依赖 typegen 完成后的精确类型,此处用 any 断言绕过,
+ * 等 schema 落地后再精确化。
+ * -------------------------------------------------------------------------- */
+
+async function loadPosts(): Promise<readonly PostVM[]> {
+	if (!DIRECTUS_CONFIG.hasReadToken) {
+		return listFallbackPosts().map((p) => fallbackToVM(p, lang));
+	}
+
+	try {
+		const client = directus();
+		const langCode = lang === "zh" ? "zh-CN" : "en-US";
+
+		const postFields: any = [
+			"id",
+			"slug",
+			"date_published",
+			"date_updated",
+			"reading_time",
+			"featured",
+			"cover",
+			{
+				author: ["name", "slug"],
+				category: [
+					"slug",
+					{ translations: ["languages_code", "name"] },
+				],
+				tags: [
+					{
+						tags_id: [
+							"slug",
+							{ translations: ["languages_code", "name"] },
+						],
+					},
+				],
+				translations: [
+					"languages_code",
+					"title",
+					"excerpt",
+				],
+			},
+		];
+
+		const result = (await client.request(
+			readItems("posts", {
+				filter: { status: { _eq: "published" } },
+				sort: ["-date_published"],
+				fields: postFields,
+				limit: -1,
+			}),
+		)) as any[];
+
+		// ---- 将 Directus 原始响应转成 ViewModel ----
+		return result.map((row): PostVM => {
+			const tr = row?.translations?.find(
+				(x: any) =>
+					x.languages_code === langCode ||
+					x.languages_code?.code === langCode,
+			);
+			const catTr = row?.category?.translations?.find(
+				(x: any) =>
+					x.languages_code === langCode ||
+					x.languages_code?.code === langCode,
+			);
+			const tags = (row?.tags ?? [])
+				.map((t: any) => {
+					const tag = t?.tags_id;
+					if (!tag?.slug) return null;
+					const tagTr = tag?.translations?.find(
+						(x: any) =>
+							x.languages_code === langCode ||
+							x.languages_code?.code === langCode,
+					);
+					return {
+						slug: tag.slug,
+						name: tagTr?.name ?? tag.slug,
+					};
+				})
+				.filter(
+					(x: any): x is { slug: string; name: string } =>
+						x !== null,
+				);
+
+			return {
+				slug: row?.slug ?? "",
+				title: tr?.title ?? "(untitled)",
+				excerpt: tr?.excerpt ?? "",
+				cover:
+					typeof row?.cover === "string"
+						? `${DIRECTUS_CONFIG.url}/assets/${row.cover}?width=480&format=webp&quality=85`
+						: null,
+				coverLabel: tr?.title ?? "",
+				authorName: row?.author?.name ?? null,
+				categoryName: catTr?.name ?? null,
+				tags,
+				date: row?.date_published ?? new Date().toISOString(),
+				updatedDate: row?.date_updated ?? null,
+				readingTime: row?.reading_time ?? 0,
+				featured: Boolean(row?.featured),
+			};
+		});
+	} catch (err) {
+		console.warn(
+			"[blog] Directus 读取失败,使用 FALLBACK。原因:",
+			(err as Error)?.message ?? err,
+		);
+		return listFallbackPosts().map((p) => fallbackToVM(p, lang));
+	}
+}
+
+const posts = await loadPosts();
+
+/* ----------------------------------------------------------------------------
+ * 左栏 meta 数据计算
+ * -------------------------------------------------------------------------- */
+
+const postCount = posts.length;
+const categoryCount = FALLBACK_CATEGORIES.length;
+const latestPostDate = posts.length > 0 ? posts[0]!.date : null;
+const lastUpdateText = latestPostDate
+	? formatDateCompact(latestPostDate)
+	: "—";
+
+/* ----------------------------------------------------------------------------
+ * 页面级文案(本页不通过 i18n 字典管理,因为是单页专属)
+ * -------------------------------------------------------------------------- */
+
+const PAGE_COPY = {
+	zh: {
+		eyebrow: "博客",
+		title: "文章、发布与洞见",
+		description: "记录构建过程、技术决策与开源探索。不追热点,只写能帮到明年自己的东西。",
+		empty: "还没有文章,敬请期待。",
+		sectionTitle: "BLOG",
+	},
+	en: {
+		eyebrow: "Blog",
+		title: "Articles, releases, and insights",
+		description:
+			"Notes on what I build, the decisions behind them, and open-source explorations. No hot takes — only things that will help future me.",
+		empty: "No posts yet. Stay tuned.",
+		sectionTitle: "BLOG",
+	},
+} as const;
+
+const copy = PAGE_COPY[lang] ?? PAGE_COPY.zh;
+
+/* ----------------------------------------------------------------------------
+ * 分组:Featured(置顶) + 其余按日期降序
+ * -------------------------------------------------------------------------- */
+
+const featuredPosts = posts.filter((p) => p.featured);
+const regularPosts = posts.filter((p) => !p.featured);
+---
+
+<AppShell
+	title={copy.title}
+	description={copy.description}
+	eyebrow={copy.eyebrow}
+	eyebrowIcon="📝"
+	leftTitle={copy.title}
+	leftDescription={copy.description}
+>
+	{/* ---------- 左栏:社交(仅 RSS) ---------- */}
+	<Fragment slot="left-social">
+		<a
+			href="/rss.xml"
+			aria-label="RSS"
+			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
+		>
+			<svg
+				width="15"
+				height="15"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<path d="M4 11a9 9 0 0 1 9 9"></path>
+				<path d="M4 4a16 16 0 0 1 16 16"></path>
+				<circle cx="5" cy="19" r="1"></circle>
+			</svg>
+		</a>
+		<a
+			href="https://github.com/zerx-lab"
+			target="_blank"
+			rel="noopener noreferrer"
+			aria-label="GitHub"
+			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="currentColor"
+				aria-hidden="true"
+			>
+				<path
+					d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
+				></path>
+			</svg>
+		</a>
+	</Fragment>
+
+	{/* ---------- 左栏:Meta ---------- */}
+	<Fragment slot="left-meta">
+		<MetaRow label={t("meta.posts")} value={String(postCount)} />
+		<MetaRow
+			label={t("meta.categories")}
+			value={String(categoryCount)}
+		/>
+		<MetaRow label={t("meta.lastUpdate")} value={lastUpdateText} />
+		<MetaRow
+			label={t("meta.rss")}
+			value="/rss.xml"
+			href="/rss.xml"
+		/>
+	</Fragment>
+
+	{/* ================================================================
+	 *                          右栏主内容
+	 * ================================================================ */}
+
+	{/* ---------- 分区标题 ---------- */}
+	<SectionHeader
+		eyebrow={copy.sectionTitle}
+		count={postCount}
+	/>
+
+	{/* ---------- 文章列表 ---------- */}
+	{
+		posts.length === 0 ? (
+			/* 空状态 */
+			<div
+				class:list={[
+					"mt-12 lg:mt-16 mb-16",
+					"flex flex-col items-center justify-center",
+					"py-16 lg:py-20",
+					"border border-dashed border-[color:var(--color-hairline)]",
+					"text-center",
+				]}
+			>
+				<span
+					aria-hidden="true"
+					class:list={[
+						"mono-label",
+						"text-[11px]",
+						"text-[color:var(--color-ink-muted)]",
+						"mb-3",
+					]}
+				>
+					— EMPTY —
+				</span>
+				<p
+					class:list={[
+						"text-[color:var(--color-ink-secondary)]",
+						"text-[14px]",
+						"leading-[1.6]",
+					]}
+				>
+					{copy.empty}
+				</p>
+			</div>
+		) : (
+			<div
+				class:list={[
+					"mt-6 lg:mt-8 mb-16",
+					// 整个列表包在一个虚线边框里,每篇文章用虚线分隔
+					"border border-dashed border-[color:var(--color-hairline)]",
+					"divide-y divide-dashed divide-[color:var(--color-hairline)]",
+				]}
+			>
+				{/* Featured 优先 */}
+				{featuredPosts.map((post) => (
+					<PostCard
+						href={tp(`/blog/${post.slug}`)}
+						title={post.title}
+						excerpt={post.excerpt}
+						cover={post.cover}
+						coverLabel={post.coverLabel}
+						authorName={post.authorName ?? undefined}
+						categoryName={post.categoryName ?? undefined}
+						date={post.date}
+						tags={post.tags}
+						readingTime={post.readingTime}
+						featured
+					/>
+				))}
+
+				{/* 其余按日期降序 */}
+				{regularPosts.map((post) => (
+					<PostCard
+						href={tp(`/blog/${post.slug}`)}
+						title={post.title}
+						excerpt={post.excerpt}
+						cover={post.cover}
+						coverLabel={post.coverLabel}
+						authorName={post.authorName ?? undefined}
+						categoryName={post.categoryName ?? undefined}
+						date={post.date}
+						tags={post.tags}
+						readingTime={post.readingTime}
+					/>
+				))}
+			</div>
+		)
+	}
+</AppShell>

@@ -1,0 +1,742 @@
+---
+/**
+ * ============================================================================
+ * 首页 (Home) - 默认中文
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /          → 本文件(zh,默认语言无前缀)
+ *   /en/       → src/pages/en/index.astro(英文)
+ *
+ * 布局:
+ *   - 左栏:Logo + Eyebrow(README)+ Hero 大标题 + 描述 + CTA + 社交 + 元信息
+ *   - 右栏:README 分区 + FEATURES 九宫格 + STACK 代码片段区
+ *
+ * 数据来源:
+ *   - 站点级配置 (site_name / tagline / 社交链接 / 建立年份 / 项目数 / ...)
+ *     → Directus site_settings 单例
+ *   - 当 DIRECTUS_READ_TOKEN 未配置或请求失败时,使用本文件底部的 FALLBACK_DATA
+ *     兜底,保证首屏始终能展示"实验室骨架"
+ *
+ * 视觉参考: better-auth.com(README 页)
+ * ============================================================================
+ */
+
+import AppShell from "@layouts/AppShell.astro";
+import SectionHeader from "@components/ui/SectionHeader.astro";
+import FeatureCard from "@components/ui/FeatureCard.astro";
+import MetaRow from "@components/ui/MetaRow.astro";
+import {
+	directus,
+	readSingleton,
+	readItems,
+	DIRECTUS_CONFIG,
+} from "@lib/directus";
+import { getLangFromUrl, useTranslations, useTranslatedPath } from "@i18n/utils";
+
+// ---------- 当前语言 / 翻译工具 ----------
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+const tp = useTranslatedPath(lang);
+
+/* ----------------------------------------------------------------------------
+ * 数据获取:站点设置 + 项目计数 + AUR 包计数
+ * ----------------------------------------------------------------------------
+ * 策略:
+ *   1. 优先从 Directus 拉取,失败/空值时使用 FALLBACK_DATA
+ *   2. 所有错误都被 catch,不阻塞首屏渲染(构建阶段 Directus 可能未 bootstrap)
+ *   3. 构建时如拉取失败,控制台会输出警告,供开发者排查
+ * -------------------------------------------------------------------------- */
+
+interface HomeData {
+	siteName: string;
+	tagline: string;
+	description: string;
+	github: string;
+	x: string | null;
+	email: string | null;
+	establishedYear: number;
+	location: string;
+	focus: string;
+	projectCount: number;
+	aurCount: number;
+	postCount: number;
+}
+
+/** 无 Directus 时的兜底数据 —— 基于用户 GitHub / 项目实际情况手写 */
+const FALLBACK_DATA: HomeData = {
+	siteName: "ZerxLab",
+	tagline: lang === "zh" ? "全栈实验室" : "Full-Stack Laboratory",
+	description:
+		lang === "zh"
+			? "聚焦高性能应用、现代技术架构与开源工具,探索代码与工程的边界。"
+			: "Building high-performance apps, exploring modern architecture, and shipping open-source tools.",
+	github: "https://github.com/zerx-lab",
+	x: null,
+	email: "1603852@qq.com",
+	establishedYear: 2020,
+	location: "北京市",
+	focus: "FULL-STACK / RUST / GO",
+	projectCount: 9,
+	aurCount: 4,
+	postCount: 0,
+};
+
+async function loadHomeData(): Promise<HomeData> {
+	// 未配置只读 token 时,直接走 fallback,避免无意义的网络请求
+	if (!DIRECTUS_CONFIG.hasReadToken) {
+		return FALLBACK_DATA;
+	}
+
+	try {
+		const client = directus();
+
+		// 并行拉取:单例 + 集合聚合计数
+		// Directus SDK 21 的 fields 泛型对嵌套 translations 的推导比较严苛,
+		// 在手写 Schema 尚未精确映射前使用 any 绕过,运行时行为不受影响。
+		// typegen 脚本跑完后会生成精确类型,届时可移除此断言。
+		const settingsFields: any = [
+			"site_name",
+			"social_github",
+			"social_x",
+			"social_email",
+			"established_year",
+			"location",
+			"focus",
+			{
+				translations: ["languages_code", "tagline", "description"],
+			},
+		];
+
+		const [settings, projects, aurPackages, posts] = await Promise.all([
+			client
+				.request(
+					readSingleton("site_settings", {
+						fields: settingsFields,
+					}),
+				)
+				.catch(() => null),
+
+			client
+				.request(
+					readItems("projects", {
+						filter: { status: { _eq: "published" } },
+						aggregate: { count: "*" },
+					}),
+				)
+				.catch(() => [{ count: { "*": FALLBACK_DATA.projectCount } }]),
+
+			client
+				.request(
+					readItems("aur_packages", {
+						filter: { status: { _eq: "published" } },
+						aggregate: { count: "*" },
+					}),
+				)
+				.catch(() => [{ count: { "*": FALLBACK_DATA.aurCount } }]),
+
+			client
+				.request(
+					readItems("posts", {
+						filter: { status: { _eq: "published" } },
+						aggregate: { count: "*" },
+					}),
+				)
+				.catch(() => [{ count: { "*": FALLBACK_DATA.postCount } }]),
+		]);
+
+		// 从 translations 数组中挑选当前语言对应的字段
+		const langCode = lang === "zh" ? "zh-CN" : "en-US";
+		const tr = (settings as any)?.translations?.find(
+			(x: any) =>
+				x.languages_code === langCode ||
+				x.languages_code?.code === langCode,
+		);
+
+		return {
+			siteName: (settings as any)?.site_name ?? FALLBACK_DATA.siteName,
+			tagline: tr?.tagline ?? FALLBACK_DATA.tagline,
+			description: tr?.description ?? FALLBACK_DATA.description,
+			github: (settings as any)?.social_github ?? FALLBACK_DATA.github,
+			x: (settings as any)?.social_x ?? FALLBACK_DATA.x,
+			email: (settings as any)?.social_email ?? FALLBACK_DATA.email,
+			establishedYear:
+				(settings as any)?.established_year ??
+				FALLBACK_DATA.establishedYear,
+			location: (settings as any)?.location ?? FALLBACK_DATA.location,
+			focus: (settings as any)?.focus ?? FALLBACK_DATA.focus,
+			projectCount:
+				(projects as any)?.[0]?.count?.["*"] ??
+				FALLBACK_DATA.projectCount,
+			aurCount:
+				(aurPackages as any)?.[0]?.count?.["*"] ?? FALLBACK_DATA.aurCount,
+			postCount:
+				(posts as any)?.[0]?.count?.["*"] ?? FALLBACK_DATA.postCount,
+		};
+	} catch (err) {
+		console.warn(
+			"[home] Directus 读取失败,使用 FALLBACK_DATA。原因:",
+			(err as Error)?.message ?? err,
+		);
+		return FALLBACK_DATA;
+	}
+}
+
+const data = await loadHomeData();
+
+/* ----------------------------------------------------------------------------
+ * 右栏内容:核心能力九宫格
+ * ----------------------------------------------------------------------------
+ * 9 张卡片,按 ZerxLab 的实际关注方向组织,对应首页 "FEATURES" 分区。
+ * 内容与品牌定位(全栈/性能/开源)强相关,不是空话。
+ * -------------------------------------------------------------------------- */
+
+interface FeatureItem {
+	number: string;
+	eyebrow: { zh: string; en: string };
+	badge?: string;
+	title: { zh: string; en: string };
+	description: { zh: string; en: string };
+	tags?: string[];
+}
+
+const FEATURES: readonly FeatureItem[] = [
+	{
+		number: "01",
+		eyebrow: { zh: "全栈工程", en: "Full-Stack" },
+		title: { zh: "一个人,一条全链路。", en: "End-to-end ownership." },
+		description: {
+			zh: "从系统级 Rust 到前端 TypeScript,从数据库到 CI/CD,用合适的工具解决合适的问题。",
+			en: "From systems-level Rust to front-end TypeScript, from databases to CI/CD — right tool for the right problem.",
+		},
+		tags: ["TypeScript", "Rust", "Go", "Python"],
+	},
+	{
+		number: "02",
+		eyebrow: { zh: "高性能", en: "High Performance" },
+		title: { zh: "性能是功能。", en: "Performance is a feature." },
+		description: {
+			zh: "WordZero 处理 Word 文档比 Python 方案快 21 倍。对热路径做 profiling 与基准测试,不猜测。",
+			en: "WordZero processes Word docs 21x faster than Python. Profile and benchmark hot paths — never guess.",
+		},
+		tags: ["Benchmark", "Profiling", "Zero-dep"],
+	},
+	{
+		number: "03",
+		eyebrow: { zh: "系统编程", en: "Systems" },
+		title: { zh: "并行与并发原语。", en: "Parallel & concurrent primitives." },
+		description: {
+			zh: "rmx 用 Rust 重写 Windows 目录删除,数量级加速。拥抱所有权模型,把运行时问题推到编译期。",
+			en: "rmx rewrites Windows directory deletion in Rust for magnitude-level speedup. Push runtime bugs to compile time.",
+		},
+	},
+	{
+		number: "04",
+		eyebrow: { zh: "开发者工具", en: "Dev Tools" },
+		title: { zh: "为开发者,由开发者。", en: "For developers, by developers." },
+		description: {
+			zh: "PenBridge 一键跨平台发布博客;LspProxy 把 LSP 文档实时翻译成中文。消除每天都会遇到的小摩擦。",
+			en: "PenBridge publishes to multiple platforms with one click. LspProxy translates LSP docs to Chinese in real time.",
+		},
+	},
+	{
+		number: "05",
+		eyebrow: { zh: "开源优先", en: "Open Source" },
+		badge: "MIT",
+		title: { zh: "代码公开,决策公开。", en: "Code open, decisions open." },
+		description: {
+			zh: "所有项目 MIT 开源,750+ stars 是社区信任的累积。Issue 即产品会议,PR 即代码评审。",
+			en: "All projects open-sourced under MIT. 750+ stars reflect community trust. Issues are the product meetings.",
+		},
+	},
+	{
+		number: "06",
+		eyebrow: { zh: "AUR 维护", en: "AUR" },
+		title: { zh: "Arch Linux 包常备。", en: "Ready-made for Arch." },
+		description: {
+			zh: "为 Arch 用户维护 pencil-bin / fluxdown-bin / dida365-bin / hexhub-bin 等包,一行 yay 即用。",
+			en: "Maintaining pencil-bin / fluxdown-bin / dida365-bin / hexhub-bin on AUR. One yay away.",
+		},
+		tags: ["yay", "paru", "binary"],
+	},
+	{
+		number: "07",
+		eyebrow: { zh: "现代前端", en: "Modern Web" },
+		title: { zh: "静态为王,交互有度。", en: "Static first, interactive where needed." },
+		description: {
+			zh: "Astro 的岛屿架构、React 的组件生态、Tailwind 的原子化。默认零 JS,按需使用.",
+			en: "Astro's island architecture, React's ecosystem, Tailwind's utilities. Zero JS by default, hydrate on demand.",
+		},
+	},
+	{
+		number: "08",
+		eyebrow: { zh: "AI 原生", en: "AI Native" },
+		badge: lang === "zh" ? "探索中" : "exploring",
+		title: { zh: "Agent 与代码协作。", en: "Agents as co-authors." },
+		description: {
+			zh: "axon-ai 在探索 Agent 编排与工具调用。把 LLM 当作「会写代码的同事」,而不是玩具。",
+			en: "axon-ai explores agent orchestration. Treat LLMs as coworkers that write code, not toys.",
+		},
+	},
+	{
+		number: "09",
+		eyebrow: { zh: "工程美学", en: "Craft" },
+		title: { zh: "细节即品牌。", en: "Details are the brand." },
+		description: {
+			zh: "等宽标签、虚线发丝、01/02/03 编号、tabular-nums 数字对齐。每一处都是审慎的选择。",
+			en: "Monospace labels, hairline dashes, 01/02/03 numbering, tabular digits. Every detail is deliberate.",
+		},
+	},
+] as const;
+
+/* ----------------------------------------------------------------------------
+ * Stack 演示代码片段 —— 展示 Lab 的技术身份
+ * -------------------------------------------------------------------------- */
+
+const ABOUT_SNIPPET = `// about.ts
+const zerxLab = {
+  name: "ZerxLab",
+  mission: "build fast, ship open, stay curious",
+  stack: {
+    languages: ["TypeScript", "Rust", "Go", "Python"],
+    runtime:   ["Bun", "Node", "Tokio"],
+    frontend:  ["Astro", "React", "Tailwind"],
+    backend:   ["Hono", "Directus", "PostgreSQL"],
+    infra:     ["Docker", "Dokploy", "GitHub Actions"],
+  },
+  focus: "performance / dx / open-source",
+  since: 2020,
+} as const;
+
+export default zerxLab;`;
+
+/* ----------------------------------------------------------------------------
+ * 左栏 CTA 按钮文案
+ * -------------------------------------------------------------------------- */
+
+const ctaPrimary = {
+	label: t("action.getStarted"),
+	href: tp("/projects"),
+};
+const ctaSecondary = {
+	label: t("nav.blog"),
+	href: tp("/blog"),
+};
+---
+
+<AppShell
+	title={data.siteName}
+	description={data.description}
+>
+	{/* ---------- 左栏:CTA 按钮组 ---------- */}
+	<Fragment slot="left-actions">
+		<a
+			href={ctaPrimary.href}
+			class:list={[
+				"inline-flex items-center justify-center",
+				"h-9 px-4",
+				"bg-[color:var(--color-ink-primary)]",
+				"text-[color:var(--color-paper)]",
+				"text-[12px] font-medium",
+				"tracking-[var(--tracking-wide)]",
+				"rounded-[var(--radius-sm)]",
+				"transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+				"hover:opacity-85",
+				"whitespace-nowrap",
+			]}
+		>
+			{ctaPrimary.label}
+		</a>
+		<a
+			href={ctaSecondary.href}
+			class:list={[
+				"inline-flex items-center justify-center",
+				"h-9 px-4",
+				"border border-[color:var(--color-hairline-strong)]",
+				"text-[color:var(--color-ink-primary)]",
+				"text-[12px] font-medium",
+				"tracking-[var(--tracking-wide)]",
+				"rounded-[var(--radius-sm)]",
+				"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+				"hover:bg-[color:var(--color-paper-muted)]",
+				"whitespace-nowrap",
+			]}
+		>
+			{ctaSecondary.label}
+		</a>
+	</Fragment>
+
+	{/* ---------- 左栏:社交图标行 ---------- */}
+	<Fragment slot="left-social">
+		<a
+			href={data.github}
+			target="_blank"
+			rel="noopener noreferrer"
+			aria-label="GitHub"
+			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="currentColor"
+				aria-hidden="true"
+			>
+				<path
+					d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
+				/>
+			</svg>
+		</a>
+		{
+			data.x && (
+				<a
+					href={data.x}
+					target="_blank"
+					rel="noopener noreferrer"
+					aria-label="X (Twitter)"
+					class="transition-colors hover:text-[color:var(--color-ink-primary)]"
+				>
+					<svg
+						width="15"
+						height="15"
+						viewBox="0 0 512 512"
+						fill="currentColor"
+						aria-hidden="true"
+					>
+						<path d="M389.2 48h70.6L305.6 224.2 487 464H345L233.7 318.6 106.5 464H35.8L200.7 275.5 26.8 48H172.4L272.9 180.9 389.2 48zM364.4 421.8h39.1L151.1 88h-42L364.4 421.8z" />
+					</svg>
+				</a>
+			)
+		}
+		<a
+			href="/rss.xml"
+			aria-label="RSS"
+			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
+		>
+			<svg
+				width="15"
+				height="15"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<path d="M4 11a9 9 0 0 1 9 9" />
+				<path d="M4 4a16 16 0 0 1 16 16" />
+				<circle cx="5" cy="19" r="1" />
+			</svg>
+		</a>
+	</Fragment>
+
+	{/* ---------- 左栏:Meta 元信息栏 ---------- */}
+	<Fragment slot="left-meta">
+		<MetaRow label={t("meta.status")}>
+			<Fragment slot="value">
+				<span
+					aria-hidden="true"
+					class="inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--color-ink-primary)] mr-1.5 align-middle"
+				></span>
+				{t("meta.status.active")}
+			</Fragment>
+		</MetaRow>
+		<MetaRow
+			label={t("meta.established")}
+			value={String(data.establishedYear)}
+		/>
+		<MetaRow label={t("meta.focus")} value={data.focus} />
+		<MetaRow label={t("meta.projects")} value={String(data.projectCount)} />
+		<MetaRow label={t("meta.aurPackages")} value={String(data.aurCount)} />
+		<MetaRow label={t("meta.location")} value={data.location} />
+	</Fragment>
+
+	{/* ==========================================================================
+	 *                            右栏主内容
+	 * ========================================================================== */}
+
+	{/* ---------- README 分区 ---------- */}
+	<SectionHeader eyebrow={t("section.readme")} />
+
+	<div class="mt-6 lg:mt-8">
+		<p
+			class:list={[
+				"text-[color:var(--color-ink-secondary)]",
+				"text-[15px] lg:text-[15.5px]",
+				"leading-[1.75]",
+				"max-w-[68ch]",
+			]}
+		>
+			{
+				lang === "zh" ? (
+					<>
+						<span class="text-[color:var(--color-ink-primary)] font-medium">
+							ZerxLab
+						</span>{" "}
+						是一个专注于构建高性能应用、探索现代技术架构并持续产出开源工具的全栈实验室。
+						这里没有大词和营销话术 —— 每个项目都能跑、能测、能用,并以 MIT 协议开放源代码。
+					</>
+				) : (
+					<>
+						<span class="text-[color:var(--color-ink-primary)] font-medium">
+							ZerxLab
+						</span>{" "}
+						is a full-stack lab focused on building high-performance apps,
+						exploring modern architecture, and shipping open-source tools.
+						No buzzwords — every project runs, benchmarks, and ships under MIT.
+					</>
+				)
+			}
+		</p>
+
+		{/*
+		 * 终端"自报家门"条(编辑派细节:像 better-auth 的 `npx auth init`)
+		 * ----------------------------------------------------------------
+		 * 这里不是一个可 clone 的 repo,而是实验室主页,所以不能用 git clone。
+		 * 改为 `$ whoami` 两行样式:
+		 *   第 1 行:提示符 + 命令 (灰色)
+		 *   第 2 行:输出 —— 实验室名 · 可点击的 GitHub 组织地址(带 ↗)
+		 * 视觉保留"终端卡片"的质感,语义却更贴个人/实验室主页身份。
+		 */}
+		<div
+			class:list={[
+				"mt-6 lg:mt-8",
+				"px-4 py-3",
+				"border border-dashed border-[color:var(--color-hairline)]",
+				"bg-[color:var(--color-paper-muted)]/40",
+				"rounded-[var(--radius-sm)]",
+				"font-[var(--font-mono)]",
+				"text-[13px]",
+				"leading-[1.7]",
+				"max-w-[520px]",
+			]}
+		>
+			{/* 第 1 行:$ whoami */}
+			<div class="flex items-center gap-2">
+				<span
+					aria-hidden="true"
+					class="text-[color:var(--color-ink-muted)] select-none"
+				>
+					$
+				</span>
+				<span class="text-[color:var(--color-ink-secondary)]">
+					whoami
+				</span>
+			</div>
+
+			{/* 第 2 行:输出 —— zerx-lab · github 外链 */}
+			<div class="flex items-center gap-2 flex-wrap pl-[18px]">
+				<span class="text-[color:var(--color-ink-primary)]">
+					zerx-lab
+				</span>
+				<span
+					aria-hidden="true"
+					class="text-[color:var(--color-ink-muted)]"
+				>
+					·
+				</span>
+				<a
+					href="https://github.com/zerx-lab"
+					target="_blank"
+					rel="noopener noreferrer"
+					class:list={[
+						"group inline-flex items-center gap-1",
+						"text-[color:var(--color-ink-secondary)]",
+						"hover:text-[color:var(--color-ink-primary)]",
+						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						"underline decoration-[color:var(--color-hairline-strong)] decoration-1 underline-offset-[3px]",
+						"hover:decoration-[color:var(--color-ink-primary)]",
+					]}
+				>
+					<span>github.com/zerx-lab</span>
+					<svg
+						aria-hidden="true"
+						width="9"
+						height="9"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class:list={[
+							"shrink-0",
+							"text-[color:var(--color-ink-muted)]",
+							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+							"group-hover:translate-x-[1px] group-hover:-translate-y-[1px]",
+							"group-hover:text-[color:var(--color-ink-primary)]",
+						]}
+					>
+						<path d="M7 17L17 7" />
+						<path d="M8 7h9v9" />
+					</svg>
+				</a>
+			</div>
+		</div>
+	</div>
+
+	{/* ---------- FEATURES 九宫格 ---------- */}
+	<SectionHeader
+		eyebrow={t("section.features")}
+		count={FEATURES.length}
+		spacious
+	/>
+
+	<div
+		class:list={[
+			"mt-6 lg:mt-8",
+			"grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
+			// 靠父容器的 divide 虚线在卡片间形成分割
+			"border border-dashed border-[color:var(--color-hairline)]",
+			"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
+			// 让 divide 在行首列首不重绘成双线
+			"[&>*]:border-[color:var(--color-hairline)]",
+		]}
+	>
+		{
+			FEATURES.map((f) => (
+				<FeatureCard
+					number={f.number}
+					eyebrow={f.eyebrow[lang]}
+					badge={f.badge}
+					title={f.title[lang]}
+					description={f.description[lang]}
+				>
+					{f.tags && (
+						<Fragment slot="visual">
+							<div class="flex flex-wrap gap-1.5">
+								{f.tags.map((tag) => (
+									<span
+										class:list={[
+											"inline-flex items-center",
+											"px-2 py-[3px]",
+											"font-[var(--font-mono)]",
+											"text-[10px]",
+											"leading-none",
+											"tracking-[var(--tracking-wide)]",
+											"text-[color:var(--color-ink-secondary)]",
+											"bg-[color:var(--color-paper-muted)]/60",
+											"border border-[color:var(--color-hairline)]",
+											"rounded-[var(--radius-sm)]",
+										]}
+									>
+										{tag}
+									</span>
+								))}
+							</div>
+						</Fragment>
+					)}
+				</FeatureCard>
+			))
+		}
+	</div>
+
+	{/* ---------- STACK 代码片段分区 ---------- */}
+	<SectionHeader
+		eyebrow={t("section.stack")}
+		spacious
+		linkText={t("action.viewOnGithub")}
+		linkHref={data.github}
+	/>
+
+	<div
+		class:list={[
+			"mt-6 lg:mt-8",
+			"border border-dashed border-[color:var(--color-hairline)]",
+			"bg-[color:var(--color-paper-muted)]/30",
+			"overflow-hidden",
+		]}
+	>
+		{/* 伪编辑器头部 */}
+		<div
+			class:list={[
+				"flex items-center gap-3",
+				"px-4 py-2.5",
+				"border-b border-dashed border-[color:var(--color-hairline)]",
+				"bg-[color:var(--color-paper-muted)]/50",
+			]}
+		>
+			<div class="flex items-center gap-1.5">
+				<span class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"></span>
+				<span class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"></span>
+				<span class="inline-block h-2 w-2 rounded-full bg-[color:var(--color-hairline-strong)]"></span>
+			</div>
+			<span
+				class:list={[
+					"mono-label",
+					"text-[10px]",
+					"text-[color:var(--color-ink-tertiary)]",
+				]}
+			>
+				about.ts
+			</span>
+			<span
+				aria-hidden="true"
+				class="ml-auto mono-num text-[10px] text-[color:var(--color-ink-muted)]"
+			>
+				TS
+			</span>
+		</div>
+
+		{/* 代码内容 */}
+		<pre
+			class:list={[
+				"px-4 py-4 lg:px-5 lg:py-5",
+				"font-[var(--font-mono)]",
+				"text-[12.5px] leading-[1.65]",
+				"text-[color:var(--color-ink-secondary)]",
+				"overflow-x-auto",
+			]}><code>{ABOUT_SNIPPET}</code></pre>
+	</div>
+
+	{/* ---------- 底部:博客 / 项目引导 ---------- */}
+	<SectionHeader
+		eyebrow={lang === "zh" ? "继续探索" : "Keep exploring"}
+		spacious
+	/>
+
+	<div
+		class:list={[
+			"mt-6 lg:mt-8 mb-16",
+			"grid grid-cols-1 sm:grid-cols-3",
+			"border border-dashed border-[color:var(--color-hairline)]",
+			"divide-x divide-dashed divide-[color:var(--color-hairline)]",
+		]}
+	>
+		<FeatureCard
+			eyebrow={t("nav.projects")}
+			title={
+				lang === "zh" ? "浏览所有开源项目" : "Browse open-source projects"
+			}
+			description={
+				lang === "zh"
+					? "从 WordZero 到 rmx,全部代码、基准与决策记录都在这里。"
+					: "From WordZero to rmx — code, benchmarks, and decisions."
+			}
+			href={tp("/projects")}
+			density="compact"
+		/>
+		<FeatureCard
+			eyebrow={t("nav.blog")}
+			title={lang === "zh" ? "阅读最新博客" : "Read the latest posts"}
+			description={
+				lang === "zh"
+					? "关于架构、性能优化与开源实践的工程笔记。"
+					: "Engineering notes on architecture, performance, and open source."
+			}
+			href={tp("/blog")}
+			density="compact"
+		/>
+		<FeatureCard
+			eyebrow={t("nav.about")}
+			title={lang === "zh" ? "了解实验室" : "About the lab"}
+			description={
+				lang === "zh"
+					? "社区数据、联系方式与长期愿景。"
+					: "Community stats, contacts, and long-term vision."
+			}
+			href={tp("/about")}
+			density="compact"
+		/>
+	</div>
+</AppShell>

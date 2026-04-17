@@ -1,0 +1,27 @@
+---
+/**
+ * ============================================================================
+ * 关于页 (中文,默认无前缀)
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /about     → 本文件(zh)
+ *   /en/about  → src/pages/en/about.astro(英文)
+ *
+ * 实现:
+ *   全部逻辑抽到 AboutPage 共享组件,本文件仅做入口。
+ *   页面中的语言由 Astro.url 推断(AboutPage 内部调用 getLangFromUrl)。
+ *
+ * 数据源:
+ *   - FALLBACK_SITE_SETTINGS / FALLBACK_LANGUAGE_STATS / FALLBACK_PROJECTS
+ *   - 未来接入 Directus 后可替换为真实 site_settings 单例拉取
+ *
+ * 维护约定:
+ *   若要修改关于页的结构/样式/数据拉取逻辑,只改
+ *   src/components/AboutPage.astro,本文件与英文入口都会受益。
+ * ============================================================================
+ */
+
+import AboutPage from "@components/AboutPage.astro";
+---
+
+<AboutPage />
