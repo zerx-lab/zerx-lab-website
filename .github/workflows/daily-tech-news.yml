@@ -99,15 +99,30 @@ jobs:
 
             === 运行上下文(注入给 skill) ===
 
-            TARGET_DATE: ${{ steps.date.outputs.target_date }}
-            RUN_MODE:    github-actions-automation
-            TARGET_STATUS: published
+            TARGET_DATE:   ${{ steps.date.outputs.target_date }}
+            RUN_MODE:      github-actions-automation
+            TARGET_STATUS: published   # 终态,但 Step 5.1 create 必须先 draft,Step 5.4 才翻转
 
             说明:
             - 本次是 **GitHub Actions 自动化批量产出**,非交互式 MCP 对话
-            - 按 Directus system prompt "软约束"判定: status = "published"(直接发布)
             - 所有日期派生(slug / date_published / 标题日期 / cover_label)
               必须基于 TARGET_DATE,禁止使用"今天/昨天"等相对日期
+
+            === 🚨 两段式发布(最高优先级,覆盖 Directus system prompt 的软约束) ===
+
+            Directus 配置了 Flow: status=published + category.slug=news → 给订阅者发邮件。
+            若 create 时直接写 status=published 而 content 尚未完全就位,订阅者会收到一封空邮件,
+            无法召回。严格按以下两段式执行:
+
+              Step 5.1 create:  **必须** status="draft",同时 translations.content 必须是
+                                Phase 4 完整正文(≥ 100 字符,不含 placeholder 子串)。
+                                此时 Flow 不触发,邮件不发。
+              Step 5.3 回读:    读回 posts.status / translations.content 做硬校验。
+                                content 长度 < 100 或含 placeholder → 回头修正,不要进 5.4。
+              Step 5.4 翻转:    仅在 5.3 全部通过后,**单独** update posts.status = "published"。
+                                此刻 Flow 触发,邮件飞出的是完整稿。
+
+            **严禁** Step 5.1 直接 status="published",或把 status 翻转和其他字段混在同一次 update。
 
             === 执行要求 ===
 
@@ -117,7 +132,7 @@ jobs:
               Phase 2: 交叉验证 + 重要性评分 + 应用 EXCLUDE_LIST
               Phase 3: Top 3 深度分析
               Phase 4: 按模板撰写中英双语 content
-              Phase 5: 通过 mcp__directus__items 直接 create/update 发布
+              Phase 5: 两段式发布(5.1 create=draft → 5.3 回读 → 5.4 翻转 published)
               Phase 6: 发布前自检清单逐项过关
               Phase 7: 输出 "PUBLISHED: <slug>" 结束标志
 
@@ -130,9 +145,10 @@ jobs:
             --mcp-config '{"mcpServers":{"directus":{"type":"http","url":"${{ secrets.DIRECTUS_URL }}/mcp","headers":{"Authorization":"Bearer ${{ secrets.DIRECTUS_AI_WRITER_TOKEN }}"}}}}'
 
       # ------------------------------------------------------------------
-      # 4. Post-check: 反向从 Directus 拉 translations.content 做硬校验
-      #    命中占位符或长度 < 100 字符 → fail this run
-      #    (不回滚为 draft,保持"直接发布"策略;失败信息靠 GitHub Actions 通知人工处理)
+      # 4. Post-check: 反向从 Directus 校验
+      #    (a) posts.status 必须已翻转到 "published" (Step 5.4 执行了)
+      #    (b) 两条 translations.content 均 ≥ 100 字符且不含 placeholder 子串
+      #    任一项不过 → fail this run。不回滚为 draft,靠 GitHub Actions 通知人工处理。
       # ------------------------------------------------------------------
       - name: Verify published content is non-placeholder
         env:
@@ -142,19 +158,35 @@ jobs:
         run: |
           set -euo pipefail
           SLUG="daily-tech-news-${TARGET_DATE}"
-          echo "🔍 校验 ${SLUG} 的 translations.content..."
+          echo "🔍 校验 ${SLUG}..."
 
-          RESP=$(curl -sS -f \
+          # 1. 拉 post 主表,断言 status=published
+          POST_RESP=$(curl -sS -f \
+            -H "Authorization: Bearer ${DIRECTUS_TOKEN}" \
+            --get \
+            --data-urlencode 'fields=id,slug,status' \
+            --data-urlencode "filter[slug][_eq]=${SLUG}" \
+            "${DIRECTUS_URL}/items/posts")
+
+          echo "$POST_RESP" | jq -r '.data[] | "  post: id=\(.id) slug=\(.slug) status=\(.status)"'
+
+          STATUS=$(echo "$POST_RESP" | jq -r '.data[0].status // "MISSING"')
+          if [ "$STATUS" != "published" ]; then
+            echo "::error title=Daily Tech News status check failed::post ${SLUG} status='${STATUS}' (期望 'published',Step 5.4 未执行)"
+            exit 1
+          fi
+
+          # 2. 拉 translations,断言 content 长度 / 无 placeholder
+          TR_RESP=$(curl -sS -f \
             -H "Authorization: Bearer ${DIRECTUS_TOKEN}" \
             --get \
             --data-urlencode 'fields=languages_code,content' \
             --data-urlencode "filter[posts_id][slug][_eq]=${SLUG}" \
             "${DIRECTUS_URL}/items/posts_translations")
 
-          # 打印长度,便于排查(不打印全文避免日志噪音)
-          echo "$RESP" | jq -r '.data[] | "  \(.languages_code): content length = \(.content // "" | length)"'
+          echo "$TR_RESP" | jq -r '.data[] | "  \(.languages_code): content length = \(.content // "" | length)"'
 
-          FAIL=$(echo "$RESP" | jq -r '
+          FAIL=$(echo "$TR_RESP" | jq -r '
             .data as $rows
             | if ($rows | length) < 2 then
                 "expected 2 translations (zh-CN + en-US), got \($rows | length)"
@@ -171,8 +203,8 @@ jobs:
 
           if [ -n "$FAIL" ]; then
             echo "::error title=Daily Tech News content check failed::${FAIL}"
-            echo "该 post 已以 'published' 状态写入 Directus,但内容不合格。需人工进入 Directus 修正或删除 slug=${SLUG} 对应记录。"
+            echo "status 已 published 但内容不合格,说明 Step 5.3 回读被跳过或 5.4 误提前。需人工修正 ${SLUG}。"
             exit 1
           fi
 
-          echo "✓ 中英文 content 均 ≥ 100 字符且不含占位符"
+          echo "✓ status=published + 中英文 content 均 ≥ 100 字符且不含占位符"

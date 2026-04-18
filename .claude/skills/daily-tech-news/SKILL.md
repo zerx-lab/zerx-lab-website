@@ -47,16 +47,20 @@ TARGET_DATE: YYYY-MM-DD 格式的日期
 
 ---
 
-## ⚠️ status 判定规则
+## ⚠️ status 判定规则（两段式发布）
 
-Directus system prompt 里的软约束：
+**根因背景**：Directus 配置了 Flow，监听 `posts.status == "published" AND category.slug == "news"` 触发邮件订阅推送。如果 Phase 5.1 create 时直接写 `status=published`，而 content 还是占位符或未就绪，Flow 会立即给所有订阅者发一封**空邮件**，无法召回。
 
-| 场景 | status | 判断依据 |
+| 场景 | 初始 create 的 status | 终态 |
 |---|---|---|
-| MCP 交互式对话（真人实时驱动） | `draft` | 需人工审核 |
-| **GitHub Actions 自动化脚本调度（本场景）** | **`published`** | 受控批量产出 |
+| MCP 交互式对话（真人实时驱动） | `draft` | 人工审核后自行切 |
+| **GitHub Actions 自动化脚本调度（本场景）** | **`draft`** | **Phase 5.4 内容校验通过后翻转为 `published`** |
 
-本 skill 在 **workflow 调度场景**下运行，一律 **`status = "published"`** 直接上线。
+**核心规则**：
+- Phase 5.1 create：`status` **必须**写 `"draft"`，同时 translations.content 必须是 Phase 4 完整正文（不允许占位符）
+- Phase 5.3 回读校验通过后，Phase 5.4 才对 `posts.status` 单独做一次 `update → "published"`
+- 此次翻转是**唯一**触发 Directus Flow / 邮件的时刻，此时 content 已就位，订阅者收到的是完整稿
+- 终态对用户可见始终是 `published`，draft 仅为短暂中间态（前端路由不索引 draft，外部不可见）
 
 ---
 
@@ -452,7 +456,7 @@ mcp__directus__items
   "collection": "posts",
   "data": {
     "slug": "daily-tech-news-{TARGET_DATE}",
-    "status": "published",
+    "status": "draft",
     "featured": false,
     "date_published": "{TARGET_DATE}T00:00:00.000Z",
     "author": "{AI_AUTHOR_ID}",
@@ -486,6 +490,8 @@ mcp__directus__items
 ```
 
 **关键点**：
+- `status` **必须**是 `"draft"` —— Directus Flow 只监听 `published`,此时不会发邮件,留给 Step 5.4 翻转时才触发
+- `translations.content` **必须**是 Phase 4 撰写好的完整正文,禁止占位字符串（`placeholder-*`、`TBD`、`TODO`）
 - `translations` 作为数组嵌入，Directus MCP 会自动拆到 `posts_translations` 子表
 - `tags` 是 M2M 关系，用 `{ "tags_id": <id> }` 的对象数组写入中间表 `posts_tags`
 - `reading_time` 留空，前端按字数自动算
@@ -497,7 +503,7 @@ mcp__directus__items
 
 **情况 A：只需更新正文和 tags（最常见）**
 
-先 update 主表基础字段：
+先 update 主表基础字段（**不要写 `status`，留到 Step 5.4 统一翻转**）：
 
 ```json
 mcp__directus__items
@@ -506,13 +512,14 @@ mcp__directus__items
   "collection": "posts",
   "keys": ["{EXISTING_POST_ID}"],
   "data": {
-    "status": "published",
     "date_published": "{TARGET_DATE}T00:00:00.000Z",
     "author": "{AI_AUTHOR_ID}",
     "category": "{NEWS_CATEGORY_ID}"
   }
 }
 ```
+
+> ⚠️ 如果当前 `status` 已经是 `published`（上次已成功发过）且本次只是补 translations 正文，**不要主动改 status**。`posts_translations.update` 不会触发 Directus Flow，邮件不会重发。Step 5.4 的翻转只在原 status 是 `draft` 时才需要做。
 
 **情况 B：还要改双语正文** — 分别找到两条 translation 的 id 做 update：
 
@@ -590,7 +597,7 @@ mcp__directus__items
 ```
 
 确认（**任一项不过 → 立即走 Step 5.2 update 路径回填完整正文，然后再回读一次**）：
-- `status === "published"`
+- `status === "draft"`（若已是 `published`，仅发生于 Step 5.2 的"原本已 published 仅补内容"子场景；create 场景此时必须是 draft）
 - translations 包含 `zh-CN` + `en-US` 两条，title 非空
 - **每条 translation 的 `content` 长度 ≥ 100 字符**
 - **每条 translation 的 `content` 不得包含子串 `placeholder`**（大小写不敏感）
@@ -598,7 +605,33 @@ mcp__directus__items
 - tags 至少含 `daily-news`
 
 > ⚠️ 严禁用 `placeholder-zh` / `placeholder-en` / 任何占位字符串先写入、打算"之后再回填"。
-> 必须在 Phase 4 完整撰写正文后，Phase 5 一次性带完整 content 调 create/update。
+> 必须在 Phase 4 完整撰写正文后，Phase 5.1 一次性带完整 content 调 create。
+
+### Step 5.4：翻转 status → `published`（**触发 Directus Flow 发邮件的唯一时刻**）
+
+**Step 5.3 回读全部通过**后，才可做此步。触发条件：
+
+| Step 5.3 查到的当前 status | 是否需要 Step 5.4 |
+|---|---|
+| `draft`（create 场景标准路径） | ✅ 必须做 |
+| `draft`（Step 5.2 更新了一个原本就是 draft 的老帖） | ✅ 必须做 |
+| `published`（Step 5.2 更新了一个已发布老帖的内容） | ❌ 跳过，不要重复翻转 |
+
+翻转调用（**只改 status 这一个字段，不要捎带其他字段**）：
+
+```json
+mcp__directus__items
+{
+  "action": "update",
+  "collection": "posts",
+  "keys": ["{POST_ID}"],
+  "data": { "status": "published" }
+}
+```
+
+翻转后**再回读一次**确认 `status === "published"`，然后进入 Phase 6 自检与 Phase 7 输出。
+
+**为什么这一步单独切出来**：Directus 有 Flow 监听 `posts.status == "published" AND category.slug == "news"`，命中就给订阅者发邮件。把"内容就位"与"status 翻转"严格分成两次 API 调用，保证邮件飞出的那一刻 content 已校验通过，避免订阅者收到空邮件。
 
 ---
 
@@ -625,7 +658,8 @@ Phase 0（MCP 基线）
 
 字段完整性
 [ ] slug = daily-tech-news-{TARGET_DATE}
-[ ] status = "published"
+[ ] Step 5.1 create 时 status = "draft"（严禁直接 published 触发 Flow 发空邮件）
+[ ] Step 5.4 内容回读通过后,status 才翻转为 "published"(触发 Flow)
 [ ] date_published = {TARGET_DATE}T00:00:00.000Z
 [ ] author = AI_AUTHOR_ID
 [ ] category = NEWS_CATEGORY_ID
@@ -676,7 +710,8 @@ PUBLISHED: daily-tech-news-{TARGET_DATE}
 | delete 任何数据（包括自己刚 create 的） | AI Writer policy 无 delete 权限 |
 | 修改或删除已有 authors / categories / tags | 只能 create 新的，不能改已有语义 |
 | 上传文件 / 修改 directus_files | AI Writer 无文件权限 |
-| status 设为 `draft`（本场景） | 自动化调度场景要求 `published` |
+| **Step 5.1 create 时直接写 `status="published"`** | Directus 有 Flow 监听 `status=published AND category.slug=news`→ 发邮件给订阅者。若 content 尚未完全就位就 create=published,订阅者收到空邮件,无法召回。**必须**按 Step 5.1 → 5.3 → 5.4 的两段式,create 先 `draft`,回读校验通过后再单独翻转为 `published` |
+| **Step 5.2 update 时把 `status` 与其他字段混写** | 可能误触发 Flow(若原本是 draft 且该次 update 又包含 status=published)或覆盖掉正确状态。status 的翻转**必须**独占一次 update,且只放在 Step 5.4 |
 | translations 只写一种语言 | 前端双语路由会 404 另一语言 |
 | 跳过 Phase 0 直接开始 WebSearch | 会漏掉去重基线，重复报道 7 天内事件 |
 | 跳过 Phase 5.3 回读确认 | 无法确保写入生效 |
@@ -728,7 +763,7 @@ PUBLISHED: daily-tech-news-{TARGET_DATE}
 | 某个分类（如前端）当天无重要动态 | 跳过该分类，不要硬造。只需 ≥ 3 个分类 |
 | WebFetch 无法访问某来源 | 换另一个来源验证；两次失败则标记 `? 待验证` 并降权 |
 | 不确定事件真假 | 宁可不收录，也不发未验证信息 |
-| MCP create posts 返回 403 | 检查 status 是否传了 `published`（policy 允许）；若是 Phase 0 忘了调 system-prompt，先补调 |
+| MCP create posts 返回 403 | AI Writer policy 允许 create 时写 `draft` / `published` 两种状态；若是 Phase 0 忘了调 system-prompt，先补调 |
 | MCP create posts 返回 schema 错误 | 调 `mcp__directus__schema { "keys": ["posts"] }` 确认字段名，再重试 |
 | Phase 0.3 查到同 slug 已存在且 status=published | 走 update 路径覆盖（不要 create 报唯一键冲突） |
 | 需要的 tag 不存在 | 按 system prompt 权限新建（含 zh-CN + en-US name translations） |
