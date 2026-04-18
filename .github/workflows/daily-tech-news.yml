@@ -128,3 +128,51 @@ jobs:
             --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(wc:*),mcp__directus__system-prompt,mcp__directus__items,mcp__directus__schema,mcp__directus__fields"
             --max-turns 60
             --mcp-config '{"mcpServers":{"directus":{"type":"http","url":"${{ secrets.DIRECTUS_URL }}/mcp","headers":{"Authorization":"Bearer ${{ secrets.DIRECTUS_AI_WRITER_TOKEN }}"}}}}'
+
+      # ------------------------------------------------------------------
+      # 4. Post-check: 反向从 Directus 拉 translations.content 做硬校验
+      #    命中占位符或长度 < 100 字符 → fail this run
+      #    (不回滚为 draft,保持"直接发布"策略;失败信息靠 GitHub Actions 通知人工处理)
+      # ------------------------------------------------------------------
+      - name: Verify published content is non-placeholder
+        env:
+          DIRECTUS_URL: ${{ secrets.DIRECTUS_URL }}
+          DIRECTUS_TOKEN: ${{ secrets.DIRECTUS_AI_WRITER_TOKEN }}
+          TARGET_DATE: ${{ steps.date.outputs.target_date }}
+        run: |
+          set -euo pipefail
+          SLUG="daily-tech-news-${TARGET_DATE}"
+          echo "🔍 校验 ${SLUG} 的 translations.content..."
+
+          RESP=$(curl -sS -f \
+            -H "Authorization: Bearer ${DIRECTUS_TOKEN}" \
+            --get \
+            --data-urlencode 'fields=languages_code,content' \
+            --data-urlencode "filter[posts_id][slug][_eq]=${SLUG}" \
+            "${DIRECTUS_URL}/items/posts_translations")
+
+          # 打印长度,便于排查(不打印全文避免日志噪音)
+          echo "$RESP" | jq -r '.data[] | "  \(.languages_code): content length = \(.content // "" | length)"'
+
+          FAIL=$(echo "$RESP" | jq -r '
+            .data as $rows
+            | if ($rows | length) < 2 then
+                "expected 2 translations (zh-CN + en-US), got \($rows | length)"
+              else
+                [ $rows[]
+                  | select(
+                      ((.content // "") | length) < 100
+                      or ((.content // "") | ascii_downcase | contains("placeholder"))
+                    )
+                  | "\(.languages_code): len=\((.content // "") | length), contains_placeholder=\((.content // "") | ascii_downcase | contains("placeholder"))"
+                ] | if length == 0 then "" else join("; ") end
+              end
+          ')
+
+          if [ -n "$FAIL" ]; then
+            echo "::error title=Daily Tech News content check failed::${FAIL}"
+            echo "该 post 已以 'published' 状态写入 Directus,但内容不合格。需人工进入 Directus 修正或删除 slug=${SLUG} 对应记录。"
+            exit 1
+          fi
+
+          echo "✓ 中英文 content 均 ≥ 100 字符且不含占位符"
