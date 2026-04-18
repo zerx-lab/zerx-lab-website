@@ -581,6 +581,7 @@ mcp__directus__items
     "fields": [
       "id", "slug", "status", "date_published",
       "translations.languages_code", "translations.title",
+      "translations.excerpt", "translations.content",
       "tags.tags_id.slug"
     ],
     "filter": { "slug": { "_eq": "daily-tech-news-{TARGET_DATE}" } }
@@ -588,10 +589,16 @@ mcp__directus__items
 }
 ```
 
-确认：
+确认（**任一项不过 → 立即走 Step 5.2 update 路径回填完整正文，然后再回读一次**）：
 - `status === "published"`
 - translations 包含 `zh-CN` + `en-US` 两条，title 非空
+- **每条 translation 的 `content` 长度 ≥ 100 字符**
+- **每条 translation 的 `content` 不得包含子串 `placeholder`**（大小写不敏感）
+- **每条 translation 的 `excerpt` 非空**
 - tags 至少含 `daily-news`
+
+> ⚠️ 严禁用 `placeholder-zh` / `placeholder-en` / 任何占位字符串先写入、打算"之后再回填"。
+> 必须在 Phase 4 完整撰写正文后，Phase 5 一次性带完整 content 调 create/update。
 
 ---
 
@@ -623,7 +630,8 @@ Phase 0（MCP 基线）
 [ ] author = AI_AUTHOR_ID
 [ ] category = NEWS_CATEGORY_ID
 [ ] translations 含 zh-CN + en-US 两条
-[ ] 每条 translation 的 title / excerpt / content 非空
+[ ] 每条 translation 的 title / excerpt 非空
+[ ] 每条 translation 的 content 长度 ≥ 100 字符,且不含 `placeholder` 子串（大小写不敏感）
 [ ] tags 至少含 daily-news
 [ ] cover 留空
 
@@ -672,6 +680,7 @@ PUBLISHED: daily-tech-news-{TARGET_DATE}
 | translations 只写一种语言 | 前端双语路由会 404 另一语言 |
 | 跳过 Phase 0 直接开始 WebSearch | 会漏掉去重基线，重复报道 7 天内事件 |
 | 跳过 Phase 5.3 回读确认 | 无法确保写入生效 |
+| 在 translations.content / excerpt 写占位字符串（如 `placeholder-zh`、`placeholder-en`、`TBD`、`TODO` 等），打算"稍后再回填" | Phase 5.3 回读会命中 placeholder 子串或长度 < 100 校验，直接判定失败；且已观测到"稍后回填"经常不被执行，结果正文里就留着占位符上线 |
 
 违反其中任意一条都视为失败。
 
