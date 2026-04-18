@@ -47,20 +47,21 @@ TARGET_DATE: YYYY-MM-DD 格式的日期
 
 ---
 
-## ⚠️ status 判定规则（两段式发布）
+## ⚠️ status 判定规则（单次 create=published，内容必须一次写全）
 
-**根因背景**：Directus 配置了 Flow，监听 `posts.status == "published" AND category.slug == "news"` 触发邮件订阅推送。如果 Phase 5.1 create 时直接写 `status=published`，而 content 还是占位符或未就绪，Flow 会立即给所有订阅者发一封**空邮件**，无法召回。
+**Directus Flow 触发条件**：`items.create` 事件 + `status == "published"` + `category.slug == "news"` → 给订阅者发邮件。**Flow 只在 create 的瞬间触发**，之后 update 不会重发。
 
-| 场景 | 初始 create 的 status | 终态 |
+所以：
+- **唯一正确路径** = 单次 `mcp__directus__items create`，payload 里同时带 `status="published"` **和** 两条完整 `translations.content`（Phase 4 完整撰写好的 Markdown 正文）。Flow 在 create 这一刻触发，此时 content 已就位，订阅者收到的是完整稿。
+- **严禁的路径** = "先 create 占位（或空）→ 再 update 回填"。哪怕是 create 时写 `status="draft"` 打算事后 flip，也**不行** —— Flow 只听 create，update 不会触发任何邮件。
+- **本地交互模式下已验证此模式正常工作**（zerx-lab-website/posts/15 "测试文章 — 发布到 News 分类"）。Actions 场景下必须完全复刻此 payload 形态。
+
+**Phase 4 必须真正完成**（中英双语正文都写完、在你的当前上下文里是完整字符串）之后，才能进入 Phase 5.1 调 create。**永远不要**因为担心 context 长度或 token 预算而先塞占位符 —— Claude 在 Actions 环境下已观测到 4-16 这种"先占位后未回填"的失败，结果给订阅者发了空邮件。
+
+| 场景 | create 时 status | Phase 4 content 状态 |
 |---|---|---|
-| MCP 交互式对话（真人实时驱动） | `draft` | 人工审核后自行切 |
-| **GitHub Actions 自动化脚本调度（本场景）** | **`draft`** | **Phase 5.4 内容校验通过后翻转为 `published`** |
-
-**核心规则**：
-- Phase 5.1 create：`status` **必须**写 `"draft"`，同时 translations.content 必须是 Phase 4 完整正文（不允许占位符）
-- Phase 5.3 回读校验通过后，Phase 5.4 才对 `posts.status` 单独做一次 `update → "published"`
-- 此次翻转是**唯一**触发 Directus Flow / 邮件的时刻，此时 content 已就位，订阅者收到的是完整稿
-- 终态对用户可见始终是 `published`，draft 仅为短暂中间态（前端路由不索引 draft，外部不可见）
+| MCP 交互式对话（真人驱动） | `draft`（默认，人工审核后切） | 完整 |
+| **GitHub Actions 自动化（本场景）** | **`published`** | **必须完整,禁止占位符** |
 
 ---
 
@@ -456,7 +457,7 @@ mcp__directus__items
   "collection": "posts",
   "data": {
     "slug": "daily-tech-news-{TARGET_DATE}",
-    "status": "draft",
+    "status": "published",
     "featured": false,
     "date_published": "{TARGET_DATE}T00:00:00.000Z",
     "author": "{AI_AUTHOR_ID}",
@@ -490,8 +491,8 @@ mcp__directus__items
 ```
 
 **关键点**：
-- `status` **必须**是 `"draft"` —— Directus Flow 只监听 `published`,此时不会发邮件,留给 Step 5.4 翻转时才触发
-- `translations.content` **必须**是 Phase 4 撰写好的完整正文,禁止占位字符串（`placeholder-*`、`TBD`、`TODO`）
+- `status` 必须是 `"published"` —— Directus Flow 监听 `items.create + status=published + category=news` 触发邮件,这是邮件发出的唯一时刻,此时 content 必须已完整
+- `translations.content` **必须**是 Phase 4 撰写好的完整正文,禁止占位字符串（`placeholder-*`、`TBD`、`TODO`、空字符串）。内容不全 → 订阅者收到空邮件 → 无法召回
 - `translations` 作为数组嵌入，Directus MCP 会自动拆到 `posts_translations` 子表
 - `tags` 是 M2M 关系，用 `{ "tags_id": <id> }` 的对象数组写入中间表 `posts_tags`
 - `reading_time` 留空，前端按字数自动算
@@ -503,7 +504,7 @@ mcp__directus__items
 
 **情况 A：只需更新正文和 tags（最常见）**
 
-先 update 主表基础字段（**不要写 `status`，留到 Step 5.4 统一翻转**）：
+先 update 主表基础字段：
 
 ```json
 mcp__directus__items
@@ -512,6 +513,7 @@ mcp__directus__items
   "collection": "posts",
   "keys": ["{EXISTING_POST_ID}"],
   "data": {
+    "status": "published",
     "date_published": "{TARGET_DATE}T00:00:00.000Z",
     "author": "{AI_AUTHOR_ID}",
     "category": "{NEWS_CATEGORY_ID}"
@@ -519,7 +521,7 @@ mcp__directus__items
 }
 ```
 
-> ⚠️ 如果当前 `status` 已经是 `published`（上次已成功发过）且本次只是补 translations 正文，**不要主动改 status**。`posts_translations.update` 不会触发 Directus Flow，邮件不会重发。Step 5.4 的翻转只在原 status 是 `draft` 时才需要做。
+> ℹ️ Directus Flow 只在 `items.create` 触发邮件,update 不会重发。所以补改已有文章的 content / tags 是安全的,不会造成重复邮件。
 
 **情况 B：还要改双语正文** — 分别找到两条 translation 的 id 做 update：
 
@@ -597,41 +599,15 @@ mcp__directus__items
 ```
 
 确认（**任一项不过 → 立即走 Step 5.2 update 路径回填完整正文，然后再回读一次**）：
-- `status === "draft"`（若已是 `published`，仅发生于 Step 5.2 的"原本已 published 仅补内容"子场景；create 场景此时必须是 draft）
+- `status === "published"`
 - translations 包含 `zh-CN` + `en-US` 两条，title 非空
 - **每条 translation 的 `content` 长度 ≥ 100 字符**
 - **每条 translation 的 `content` 不得包含子串 `placeholder`**（大小写不敏感）
 - **每条 translation 的 `excerpt` 非空**
 - tags 至少含 `daily-news`
 
-> ⚠️ 严禁用 `placeholder-zh` / `placeholder-en` / 任何占位字符串先写入、打算"之后再回填"。
-> 必须在 Phase 4 完整撰写正文后，Phase 5.1 一次性带完整 content 调 create。
-
-### Step 5.4：翻转 status → `published`（**触发 Directus Flow 发邮件的唯一时刻**）
-
-**Step 5.3 回读全部通过**后，才可做此步。触发条件：
-
-| Step 5.3 查到的当前 status | 是否需要 Step 5.4 |
-|---|---|
-| `draft`（create 场景标准路径） | ✅ 必须做 |
-| `draft`（Step 5.2 更新了一个原本就是 draft 的老帖） | ✅ 必须做 |
-| `published`（Step 5.2 更新了一个已发布老帖的内容） | ❌ 跳过，不要重复翻转 |
-
-翻转调用（**只改 status 这一个字段，不要捎带其他字段**）：
-
-```json
-mcp__directus__items
-{
-  "action": "update",
-  "collection": "posts",
-  "keys": ["{POST_ID}"],
-  "data": { "status": "published" }
-}
-```
-
-翻转后**再回读一次**确认 `status === "published"`，然后进入 Phase 6 自检与 Phase 7 输出。
-
-**为什么这一步单独切出来**：Directus 有 Flow 监听 `posts.status == "published" AND category.slug == "news"`，命中就给订阅者发邮件。把"内容就位"与"status 翻转"严格分成两次 API 调用，保证邮件飞出的那一刻 content 已校验通过，避免订阅者收到空邮件。
+> ⚠️ 严禁用 `placeholder-zh` / `placeholder-en` / 任何占位字符串在 create 时先写入、打算"之后再回填"。Directus Flow 在 create 的瞬间就会发邮件,此时占位符已发出,无法召回。
+> Phase 4 必须**完整**撰写正文后,Phase 5.1 一次性带完整 content 调 create。
 
 ---
 
@@ -658,8 +634,8 @@ Phase 0（MCP 基线）
 
 字段完整性
 [ ] slug = daily-tech-news-{TARGET_DATE}
-[ ] Step 5.1 create 时 status = "draft"（严禁直接 published 触发 Flow 发空邮件）
-[ ] Step 5.4 内容回读通过后,status 才翻转为 "published"(触发 Flow)
+[ ] Step 5.1 create 时 status = "published"(Flow 在这一刻触发邮件)
+[ ] create payload 的 translations.content 已是 Phase 4 完整正文,不含任何占位符
 [ ] date_published = {TARGET_DATE}T00:00:00.000Z
 [ ] author = AI_AUTHOR_ID
 [ ] category = NEWS_CATEGORY_ID
@@ -710,12 +686,10 @@ PUBLISHED: daily-tech-news-{TARGET_DATE}
 | delete 任何数据（包括自己刚 create 的） | AI Writer policy 无 delete 权限 |
 | 修改或删除已有 authors / categories / tags | 只能 create 新的，不能改已有语义 |
 | 上传文件 / 修改 directus_files | AI Writer 无文件权限 |
-| **Step 5.1 create 时直接写 `status="published"`** | Directus 有 Flow 监听 `status=published AND category.slug=news`→ 发邮件给订阅者。若 content 尚未完全就位就 create=published,订阅者收到空邮件,无法召回。**必须**按 Step 5.1 → 5.3 → 5.4 的两段式,create 先 `draft`,回读校验通过后再单独翻转为 `published` |
-| **Step 5.2 update 时把 `status` 与其他字段混写** | 可能误触发 Flow(若原本是 draft 且该次 update 又包含 status=published)或覆盖掉正确状态。status 的翻转**必须**独占一次 update,且只放在 Step 5.4 |
+| **在 create 的 translations.content 里写占位字符串（`placeholder-*`、`TBD`、`TODO`、空字符串），打算"稍后再回填"** | Directus Flow 在 `items.create + status=published + category=news` 的**瞬间**就给订阅者发邮件。此时写的是什么,订阅者就收到什么。占位符发出去无法召回。4-16 事件就是这个坑。Phase 4 必须**真正完整**撰写后才能进 Phase 5.1 |
 | translations 只写一种语言 | 前端双语路由会 404 另一语言 |
 | 跳过 Phase 0 直接开始 WebSearch | 会漏掉去重基线，重复报道 7 天内事件 |
 | 跳过 Phase 5.3 回读确认 | 无法确保写入生效 |
-| 在 translations.content / excerpt 写占位字符串（如 `placeholder-zh`、`placeholder-en`、`TBD`、`TODO` 等），打算"稍后再回填" | Phase 5.3 回读会命中 placeholder 子串或长度 < 100 校验，直接判定失败；且已观测到"稍后回填"经常不被执行，结果正文里就留着占位符上线 |
 
 违反其中任意一条都视为失败。
 
