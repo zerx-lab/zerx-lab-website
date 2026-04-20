@@ -41,6 +41,7 @@ import {
 	type FallbackAurPackage,
 } from "@lib/fallback-data";
 import { directus, readItems, DIRECTUS_CONFIG } from "@lib/directus";
+import { getAurInfoBatch } from "@lib/aur-rpc";
 
 /* ----------------------------------------------------------------------------
  * 当前语言 / 翻译工具
@@ -81,9 +82,50 @@ function fallbackToVM(pkg: FallbackAurPackage, currentLang: Lang): AurVM {
  * 尝试从 Directus 拉取,失败则走 Fallback
  * -------------------------------------------------------------------------- */
 
+/**
+ * 用 AUR RPC 的实时版本号覆盖 VM 数组里的 version 字段。
+ *
+ * 为什么放在 Directus / Fallback 之后统一做:
+ *   - 两条数据来源(Directus 成功 / fallback 降级)都能受益,逻辑只写一份
+ *   - Directus 里的 version 作为"最后兜底"保留,AUR RPC 拿不到时展示不会崩
+ *
+ * 失败策略(由 getAurInfoBatch 内部处理):
+ *   - 网络超时 / RPC 整体挂:返回空 Map 或旧 stale 数据,不抛错
+ *   - 单个包在 AUR 找不到:Map 里不出现该键,当前函数保留 Directus 原值
+ *
+ * 性能:
+ *   - AUR RPC v5 一次请求支持多个 arg[],所以总是 1 次 HTTP
+ *   - 命中 24h 缓存时零网络开销
+ */
+async function mergeAurVersions(
+	packages: readonly AurVM[],
+): Promise<readonly AurVM[]> {
+	if (packages.length === 0) return packages;
+
+	try {
+		const names = packages.map((p) => p.name).filter((n) => n);
+		const info = await getAurInfoBatch(names);
+		if (info.size === 0) return packages;
+
+		return packages.map((p) => {
+			const hit = info.get(p.name);
+			if (!hit) return p;
+			return { ...p, version: hit.version };
+		});
+	} catch (err) {
+		// getAurInfoBatch 本身已经静默失败,这里再兜一层保险
+		console.warn(
+			"[aur] AUR RPC 合并失败,使用 Directus/fallback 版本号。原因:",
+			(err as Error)?.message ?? err,
+		);
+		return packages;
+	}
+}
+
 async function loadPackages(): Promise<readonly AurVM[]> {
 	if (!DIRECTUS_CONFIG.hasReadToken) {
-		return listFallbackAurPackages().map((p) => fallbackToVM(p, lang));
+		const base = listFallbackAurPackages().map((p) => fallbackToVM(p, lang));
+		return mergeAurVersions(base);
 	}
 
 	try {
@@ -113,7 +155,7 @@ async function loadPackages(): Promise<readonly AurVM[]> {
 			}),
 		)) as any[];
 
-		return result.map((row): AurVM => {
+		const base = result.map((row): AurVM => {
 			const tr = row?.translations?.find(
 				(x: any) =>
 					x.languages_code === langCode ||
@@ -141,12 +183,15 @@ async function loadPackages(): Promise<readonly AurVM[]> {
 				maintained: row?.maintained !== false,
 			};
 		});
+
+		return mergeAurVersions(base);
 	} catch (err) {
 		console.warn(
 			"[aur] Directus 读取失败,使用 FALLBACK。原因:",
 			(err as Error)?.message ?? err,
 		);
-		return listFallbackAurPackages().map((p) => fallbackToVM(p, lang));
+		const base = listFallbackAurPackages().map((p) => fallbackToVM(p, lang));
+		return mergeAurVersions(base);
 	}
 }
 
