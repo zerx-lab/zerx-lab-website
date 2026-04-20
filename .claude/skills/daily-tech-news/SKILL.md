@@ -47,16 +47,21 @@ TARGET_DATE: YYYY-MM-DD 格式的日期
 
 ---
 
-## ⚠️ status 判定规则
+## ⚠️ status 判定规则（单次 create=published，内容必须一次写全）
 
-Directus system prompt 里的软约束：
+**Directus Flow 触发条件**：`items.create` 事件 + `status == "published"` + `category.slug == "news"` → 给订阅者发邮件。**Flow 只在 create 的瞬间触发**，之后 update 不会重发。
 
-| 场景 | status | 判断依据 |
+所以：
+- **唯一正确路径** = 单次 `mcp__directus__items create`，payload 里同时带 `status="published"` **和** 两条完整 `translations.content`（Phase 4 完整撰写好的 Markdown 正文）。Flow 在 create 这一刻触发，此时 content 已就位，订阅者收到的是完整稿。
+- **严禁的路径** = "先 create 占位（或空）→ 再 update 回填"。哪怕是 create 时写 `status="draft"` 打算事后 flip，也**不行** —— Flow 只听 create，update 不会触发任何邮件。
+- **本地交互模式下已验证此模式正常工作**（zerx-lab-website/posts/15 "测试文章 — 发布到 News 分类"）。Actions 场景下必须完全复刻此 payload 形态。
+
+**Phase 4 必须真正完成**（中英双语正文都写完、在你的当前上下文里是完整字符串）之后，才能进入 Phase 5.1 调 create。**永远不要**因为担心 context 长度或 token 预算而先塞占位符 —— Claude 在 Actions 环境下已观测到 4-16 这种"先占位后未回填"的失败，结果给订阅者发了空邮件。
+
+| 场景 | create 时 status | Phase 4 content 状态 |
 |---|---|---|
-| MCP 交互式对话（真人实时驱动） | `draft` | 需人工审核 |
-| **GitHub Actions 自动化脚本调度（本场景）** | **`published`** | 受控批量产出 |
-
-本 skill 在 **workflow 调度场景**下运行，一律 **`status = "published"`** 直接上线。
+| MCP 交互式对话（真人驱动） | `draft`（默认，人工审核后切） | 完整 |
+| **GitHub Actions 自动化（本场景）** | **`published`** | **必须完整,禁止占位符** |
 
 ---
 
@@ -486,6 +491,8 @@ mcp__directus__items
 ```
 
 **关键点**：
+- `status` 必须是 `"published"` —— Directus Flow 监听 `items.create + status=published + category=news` 触发邮件,这是邮件发出的唯一时刻,此时 content 必须已完整
+- `translations.content` **必须**是 Phase 4 撰写好的完整正文,禁止占位字符串（`placeholder-*`、`TBD`、`TODO`、空字符串）。内容不全 → 订阅者收到空邮件 → 无法召回
 - `translations` 作为数组嵌入，Directus MCP 会自动拆到 `posts_translations` 子表
 - `tags` 是 M2M 关系，用 `{ "tags_id": <id> }` 的对象数组写入中间表 `posts_tags`
 - `reading_time` 留空，前端按字数自动算
@@ -513,6 +520,8 @@ mcp__directus__items
   }
 }
 ```
+
+> ℹ️ Directus Flow 只在 `items.create` 触发邮件,update 不会重发。所以补改已有文章的 content / tags 是安全的,不会造成重复邮件。
 
 **情况 B：还要改双语正文** — 分别找到两条 translation 的 id 做 update：
 
@@ -581,6 +590,7 @@ mcp__directus__items
     "fields": [
       "id", "slug", "status", "date_published",
       "translations.languages_code", "translations.title",
+      "translations.excerpt", "translations.content",
       "tags.tags_id.slug"
     ],
     "filter": { "slug": { "_eq": "daily-tech-news-{TARGET_DATE}" } }
@@ -588,10 +598,16 @@ mcp__directus__items
 }
 ```
 
-确认：
+确认（**任一项不过 → 立即走 Step 5.2 update 路径回填完整正文，然后再回读一次**）：
 - `status === "published"`
 - translations 包含 `zh-CN` + `en-US` 两条，title 非空
+- **每条 translation 的 `content` 长度 ≥ 100 字符**
+- **每条 translation 的 `content` 不得包含子串 `placeholder`**（大小写不敏感）
+- **每条 translation 的 `excerpt` 非空**
 - tags 至少含 `daily-news`
+
+> ⚠️ 严禁用 `placeholder-zh` / `placeholder-en` / 任何占位字符串在 create 时先写入、打算"之后再回填"。Directus Flow 在 create 的瞬间就会发邮件,此时占位符已发出,无法召回。
+> Phase 4 必须**完整**撰写正文后,Phase 5.1 一次性带完整 content 调 create。
 
 ---
 
@@ -618,12 +634,14 @@ Phase 0（MCP 基线）
 
 字段完整性
 [ ] slug = daily-tech-news-{TARGET_DATE}
-[ ] status = "published"
+[ ] Step 5.1 create 时 status = "published"(Flow 在这一刻触发邮件)
+[ ] create payload 的 translations.content 已是 Phase 4 完整正文,不含任何占位符
 [ ] date_published = {TARGET_DATE}T00:00:00.000Z
 [ ] author = AI_AUTHOR_ID
 [ ] category = NEWS_CATEGORY_ID
 [ ] translations 含 zh-CN + en-US 两条
-[ ] 每条 translation 的 title / excerpt / content 非空
+[ ] 每条 translation 的 title / excerpt 非空
+[ ] 每条 translation 的 content 长度 ≥ 100 字符,且不含 `placeholder` 子串（大小写不敏感）
 [ ] tags 至少含 daily-news
 [ ] cover 留空
 
@@ -668,7 +686,7 @@ PUBLISHED: daily-tech-news-{TARGET_DATE}
 | delete 任何数据（包括自己刚 create 的） | AI Writer policy 无 delete 权限 |
 | 修改或删除已有 authors / categories / tags | 只能 create 新的，不能改已有语义 |
 | 上传文件 / 修改 directus_files | AI Writer 无文件权限 |
-| status 设为 `draft`（本场景） | 自动化调度场景要求 `published` |
+| **在 create 的 translations.content 里写占位字符串（`placeholder-*`、`TBD`、`TODO`、空字符串），打算"稍后再回填"** | Directus Flow 在 `items.create + status=published + category=news` 的**瞬间**就给订阅者发邮件。此时写的是什么,订阅者就收到什么。占位符发出去无法召回。4-16 事件就是这个坑。Phase 4 必须**真正完整**撰写后才能进 Phase 5.1 |
 | translations 只写一种语言 | 前端双语路由会 404 另一语言 |
 | 跳过 Phase 0 直接开始 WebSearch | 会漏掉去重基线，重复报道 7 天内事件 |
 | 跳过 Phase 5.3 回读确认 | 无法确保写入生效 |
@@ -719,7 +737,7 @@ PUBLISHED: daily-tech-news-{TARGET_DATE}
 | 某个分类（如前端）当天无重要动态 | 跳过该分类，不要硬造。只需 ≥ 3 个分类 |
 | WebFetch 无法访问某来源 | 换另一个来源验证；两次失败则标记 `? 待验证` 并降权 |
 | 不确定事件真假 | 宁可不收录，也不发未验证信息 |
-| MCP create posts 返回 403 | 检查 status 是否传了 `published`（policy 允许）；若是 Phase 0 忘了调 system-prompt，先补调 |
+| MCP create posts 返回 403 | AI Writer policy 允许 create 时写 `draft` / `published` 两种状态；若是 Phase 0 忘了调 system-prompt，先补调 |
 | MCP create posts 返回 schema 错误 | 调 `mcp__directus__schema { "keys": ["posts"] }` 确认字段名，再重试 |
 | Phase 0.3 查到同 slug 已存在且 status=published | 走 update 路径覆盖（不要 create 报唯一键冲突） |
 | 需要的 tag 不存在 | 按 system prompt 权限新建（含 zh-CN + en-US name translations） |

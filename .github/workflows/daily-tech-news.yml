@@ -99,15 +99,36 @@ jobs:
 
             === 运行上下文(注入给 skill) ===
 
-            TARGET_DATE: ${{ steps.date.outputs.target_date }}
-            RUN_MODE:    github-actions-automation
+            TARGET_DATE:   ${{ steps.date.outputs.target_date }}
+            RUN_MODE:      github-actions-automation
             TARGET_STATUS: published
 
             说明:
             - 本次是 **GitHub Actions 自动化批量产出**,非交互式 MCP 对话
-            - 按 Directus system prompt "软约束"判定: status = "published"(直接发布)
             - 所有日期派生(slug / date_published / 标题日期 / cover_label)
               必须基于 TARGET_DATE,禁止使用"今天/昨天"等相对日期
+
+            === 🚨 邮件触发机制(最高优先级约束) ===
+
+            Directus 有 Flow 监听 `items.create + status=published + category.slug=news` →
+            **在 create 的那一瞬间**给订阅者发邮件。Flow 只听 create,update 不会再发。
+
+            含义: payload 里 translations.content 写的是什么,订阅者收到的邮件就是什么。
+            写占位符 → 订阅者收到占位符,**无法召回**。4-16 事件就是这样,一次性把空邮件发出去了。
+
+            **硬规则**:
+            1. Phase 4 必须真正写完中英双语完整 Markdown 正文(每篇 ≥ 100 字符、多段结构),
+               才能进入 Phase 5.1。**禁止**以"先占位、后 update 回填"的任何形式开头 ——
+               第一次 create 就必须是最终版。
+            2. Step 5.1 create 的 payload 必须完全复刻本地已验证可行的形态(SKILL.md
+               §5.1 示例): status="published"、slug/date_published/author/category 齐全、
+               translations 两条(zh-CN + en-US)带完整 content/title/excerpt/cover_label、
+               tags 带 daily-news 的 id。
+            3. 严禁在 translations.content / excerpt 里写 `placeholder-*`、`TBD`、`TODO`、
+               空字符串等任何占位符。担心 context 或 token 不够 → 不要 create,直接报错退出,
+               让这次 run 红掉,等人工介入。
+            4. update 路径(Step 5.2,修复已有文章)不会触发 Flow,可以自由使用。但不要
+               把它当成"先 create 空壳、再 update 填充"的后路 —— 空壳已经发邮件了,来不及。
 
             === 执行要求 ===
 
@@ -116,8 +137,8 @@ jobs:
               Phase 1: 多源 WebSearch + WebFetch
               Phase 2: 交叉验证 + 重要性评分 + 应用 EXCLUDE_LIST
               Phase 3: Top 3 深度分析
-              Phase 4: 按模板撰写中英双语 content
-              Phase 5: 通过 mcp__directus__items 直接 create/update 发布
+              Phase 4: 按模板撰写中英双语完整 content(真正写完,不是写个提纲)
+              Phase 5: 通过 mcp__directus__items 一次性 create published 发布
               Phase 6: 发布前自检清单逐项过关
               Phase 7: 输出 "PUBLISHED: <slug>" 结束标志
 
@@ -128,3 +149,70 @@ jobs:
             --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(wc:*),mcp__directus__system-prompt,mcp__directus__items,mcp__directus__schema,mcp__directus__fields"
             --max-turns 60
             --mcp-config '{"mcpServers":{"directus":{"type":"http","url":"${{ secrets.DIRECTUS_URL }}/mcp","headers":{"Authorization":"Bearer ${{ secrets.DIRECTUS_AI_WRITER_TOKEN }}"}}}}'
+
+      # ------------------------------------------------------------------
+      # 4. Post-check: 反向从 Directus 校验
+      #    (a) posts.status == "published"
+      #    (b) 两条 translations.content 均 ≥ 100 字符且不含 placeholder 子串
+      #    任一项不过 → fail this run。占位符此时已被 Flow 发邮件飞出,邮件无法召回,
+      #    但 CI 红掉能第一时间通知人工介入,去 Directus 修正 content 并手动补发
+      #    "更正版"邮件给订阅者。
+      # ------------------------------------------------------------------
+      - name: Verify published content is non-placeholder
+        env:
+          DIRECTUS_URL: ${{ secrets.DIRECTUS_URL }}
+          DIRECTUS_TOKEN: ${{ secrets.DIRECTUS_AI_WRITER_TOKEN }}
+          TARGET_DATE: ${{ steps.date.outputs.target_date }}
+        run: |
+          set -euo pipefail
+          SLUG="daily-tech-news-${TARGET_DATE}"
+          echo "🔍 校验 ${SLUG}..."
+
+          # 1. 拉 post 主表,断言 status=published
+          POST_RESP=$(curl -sS -f \
+            -H "Authorization: Bearer ${DIRECTUS_TOKEN}" \
+            --get \
+            --data-urlencode 'fields=id,slug,status' \
+            --data-urlencode "filter[slug][_eq]=${SLUG}" \
+            "${DIRECTUS_URL}/items/posts")
+
+          echo "$POST_RESP" | jq -r '.data[] | "  post: id=\(.id) slug=\(.slug) status=\(.status)"'
+
+          STATUS=$(echo "$POST_RESP" | jq -r '.data[0].status // "MISSING"')
+          if [ "$STATUS" != "published" ]; then
+            echo "::error title=Daily Tech News status check failed::post ${SLUG} status='${STATUS}' (期望 'published')"
+            exit 1
+          fi
+
+          # 2. 拉 translations,断言 content 长度 / 无 placeholder
+          TR_RESP=$(curl -sS -f \
+            -H "Authorization: Bearer ${DIRECTUS_TOKEN}" \
+            --get \
+            --data-urlencode 'fields=languages_code,content' \
+            --data-urlencode "filter[posts_id][slug][_eq]=${SLUG}" \
+            "${DIRECTUS_URL}/items/posts_translations")
+
+          echo "$TR_RESP" | jq -r '.data[] | "  \(.languages_code): content length = \(.content // "" | length)"'
+
+          FAIL=$(echo "$TR_RESP" | jq -r '
+            .data as $rows
+            | if ($rows | length) < 2 then
+                "expected 2 translations (zh-CN + en-US), got \($rows | length)"
+              else
+                [ $rows[]
+                  | select(
+                      ((.content // "") | length) < 100
+                      or ((.content // "") | ascii_downcase | contains("placeholder"))
+                    )
+                  | "\(.languages_code): len=\((.content // "") | length), contains_placeholder=\((.content // "") | ascii_downcase | contains("placeholder"))"
+                ] | if length == 0 then "" else join("; ") end
+              end
+          ')
+
+          if [ -n "$FAIL" ]; then
+            echo "::error title=Daily Tech News content check failed::${FAIL}"
+            echo "⚠️ Flow 已在 create 瞬间给订阅者发了含占位符的邮件,无法召回。需人工去 Directus 修正 ${SLUG} 的 content,并评估是否发补正邮件。"
+            exit 1
+          fi
+
+          echo "✓ status=published + 中英文 content 均 ≥ 100 字符且不含占位符"
