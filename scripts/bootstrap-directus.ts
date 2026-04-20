@@ -323,6 +323,58 @@ async function ensureRelation(rel: {
 	);
 }
 
+/**
+ * 幂等更新已存在字段的 meta(interface / options / note / display / ...)。
+ *
+ * 用途:bootstrap 脚本早期版本建的字段,后续想换 interface(例如把
+ * posts_translations.content 的编辑器从 input-rich-text-md 换成 input-code),
+ * 需要 PATCH /fields/{coll}/{field}。
+ *
+ * 字段不存在时静默跳过(调用方应先确保字段存在)。
+ * 只改 meta,不动 schema,避免影响底层 SQL 列定义。
+ */
+async function updateFieldMeta(
+	collection: string,
+	field: string,
+	metaPatch: Record<string, unknown>,
+): Promise<void> {
+	if (!(await fieldExists(collection, field))) {
+		log.skip(`字段 ${collection}.${field} 不存在,跳过 meta 更新`);
+		return;
+	}
+	await fetchDirectus(`/fields/${collection}/${field}`, {
+		method: "PATCH",
+		body: { meta: metaPatch },
+	});
+	const keys = Object.keys(metaPatch).join(", ");
+	log.success(`更新 ${collection}.${field} meta(${keys})`);
+}
+
+/**
+ * 幂等更新已存在 collection 的 meta(preview_url / note / icon / ...)。
+ *
+ * 用途:给 posts 配置 preview_url 让编辑页右上角出现"预览"按钮,
+ * 或调整已有集合的 icon / note 等展示属性。
+ *
+ * Collection 不存在时静默跳过。
+ * 只改 meta,不动 schema,不会改表结构。
+ */
+async function updateCollectionMeta(
+	collection: string,
+	metaPatch: Record<string, unknown>,
+): Promise<void> {
+	if (!(await collectionExists(collection))) {
+		log.skip(`collection ${collection} 不存在,跳过 meta 更新`);
+		return;
+	}
+	await fetchDirectus(`/collections/${collection}`, {
+		method: "PATCH",
+		body: { meta: metaPatch },
+	});
+	const keys = Object.keys(metaPatch).join(", ");
+	log.success(`更新 collection ${collection} meta(${keys})`);
+}
+
 /* ============================================================================
  * Collection 创建
  * ========================================================================== */
@@ -927,8 +979,15 @@ async function ensurePosts(): Promise<void> {
 		{
 			field: "content",
 			type: "text",
-			interface: "input-rich-text-md",
+			interface: "input-code",
+			options: {
+				language: "markdown",
+				lineNumber: true,
+				lineWrapping: true,
+				template: "",
+			},
 			sort: 12,
+			note: "Markdown 正文源码。前端走 renderMarkdown() 渲染为 HTML。",
 		},
 		{
 			field: "cover_label",
@@ -959,6 +1018,41 @@ async function ensurePosts(): Promise<void> {
 		junction_collection: "posts_tags",
 		related_collection: "tags",
 		sort: 95,
+	});
+
+	/* ------------------------------------------------------------------------
+	 * 后台编辑体验优化(对线上已存在字段 / collection 强制同步 meta)
+	 * ------------------------------------------------------------------------
+	 * 背景:createFieldIfMissing 只在字段不存在时写 meta,线上早期建的
+	 * posts_translations.content 还是 input-rich-text-md(Milkdown)。
+	 * 这里无条件 PATCH 一次,把编辑器换成带 Markdown 高亮的 input-code。
+	 *
+	 * 同步配置:
+	 *   1. posts_translations.content → input-code(markdown + 行号 + 折行)
+	 *   2. posts.preview_url → 跳线上文章(根据 lang 选择 /blog 或 /en/blog)
+	 * ---------------------------------------------------------------------- */
+
+	// 1. content 字段换编辑器
+	await updateFieldMeta("posts_translations", "content", {
+		interface: "input-code",
+		options: {
+			language: "markdown",
+			lineNumber: true,
+			lineWrapping: true,
+			template: "",
+		},
+		note: "Markdown 正文源码。前端走 renderMarkdown() 渲染为 HTML。",
+	});
+
+	// 2. preview_url:编辑页右上角出现"预览"按钮
+	//    Directus 占位符:{{field}} 会取当前 item 字段值
+	//    线上域名用 SITE_URL 兜底(同 astro.config.mjs),默认 https://zerx.dev
+	const siteUrl = (process.env.SITE_URL || "https://zerx.dev").replace(
+		/\/+$/,
+		"",
+	);
+	await updateCollectionMeta("posts", {
+		preview_url: `${siteUrl}/blog/{{slug}}`,
 	});
 }
 
