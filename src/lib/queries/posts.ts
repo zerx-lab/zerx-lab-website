@@ -28,7 +28,13 @@
  *   - 抽离后配合 posts/index.ts 可以做单元测试(目前还没建,预留通路)
  * ============================================================================ */
 
-import { directus, readItems, DIRECTUS_CONFIG, assetUrl } from "@/lib/directus";
+import {
+	directus,
+	readItems,
+	aggregate,
+	DIRECTUS_CONFIG,
+	assetUrl,
+} from "@/lib/directus";
 import {
 	findFallbackPost,
 	listFallbackPosts,
@@ -722,40 +728,37 @@ export async function listPostsPaged(
 		const filter: any =
 			andClauses.length === 1 ? andClauses[0] : { _and: andClauses };
 
-		// Directus 要求显式声明 `meta: "filter_count"` 才会返回总数
-		// (否则 response 只有 data,不含 meta)
 		const requestedPage = Math.max(1, Math.floor(Number(params.page) || 1));
 
-		const response = (await client.request(
-			readItems("posts", {
-				filter,
-				sort: ["-date_published"],
-				fields: POST_FIELDS_FULL as any,
-				limit: pageSize,
-				offset: (requestedPage - 1) * pageSize,
-				// SDK 类型已暴露 meta,运行时透传到 query string ?meta=filter_count,
-				// 响应会多一个 meta.filter_count 字段(过滤后的总数,用于分页)
-				meta: "filter_count",
-			}),
-		)) as any;
+		// 并行请求:当前页数据 + 总数(aggregate)
+		// 注意:Directus JS SDK 的 readItems 始终返回纯数组,meta:"filter_count"
+		// 在运行时不生效(SDK 忽略该参数)。必须用独立的 aggregate 请求获取总数。
+		const [rows, aggResult] = await Promise.all([
+			client.request(
+				readItems("posts", {
+					filter,
+					sort: ["-date_published"],
+					fields: POST_FIELDS_FULL as any,
+					limit: pageSize,
+					offset: (requestedPage - 1) * pageSize,
+				}),
+			) as Promise<any[]>,
+			client.request(
+				aggregate("posts", {
+					aggregate: { count: "*" },
+					query: { filter },
+				}),
+			) as Promise<Array<{ count: string | number }>>,
+		]);
 
-		// SDK 在传 meta 时会返回 { data, meta } 结构;不传时直接返回数组。
-		// 两种形态都兼容。
-		const rows: any[] = Array.isArray(response)
-			? response
-			: (response?.data ?? []);
-		const total: number = Array.isArray(response)
-			? rows.length
-			: Number(response?.meta?.filter_count ?? rows.length);
+		const total: number = Number(aggResult?.[0]?.count ?? rows.length);
 
 		const totalPages = Math.max(1, Math.ceil(total / pageSize));
 		const actualPage = clampPage(requestedPage, 1, totalPages);
 
 		// 如果 clamp 后的 page 与请求页不同(用户请求 page=999),
 		// 说明返回的 rows 不是用户想要的页。为了正确,重新请求一次。
-		// 但首次请求 offset 过大时 Directus 会返回空数组,此时 total 仍正确,
-		// 所以我们用 total 判断是否需要二次请求。
-		let finalRows = rows;
+		let finalRows: any[] = Array.isArray(rows) ? rows : [];
 		if (actualPage !== requestedPage && total > 0) {
 			const refetch = (await client.request(
 				readItems("posts", {

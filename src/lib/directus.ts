@@ -22,6 +22,7 @@ import {
 	readItems,
 	readItem,
 	readSingleton,
+	aggregate,
 	type RestClient,
 	type StaticTokenClient,
 	type DirectusClient,
@@ -217,4 +218,4 @@ export function assetUrl(
  * 常用的 SDK 查询助手直接从这里导出,页面代码只 import 一次。
  * ---------------------------------------------------------------------------- */
 
-export { readItems, readItem, readSingleton };
+export { readItems, readItem, readSingleton, aggregate };
