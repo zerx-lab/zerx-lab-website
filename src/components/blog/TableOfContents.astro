@@ -150,11 +150,10 @@ const resolvedStickyTop =
 			class:list={[
 				"toc",
 				"w-full",
-				// 桌面端 sticky + 独立滚动(父级容器需提供足够高度)
-				"xl:sticky xl:self-start",
-				"xl:max-h-[calc(100vh-var(--layout-top-nav-height)-3rem)]",
-				"xl:overflow-y-auto xl:overscroll-contain",
-				"xl:scroll-thin",
+				// 桌面端:高度限制 + 独立滚动(sticky 定位由外部包裹 div 负责)
+				"lg:max-h-[calc(100vh-var(--layout-top-nav-height)-2rem)]",
+				"lg:overflow-y-auto lg:overscroll-contain",
+				"lg:scroll-thin",
 				className,
 			]}
 			style={`--toc-sticky-top: ${resolvedStickyTop};`}
@@ -306,7 +305,7 @@ const resolvedStickyTop =
 	 * -------------------------------------------------------------------------- */
 
 	.toc {
-		top: var(--toc-sticky-top, 4.5rem);
+		/* sticky 定位已移至外部包裹 div;这里仅保留变量声明供外部引用 */
 	}
 
 	/* ----------------------------------------------------------------------------
@@ -338,7 +337,7 @@ const resolvedStickyTop =
 	 * 同时把 summary 的 cursor 取消(上面已经处理)。
 	 * -------------------------------------------------------------------------- */
 
-	@media (min-width: 1280px) {
+	@media (min-width: 1024px) {
 		.toc-details > :not(.toc-summary) {
 			display: block !important;
 		}

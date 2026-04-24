@@ -708,7 +708,7 @@ const jsonLd = JSON.stringify({
 			set:html={renderedHtml}
 		/>
 
-		{/* TOC(桌面端右侧贴边,平板/移动不占位) */}
+		{/* TOC(桌面端右侧 sticky 贴边,平板/移动置于正文上方) */}
 		{headings.length > 0 && (
 			<div
 				class:list={[
@@ -716,6 +716,9 @@ const jsonLd = JSON.stringify({
 					"lg:w-[220px] xl:w-[240px] 2xl:w-[260px] lg:shrink-0",
 					// 平板 / 移动端让 TOC 显示在正文上方以免被忽视
 					"order-first lg:order-last",
+					// 桌面端:wrapper 本身 sticky,高度和滚动由 TableOfContents 内部的 nav 自己控制
+					"lg:sticky lg:self-start",
+					"lg:top-[calc(var(--layout-top-nav-height)+1.25rem)]",
 				]}
 			>
 				<TableOfContents headings={headings} defaultOpen={true} />
