@@ -826,6 +826,76 @@ export const FALLBACK_PROJECTS: readonly FallbackProject[] = [
 		},
 	},
 	{
+		// FluxDown 是闭源商业产品,GitHub 仓库为私有镜像。
+		// githubUrl 填官网,让列表点击与 Featured 卡片的链接按钮都跳到产品页。
+		slug: "fluxdown",
+		name: "FluxDown",
+		description: {
+			zh: "Flutter UI + Rust 核心的多协议下载管理器,支持 HTTP / FTP / BitTorrent,覆盖 Windows / macOS / Linux / Android / iOS / Web 全端。闭源产品,官网下载。",
+			en: "Multi-protocol download manager with a Flutter UI and Rust core. Supports HTTP / FTP / BitTorrent across Windows, macOS, Linux, Android, iOS, and Web. Closed-source, distributed via the official site.",
+		},
+		techStack: ["Flutter", "Rust", "Dart"],
+		kind: "app",
+		language: "Dart",
+		githubUrl: "https://fluxdown.zerx.dev/",
+		demoUrl: null,
+		docsUrl: null,
+		npmUrl: null,
+		stars: 0,
+		forks: 0,
+		featured: true,
+		highlights: {
+			zh: "全平台 · 多协议 · Rust 核心 · 闭源产品",
+			en: "All platforms · Multi-protocol · Rust core · Closed-source",
+		},
+	},
+	{
+		// OpenWarp:zerx-lab/warp,Warp 终端的去中心化 fork,Rust 多 crate 工作区。
+		slug: "openwarp",
+		name: "OpenWarp",
+		description: {
+			zh: "完全去中心化的终端,Warp 的开源社区分支。剥离云端依赖,开放 AI 接入层,支持任意 OpenAI 兼容端点与第三方 CLI Agent,内置 SSH 管理与 tmux 集成,密钥与历史全部留在本地。",
+			en: "A fully decentralized terminal forked from Warp. Strips cloud dependencies, opens the AI layer to any OpenAI-compatible endpoint and third-party CLI agents, ships built-in SSH + tmux management — keys and history stay local.",
+		},
+		techStack: ["Rust", "Tokio", "genai"],
+		kind: "app",
+		language: "Rust",
+		githubUrl: "https://github.com/zerx-lab/warp",
+		demoUrl: null,
+		docsUrl: "https://github.com/zerx-lab/warp/blob/main/README.zh-CN.md",
+		npmUrl: null,
+		stars: 0,
+		forks: 0,
+		featured: true,
+		highlights: {
+			zh: "BYOP 多 Provider · 第三方 Agent · SSH 内置 · 零云端依赖",
+			en: "BYOP providers · Third-party agents · Built-in SSH · Zero cloud",
+		},
+	},
+	{
+		// ZPass:零知识架构密码管理器,跨端(Wails 桌面 / 浏览器扩展 / Expo 移动端)。
+		slug: "zpass",
+		name: "ZPass",
+		description: {
+			zh: "零知识架构的开源密码管理器。端到端加密,只在本机解密,支持自托管。覆盖桌面端(Wails 3 + Go/React)、浏览器扩展(Chrome / Firefox)与移动端(Expo RN)。",
+			en: "Zero-knowledge open-source password manager. End-to-end encrypted, decrypted only on your device, self-host friendly. Ships desktop (Wails 3 + Go/React), browser extension (Chrome / Firefox), and mobile (Expo RN).",
+		},
+		techStack: ["Go", "React", "Wails"],
+		kind: "app",
+		language: "Go",
+		githubUrl: "https://github.com/zerx-lab/zpass",
+		demoUrl: null,
+		docsUrl: "https://github.com/zerx-lab/zpass/blob/main/README.zh-CN.md",
+		npmUrl: null,
+		stars: 0,
+		forks: 0,
+		featured: true,
+		highlights: {
+			zh: "零知识加密 · 跨端 · 自托管 · AGPL-3.0",
+			en: "Zero-knowledge · Cross-platform · Self-hostable · AGPL-3.0",
+		},
+	},
+	{
 		slug: "zerxlab-website",
 		name: "zerx-lab-website",
 		description: {
