@@ -1,0 +1,95 @@
+# ============================================================================
+# Deploy - 推送到部署分支后自动 SSH 到服务器,拉代码 + docker compose 重建上线
+# ----------------------------------------------------------------------------
+# 流程:
+#   1. push 到目标分支(默认 main)触发,也支持手动触发
+#   2. 通过 SSH 私钥连接到部署服务器
+#   3. 在 DEPLOY_PATH 目录执行:
+#        · git fetch + reset --hard 到目标分支(确保与远端一致,避免本地脏改阻塞)
+#        · docker compose up -d --build(重建镜像并滚动替换容器)
+#        · docker image prune(清理悬空镜像,防止磁盘膨胀)
+#
+# 前置约定:
+#   - 服务器 DEPLOY_PATH 目录已是本仓库的 git clone,且已配置好可拉取的 remote
+#   - 服务器 DEPLOY_PATH 目录下已存在 .env(含 DIRECTUS_URL / DIRECTUS_READ_TOKEN
+#     等敏感信息)。CI 不下发 .env,运行时变量完全由服务器本地 .env 提供,
+#     docker compose 自动读取同目录 .env 做变量插值。
+#
+# 必需的 GitHub Secrets:
+#   - DEPLOY_HOST     — 服务器 IP / 域名
+#   - DEPLOY_USER     — SSH 登录用户名
+#   - DEPLOY_SSH_KEY  — SSH 私钥全文(对应服务器上 authorized_keys 的公钥)
+#   - DEPLOY_PATH     — 服务器上仓库所在绝对路径
+#
+# 可选的 GitHub Secrets / Variables:
+#   - DEPLOY_PORT     — SSH 端口,缺省 22
+#   - DEPLOY_BRANCH   — 部署分支,缺省 main
+# ============================================================================
+
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  # 同一时刻只允许一个部署在跑;新 push 进来排队等待上一个结束,
+  # 不取消进行中的部署(避免 compose 重建到一半被打断留下半残容器)
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # 端口缺省 22;在 secret 留空时回退
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            DEPLOY_PATH="${{ secrets.DEPLOY_PATH }}"
+            DEPLOY_BRANCH="${{ secrets.DEPLOY_BRANCH || 'main' }}"
+
+            echo "▶ 部署目录: ${DEPLOY_PATH}"
+            echo "▶ 部署分支: ${DEPLOY_BRANCH}"
+
+            cd "${DEPLOY_PATH}"
+
+            # 确保 .env 存在(运行时敏感变量来源),缺失直接报错暴露配置问题
+            if [ ! -f .env ]; then
+              echo "::error::部署目录缺少 .env 文件: ${DEPLOY_PATH}/.env"
+              exit 1
+            fi
+
+            echo "▶ 拉取最新代码..."
+            git fetch --prune origin
+            # 强制对齐远端分支:丢弃服务器本地任何脏改,保证可重复部署
+            git reset --hard "origin/${DEPLOY_BRANCH}"
+
+            echo "▶ 重建并启动容器..."
+            # 优先用 docker compose(v2 插件);老机器回退 docker-compose
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE="docker compose"
+            else
+              COMPOSE="docker-compose"
+            fi
+            $COMPOSE up -d --build
+
+            echo "▶ 清理悬空镜像..."
+            docker image prune -f
+
+            echo "▶ 当前服务状态:"
+            $COMPOSE ps
+
+            echo "✓ 部署完成"
