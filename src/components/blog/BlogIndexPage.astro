@@ -4,39 +4,34 @@
  * BlogIndexPage - 博客列表页共享组件
  * ----------------------------------------------------------------------------
  * 为什么抽成独立组件:
- *   中文 /blog 与英文 /en/blog 两个入口页面 95% 的逻辑相同,
- *   只有 lang 推导与少量默认文案不同。本组件负责:
- *     1. 解析 URL querystring(?page / ?q),做分页 + 搜索
- *     2. 从 Directus 拉取当前页 posts(失败时 fallback-data 内存分页)
- *     3. 搜索命中时对 title / excerpt 做高亮
- *     4. 组合左栏(LabMark + meta)与右栏(搜索框 + 列表 + 分页)
+ *   中英文、全部文章 / 按分类筛选、任意页码,一共 8 个静态路由文件
+ *   (blog/index、blog/page/[page]、blog/cat/[cat]/index、
+ *    blog/cat/[cat]/page/[page] × 2 语言)全部复用同一套渲染逻辑,
+ *   路由文件只负责用 getStaticPaths 枚举参数,再把 lang/page/categorySlug
+ *   转成 props 传进来。
  *
- * 使用方式(页面文件):
- *   ---
- *   import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
- *   ---
- *   <BlogIndexPage />
+ * 纯 props 驱动(不读 Astro.url.searchParams):
+ *   - lang / page / categorySlug 全部由调用方(路由文件)在构建期算好传入
+ *   - 分页与分类筛选因此变成"构建期已知的静态路径",不再是运行时查询参数
+ *
+ * 搜索:
+ *   - 服务端不再做任何搜索相关的数据获取或高亮
+ *   - 客户端搜索由 BlogSearchBox 接管:输入词后 fetch 静态索引
+ *     (/search/<lang>.json),在浏览器里过滤 + 高亮,接管本组件渲染的
+ *     #post-grid / #search-results / #search-empty / #blog-pagination /
+ *     #blog-category-tabs 这五个固定 id 容器的可见性
  *
  * 左栏 meta 字段说明:
- *   - POSTS        已发布文章总数(始终显示全量,不随搜索变化)
- *   - CATEGORIES   分类总数
- *   - LAST UPDATE  最新文章的发布日期(ISO → 本地化)
+ *   - POSTS        全站已发布文章总数(始终显示全量,不随分类筛选变化)
+ *   - CATEGORIES   分类总数(来自 loadCounts(),含尚无文章的分类)
+ *   - LAST UPDATE  全站最新文章的发布日期(与当前分页/分类视图解耦)
  *   - RSS          /rss.xml 外链
  *
  * 分页:
  *   - 每页 PAGE_SIZE = 10 篇
- *   - URL 参数 ?page=N(1-indexed,第 1 页省略参数)
- *   - 越界页码(page=999)由 listPostsPaged 内部 clamp 到最后一页,不报 404
+ *   - 路径式分页:第 1 页 = 干净路径,第 N 页 = `.../page/N/`
+ *     (具体拼接见 Pagination 组件,由调用方传入 basePath)
  *   - 单页时不渲染 Pagination(组件内部已处理)
- *
- * 搜索:
- *   - URL 参数 ?q=<关键词>
- *   - 搜索字段:当前 lang 翻译的 title + excerpt + content,_icontains 模糊匹配
- *   - 命中结果在 title / excerpt 里高亮 <mark class="search-hit">
- *   - 搜索激活时:
- *       · featured 分组失效(搜索结果按 date 降序,不再置顶精选)
- *       · SectionHeader 下方显示"搜索 XXX 的结果(N 条)"
- *       · 空结果单独文案,引导用户清空搜索回到全列表
  * ============================================================================
  */
 
@@ -48,17 +43,9 @@ import Pagination from "@components/ui/Pagination.astro";
 import BlogMark from "@components/ui/BlogMark.astro";
 import BlogSearchBox from "@components/blog/BlogSearchBox.astro";
 import BlogCategoryTabs from "@components/blog/BlogCategoryTabs.astro";
-import {
-	getLangFromUrl,
-	useTranslations,
-	useTranslatedPath,
-	formatDateCompact,
-} from "@i18n/utils";
+import { useTranslations, useTranslatedPath, formatDateCompact } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
-import {
-	FALLBACK_CATEGORIES,
-	listFallbackPosts,
-} from "@lib/fallback-data";
+import { loadCounts } from "@lib/content";
 import {
 	listPostsPaged,
 	listCategoryCounts,
@@ -66,150 +53,60 @@ import {
 	type PostVM,
 	type CategoryVM,
 } from "@lib/queries/posts";
-import { highlight } from "@lib/highlight";
 
-/* ----------------------------------------------------------------------------
- * 当前语言 / 翻译工具
- * -------------------------------------------------------------------------- */
+interface Props {
+	/** 当前语言 */
+	lang: Lang;
+	/** 当前页码(1-indexed,由调用方的 getStaticPaths 保证合法) */
+	page: number;
+	/** 分类 slug 过滤;缺省或空串表示"全部分类" */
+	categorySlug?: string;
+}
 
-const lang = getLangFromUrl(Astro.url) as Lang;
+const { lang, page, categorySlug = "" } = Astro.props;
+
 const t = useTranslations(lang);
 const tp = useTranslatedPath(lang);
 
-/* ----------------------------------------------------------------------------
- * 解析 URL 查询参数
- * ----------------------------------------------------------------------------
- * Astro SSR 下每次请求都能读到真实 query,解析完交给 listPostsPaged。
- *
- * 容错:
- *   - page 非数字 / 负数 / 超大 → listPostsPaged 内部 clamp
- *   - q 超长 → 本文件截断到 200 字符,避免恶意极长字符串打进 Directus filter
- * -------------------------------------------------------------------------- */
-
 const PAGE_SIZE = 10;
-const MAX_QUERY_LENGTH = 200;
-const MAX_CAT_LENGTH = 64;
-
-const searchParams = Astro.url.searchParams;
-const rawPage = Number.parseInt(searchParams.get("page") ?? "1", 10);
-const requestedPage = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
-const rawQuery = (searchParams.get("q") ?? "").slice(0, MAX_QUERY_LENGTH).trim();
-
-// 传给 listPostsPaged 的分类参数:用归一化后的值(未做白名单校验)。
-// 白名单校验需要 categoriesList 结果,但 listPostsPaged 需要与其并行触发。
-// 这里的 trade-off:若用户传了未知 slug,listPostsPaged 会返回 0 条(无害)。
-
-/* ----------------------------------------------------------------------------
- * 分类参数 ?cat=<slug>
- * ----------------------------------------------------------------------------
- * 归一化规则(与 listPostsPaged.normalizeCategorySlug 保持一致):
- *   - 空串 / 缺失 / "all"(大小写不敏感)→ 表示"全部",内部用空串表示
- *   - 仅接受存在于 FALLBACK_CATEGORIES 的 slug;未知 slug 直接回退到 ALL,
- *     避免用户乱填 URL 触发空列表
- *   - 长度截断防御
- * -------------------------------------------------------------------------- */
-
-const rawCat = (searchParams.get("cat") ?? "")
-	.slice(0, MAX_CAT_LENGTH)
-	.trim()
-	.toLowerCase();
-// 先做一次形态归一化(下方取到 categoriesList 后再做白名单校验)
-const normalizedRawCat = rawCat && rawCat !== "all" ? rawCat : "";
-
-/* ----------------------------------------------------------------------------
- * 拉取当前页数据(含搜索过滤)
- * ----------------------------------------------------------------------------
- * listPostsPaged 内部已完成:
- *   - Directus → fallback 降级
- *   - status=published 过滤
- *   - 按 -date_published 排序
- *   - 分页 + 越界 clamp
- *   - 按 lang 解包 translations
- * -------------------------------------------------------------------------- */
-
-const [pageResult, categoryCounts, categoriesList] = await Promise.all([
-	listPostsPaged({
-		lang,
-		page: requestedPage,
-		pageSize: PAGE_SIZE,
-		q: rawQuery,
-		categorySlug: normalizedRawCat,
-	}),
-	// 分类计数独立聚合查询:与主列表并行,失败已在内部降级为 fallback
-	listCategoryCounts(),
-	// Directus 真实分类列表(线上可能比 FALLBACK_CATEGORIES 多,如 AI Writer
-	// 新增的"资讯"/"daily-news" 等)。失败已在内部降级到 FALLBACK_CATEGORIES。
-	listCategories(lang),
-]);
-
-/*
- * activeCatSlug 白名单校验:
- *   只接受真实存在于 categoriesList(Directus 或 fallback)的 slug。
- *   未知 slug 一律回退到 ALL,避免用户乱填 URL 触发空列表。
- *
- * 注意:这里用的是 SSR 真实数据做校验,比之前纯用 FALLBACK_CATEGORIES 更准确,
- * 能正确识别 Directus 里后加的分类(如"资讯")。
- */
-const activeCatSlug: string = normalizedRawCat
-	? (categoriesList.find((c: CategoryVM) => c.slug === normalizedRawCat)
-			?.slug ?? "")
-	: "";
+const activeCatSlug = categorySlug;
 const hasCatFilter = activeCatSlug.length > 0;
 
-/*
- * 重新调用 listPostsPaged 的必要性判断:
- *   上面 Promise.all 时 activeCatSlug 还未确定最终值(当时用的是 normalizedRawCat
- *   未做白名单校验)。如果用户传了未知 slug(normalizedRawCat 非空,最终 activeCatSlug="")
- *   那 pageResult 会是"未知分类下的空列表",不是我们想要的"全部"。
- *
- * 但:本场景(未知 slug)极罕见,而且 listPostsPaged 对未知 slug 返回 total=0,
- * 用户会看到"暂无文章",URL 里的 cat 参数会在分类切换器点击后自动清除。
- * 这是可接受的边界行为,不再额外发一次请求。
- */
+/* ----------------------------------------------------------------------------
+ * 拉取数据
+ * ----------------------------------------------------------------------------
+ * 额外单独拉一次"全站第 1 页第 1 条"(不带分类筛选)只为拿到全站真实的最新
+ * 发布日期 —— LAST UPDATE 是"站点属性",必须与当前分页/分类视图解耦,
+ * 不能直接用 posts[0](分类筛选或翻页后 posts[0] 不是全站最新文章)。
+ * -------------------------------------------------------------------------- */
+
+const [pageResult, categoryCounts, categoriesList, siteCounts, latestPageResult] =
+	await Promise.all([
+		listPostsPaged({
+			lang,
+			page,
+			pageSize: PAGE_SIZE,
+			categorySlug: activeCatSlug,
+		}),
+		listCategoryCounts(),
+		listCategories(lang),
+		loadCounts(),
+		listPostsPaged({ lang, page: 1, pageSize: 1 }),
+	]);
 
 const posts: readonly PostVM[] = pageResult.items;
-const hasQuery = pageResult.query.length > 0;
 
 /* ----------------------------------------------------------------------------
  * 左栏 meta 数据计算
  * ----------------------------------------------------------------------------
- * 注意:POSTS 计数显示"站内全部已发布文章数",不随搜索/分页变化。
- * 这是左栏 meta 的语义约定 —— 它描述"站点"的属性,不是"当前视图"的属性。
- *
- * 获取全量总数策略:
- *   1. 当没有搜索且在第 1 页时,pageResult.total 就是全量总数
- *   2. 搜索激活时,pageResult.total 是搜索结果数,不能直接拿来做 POSTS 计数
- *      → 退而求其次用 fallback 的长度作为最小保证值,或展示 "—"
- *   为保持简洁 + 避免再发一次 Directus 查询,搜索态下 POSTS 显示为搜索结果数,
- *   但用 meta.searchResults 的 label 区分;无搜索时用 meta.posts 正常显示。
+ * POSTS:有分类筛选时仍展示全站总数(categoryCounts.total),保持"站点属性"
+ * 语义;无筛选时就是 pageResult.total(两者其实同值,写法上更直白)。
  * -------------------------------------------------------------------------- */
 
-/*
- * POSTS 计数语义:
- *   - 无搜索 + 无分类 → pageResult.total 就是站点全量
- *   - 有搜索 或 有分类 → pageResult.total 是命中数(视图属性,非站点属性)
- *     这里优先采用 categoryCounts.total(始终是站点全量),保持左栏 meta
- *     表达"站点属性"的语义一致性
- */
-const postCount =
-	hasQuery || hasCatFilter ? categoryCounts.total : pageResult.total;
-const categoryCount = FALLBACK_CATEGORIES.length;
-const latestPostDate = posts.length > 0 ? posts[0]!.date : null;
-const lastUpdateText = latestPostDate
-	? formatDateCompact(latestPostDate)
-	: "—";
-
-// fallback 兜底:搜索 0 命中导致 latestPostDate 为 null 时,
-// "LAST UPDATE" 仍显示站点真实的最后发布日期,避免页面看起来"空"
-let lastUpdateTextFinal = lastUpdateText;
-if (!latestPostDate) {
-	const allFb = listFallbackPosts();
-	const newest = allFb.reduce<string | null>((acc, p) => {
-		if (!acc) return p.date;
-		return new Date(p.date).getTime() > new Date(acc).getTime() ? p.date : acc;
-	}, null);
-	if (newest) lastUpdateTextFinal = formatDateCompact(newest);
-}
+const postCount = hasCatFilter ? categoryCounts.total : pageResult.total;
+const categoryCount = siteCounts.categories;
+const latestPostDate = latestPageResult.items[0]?.date ?? null;
+const lastUpdateText = latestPostDate ? formatDateCompact(latestPostDate) : "—";
 
 /* ----------------------------------------------------------------------------
  * 页面级文案(本页不通过 i18n 字典管理,因为是单页专属)
@@ -223,11 +120,6 @@ const PAGE_COPY = {
 			"记录构建过程、技术决策与开源探索。不追热点,只写能帮到明年自己的东西。",
 		empty: "还没有文章,敬请期待。",
 		sectionTitle: "BLOG",
-		searchResults: (n: number, q: string) =>
-			`找到 ${n} 篇包含 "${q}" 的文章`,
-		searchEmpty: (q: string) =>
-			`没有找到包含 "${q}" 的文章。`,
-		clearSearch: "清空搜索",
 	},
 	en: {
 		eyebrow: "Blog",
@@ -236,10 +128,6 @@ const PAGE_COPY = {
 			"Notes on what I build, the decisions behind them, and open-source explorations. No hot takes — only things that will help future me.",
 		empty: "No posts yet. Stay tuned.",
 		sectionTitle: "BLOG",
-		searchResults: (n: number, q: string) =>
-			`Found ${n} ${n === 1 ? "post" : "posts"} matching "${q}"`,
-		searchEmpty: (q: string) => `No posts match "${q}".`,
-		clearSearch: "Clear search",
 	},
 } as const;
 
@@ -248,78 +136,24 @@ const copy = PAGE_COPY[lang] ?? PAGE_COPY.zh;
 /* ----------------------------------------------------------------------------
  * 分组策略
  * ----------------------------------------------------------------------------
- *   - 非搜索态 + 第 1 页:featured 排前,其余按日期降序(保留原行为)
- *   - 非搜索态 + 第 2+ 页:featured 不再强调,直接按日期排(避免跨页重复置顶)
- *   - 搜索态:所有命中按日期排,featured 标记仅作为卡片视觉区分,不做分组
+ *   - 第 1 页(无论是否有分类筛选):featured 排前,其余按日期降序
+ *   - 第 2+ 页:featured 不再强调,直接按日期排(避免跨页重复置顶)
  * -------------------------------------------------------------------------- */
 
-const isFirstPageWithoutSearch = !hasQuery && pageResult.page === 1;
-const featuredPosts = isFirstPageWithoutSearch
-	? posts.filter((p) => p.featured)
-	: [];
-const regularPosts = isFirstPageWithoutSearch
-	? posts.filter((p) => !p.featured)
-	: posts;
+const isFirstPage = pageResult.page === 1;
+const featuredPosts = isFirstPage ? posts.filter((p) => p.featured) : [];
+const regularPosts = isFirstPage ? posts.filter((p) => !p.featured) : posts;
 
 /* ----------------------------------------------------------------------------
- * 高亮预处理
+ * 路径构造
  * ----------------------------------------------------------------------------
- * 在服务端把每篇文章的 title / excerpt 预先高亮成 HTML,PostCard 用
- * set:html 直接渲染。
- *
- * 只在搜索态下预处理,非搜索态走 PostCard 的纯文本分支,0 成本。
- *
- * 安全:highlight() 内部已完成 HTML escape + 仅产出 <mark class="search-hit">,
- * set:html 渲染无 XSS 风险。
+ *   - listBase   列表页根路径("/blog" / "/en/blog"),分类 tabs 与搜索结果
+ *                链接都基于它拼 `${listBase}/<slug>/`
+ *   - catBase    当前视图(可能带分类)的分页基础路径,传给 Pagination
  * -------------------------------------------------------------------------- */
 
-interface RenderablePost {
-	readonly vm: PostVM;
-	readonly titleHtml?: string;
-	readonly excerptHtml?: string;
-}
-
-function toRenderable(vm: PostVM): RenderablePost {
-	if (!hasQuery) return { vm };
-	return {
-		vm,
-		titleHtml: highlight(vm.title, pageResult.query),
-		excerptHtml: highlight(vm.excerpt, pageResult.query),
-	};
-}
-
-const featuredRenderable = featuredPosts.map(toRenderable);
-const regularRenderable = regularPosts.map(toRenderable);
-
-/* ----------------------------------------------------------------------------
- * 分页 baseUrl 构造
- * ----------------------------------------------------------------------------
- * Pagination 组件用 `${baseUrl}${sep}page=N` 拼分页链接。
- * baseUrl 需要保留当前的 ?q 参数,这样点分页按钮不会丢失搜索状态。
- *
- * 规则:
- *   - 无搜索 → baseUrl = "/blog"(或 "/en/blog")
- *   - 有搜索 → baseUrl = "/blog?q=<encoded>"
- *
- * tp("/blog") 会按 lang 自动加 /en 前缀。
- * -------------------------------------------------------------------------- */
-
-const listPath = tp("/blog");
-
-/* 分页 baseUrl:保留当前的 ?q 与 ?cat,只让 Pagination 追加 &page=N */
-function buildBaseUrl(): string {
-	const params = new URLSearchParams();
-	if (pageResult.query) params.set("q", pageResult.query);
-	if (activeCatSlug) params.set("cat", activeCatSlug);
-	const qs = params.toString();
-	return qs ? `${listPath}?${qs}` : listPath;
-}
-const paginationBaseUrl = buildBaseUrl();
-
-/* 搜索框 action:同理保留 ?cat(搜索跨分类时不丢失已选分类)。
- * 注意:BlogSearchBox 的 action 不支持 query string,它会用 <form method="GET">,
- * 所以我们必须把 cat 作为 hidden input 一起随表单提交。 */
-const searchAction = listPath;
+const listBase = tp("/blog");
+const catBase = hasCatFilter ? `${listBase}/cat/${activeCatSlug}` : listBase;
 
 /* 分类切换器需要知道每分类的计数。把 listCategoryCounts 返回的 byCategory
  * 与 ALL 计数合并成单个对象传给组件(组件用 "__all__" 特殊键取 ALL)。 */
@@ -331,14 +165,9 @@ const categoryCountsForTabs: Record<string, number> = {
 /* ----------------------------------------------------------------------------
  * BlogMark 左栏装置数据
  * ----------------------------------------------------------------------------
- * 把 Directus(或 fallback)真实分类列表和每分类计数折成 BlogMark 需要的形状:
+ * 把真实分类列表和每分类计数折成 BlogMark 需要的形状:
  *   { slug, name, count }[],按 count 降序(条形图"重"的排在上面,视觉更稳)。
- *
- * name 取自 categoriesList(已按当前 lang 解包),count 取自 categoryCounts.byCategory,
- * 查不到计数的分类视为 0(bootstrap 新增但还没文章的分类不会被遗漏)。
- *
- * 只展示前 N 项,避免左栏被极长的分类列表撑开。剩余分类不进入装置 —— 用户要看
- * 完整分类可用右栏顶部的分类切换器。
+ * 只展示前 N 项,避免左栏被极长的分类列表撑开。
  * -------------------------------------------------------------------------- */
 
 const BLOG_MARK_MAX_ROWS = 6;
@@ -421,7 +250,7 @@ const blogMarkCategories = categoriesList
 			label={t("meta.categories")}
 			value={String(categoryCount)}
 		/>
-		<MetaRow label={t("meta.lastUpdate")} value={lastUpdateTextFinal} />
+		<MetaRow label={t("meta.lastUpdate")} value={lastUpdateText} />
 		<MetaRow
 			label={t("meta.rss")}
 			value={tp("/rss.xml")}
@@ -447,6 +276,9 @@ const blogMarkCategories = categoriesList
 	 *   - 中间 min-w-0 + flex-1 + overflow-x-auto,分类过多时横向滚动,
 	 *     两端渐变蒙版暗示"此处可滚动",绝不会挤压搜索框与 count
 	 *   - 小屏(<sm)依旧是同一行;若分类极多,滚动条隐藏,手指滑动即可
+	 *
+	 *   分类 tabs 套一层 id="blog-category-tabs" 的容器,搜索态下由
+	 *   BlogSearchBox 的脚本整体隐藏(见组件内注释)。
 	 */}
 	<header class="pt-6 lg:pt-8">
 		<div class="flex items-center gap-3 sm:gap-4 mb-3">
@@ -467,22 +299,18 @@ const blogMarkCategories = categoriesList
 			</div>
 
 			{/* 中:分类切换(占据剩余宽度,超出横向滚动) */}
-			<BlogCategoryTabs
-				listPath={listPath}
-				categories={categoriesList}
-				activeSlug={activeCatSlug}
-				counts={categoryCountsForTabs}
-				currentQuery={pageResult.query}
-				class="flex-1 min-w-0"
-			/>
+			<div id="blog-category-tabs" class="flex-1 min-w-0">
+				<BlogCategoryTabs
+					listBase={listBase}
+					categories={categoriesList}
+					activeSlug={activeCatSlug}
+					counts={categoryCountsForTabs}
+				/>
+			</div>
 
 			{/* 右:搜索框 */}
 			<div class="shrink-0 flex items-center">
-				<BlogSearchBox
-					action={searchAction}
-					initialQuery={pageResult.query}
-					hiddenFields={{ cat: activeCatSlug }}
-				/>
+				<BlogSearchBox listBase={listBase} />
 			</div>
 		</div>
 
@@ -497,133 +325,140 @@ const blogMarkCategories = categoriesList
 		/>
 	</header>
 
-	{/* ---------- 搜索结果提示行(仅搜索态显示) ---------- */}
-	{
-		hasQuery && (
-			<div
-				class:list={[
-					"mt-4",
-					"flex items-center gap-3",
-					"font-[var(--font-mono)]",
-					"text-[11px] sm:text-[11.5px]",
-					"leading-none",
-					"tracking-[var(--tracking-wide)]",
-					"text-[color:var(--color-ink-tertiary)]",
-				]}
-			>
-				<span>
-					{pageResult.total > 0
-						? copy.searchResults(pageResult.total, pageResult.query)
-						: copy.searchEmpty(pageResult.query)}
-				</span>
-				<a
-					href={listPath}
+	{/* ---------- 文章列表(id="post-grid" 供客户端搜索脚本整体接管隐藏) ---------- */}
+	<div id="post-grid">
+		{
+			posts.length === 0 ? (
+				<div
 					class:list={[
-						"underline decoration-dashed underline-offset-2",
-						"decoration-[color:var(--color-hairline-strong)]",
-						"hover:text-[color:var(--color-ink-primary)]",
-						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+						"mt-8 lg:mt-10 mb-16",
+						"flex flex-col items-center justify-center",
+						"py-16 lg:py-20",
+						"border border-dashed border-[color:var(--color-hairline)]",
+						"text-center",
 					]}
 				>
-					{copy.clearSearch}
-				</a>
-			</div>
-		)
-	}
-
-	{/* ---------- 文章列表 ---------- */}
-	{
-		posts.length === 0 ? (
-			/* 空状态:搜索无结果 vs 站点无文章,两种情况用同一个视觉容器 */
-			<div
-				class:list={[
-					"mt-8 lg:mt-10 mb-16",
-					"flex flex-col items-center justify-center",
-					"py-16 lg:py-20",
-					"border border-dashed border-[color:var(--color-hairline)]",
-					"text-center",
-				]}
-			>
-				<span
-					aria-hidden="true"
+					<span
+						aria-hidden="true"
+						class:list={[
+							"mono-label",
+							"text-[11px]",
+							"text-[color:var(--color-ink-muted)]",
+							"mb-3",
+						]}
+					>
+						— EMPTY —
+					</span>
+					<p
+						class:list={[
+							"text-[color:var(--color-ink-secondary)]",
+							"text-[14px]",
+							"leading-[1.6]",
+						]}
+					>
+						{copy.empty}
+					</p>
+				</div>
+			) : (
+				<div
 					class:list={[
-						"mono-label",
-						"text-[11px]",
-						"text-[color:var(--color-ink-muted)]",
-						"mb-3",
+						"mt-6 lg:mt-8 mb-8",
+						// 整个列表包在一个虚线边框里,每篇文章用虚线分隔
+						"border border-dashed border-[color:var(--color-hairline)]",
+						"divide-y divide-dashed divide-[color:var(--color-hairline)]",
 					]}
 				>
-					— {hasQuery ? "NO RESULTS" : "EMPTY"} —
-				</span>
-				<p
-					class:list={[
-						"text-[color:var(--color-ink-secondary)]",
-						"text-[14px]",
-						"leading-[1.6]",
-					]}
-				>
-					{hasQuery ? copy.searchEmpty(pageResult.query) : copy.empty}
-				</p>
-			</div>
-		) : (
-			<div
-				class:list={[
-					"mt-6 lg:mt-8 mb-8",
-					// 整个列表包在一个虚线边框里,每篇文章用虚线分隔
-					"border border-dashed border-[color:var(--color-hairline)]",
-					"divide-y divide-dashed divide-[color:var(--color-hairline)]",
-				]}
-			>
-				{/* Featured 优先(仅非搜索态 + 第 1 页) */}
-				{featuredRenderable.map(({ vm: post, titleHtml, excerptHtml }) => (
-					<PostCard
-						href={tp(`/blog/${post.slug}`)}
-						title={post.title}
-						titleHtml={titleHtml}
-						excerpt={post.excerpt}
-						excerptHtml={excerptHtml}
-						cover={post.cover}
-						coverLabel={post.coverLabel}
-						authorName={post.authorName ?? undefined}
-						categoryName={post.categoryName ?? undefined}
-						date={post.date}
-						tags={post.tags}
-						readingTime={post.readingTime}
-						featured
-					/>
-				))}
+					{/* Featured 优先(仅第 1 页) */}
+					{featuredPosts.map((post) => (
+						<PostCard
+							href={tp(`/blog/${post.slug}/`)}
+							title={post.title}
+							excerpt={post.excerpt}
+							cover={post.cover}
+							coverLabel={post.coverLabel}
+							authorName={post.authorName ?? undefined}
+							categoryName={post.categoryName ?? undefined}
+							date={post.date}
+							tags={post.tags}
+							readingTime={post.readingTime}
+							featured
+						/>
+					))}
 
-				{/* 其余按日期降序(搜索态下所有命中都走这个分支) */}
-				{regularRenderable.map(({ vm: post, titleHtml, excerptHtml }) => (
-					<PostCard
-						href={tp(`/blog/${post.slug}`)}
-						title={post.title}
-						titleHtml={titleHtml}
-						excerpt={post.excerpt}
-						excerptHtml={excerptHtml}
-						cover={post.cover}
-						coverLabel={post.coverLabel}
-						authorName={post.authorName ?? undefined}
-						categoryName={post.categoryName ?? undefined}
-						date={post.date}
-						tags={post.tags}
-						readingTime={post.readingTime}
-					/>
-				))}
-			</div>
-		)
-	}
+					{/* 其余按日期降序 */}
+					{regularPosts.map((post) => (
+						<PostCard
+							href={tp(`/blog/${post.slug}/`)}
+							title={post.title}
+							excerpt={post.excerpt}
+							cover={post.cover}
+							coverLabel={post.coverLabel}
+							authorName={post.authorName ?? undefined}
+							categoryName={post.categoryName ?? undefined}
+							date={post.date}
+							tags={post.tags}
+							readingTime={post.readingTime}
+						/>
+					))}
+				</div>
+			)
+		}
+	</div>
 
-	{/* ---------- 分页 ---------- */}
+	{/* ---------- 客户端搜索结果容器(默认隐藏,由 BlogSearchBox 的脚本接管) ---------- */}
+	<div
+		id="search-results"
+		class:list={[
+			"mt-6 lg:mt-8 mb-8",
+			"border border-dashed border-[color:var(--color-hairline)]",
+			"divide-y divide-dashed divide-[color:var(--color-hairline)]",
+		]}
+		hidden
+	/>
+
+	{/* ---------- 客户端搜索"无结果"提示(默认隐藏) ---------- */}
+	<div
+		id="search-empty"
+		class:list={[
+			"mt-8 lg:mt-10 mb-16",
+			"flex flex-col items-center justify-center",
+			"py-16 lg:py-20",
+			"border border-dashed border-[color:var(--color-hairline)]",
+			"text-center",
+		]}
+		hidden
+	>
+		<span
+			aria-hidden="true"
+			class:list={[
+				"mono-label",
+				"text-[11px]",
+				"text-[color:var(--color-ink-muted)]",
+				"mb-3",
+			]}
+		>
+			— NO RESULTS —
+		</span>
+		<p
+			class:list={[
+				"text-[color:var(--color-ink-secondary)]",
+				"text-[14px]",
+				"leading-[1.6]",
+			]}
+		>
+			{t("search.empty")}
+		</p>
+	</div>
+
+	{/* ---------- 分页(id="blog-pagination" 供客户端搜索脚本整体接管隐藏) ---------- */}
 	{
 		pageResult.totalPages > 1 && (
-			<div class="mb-16">
+			<div id="blog-pagination" class="mb-16">
 				<Pagination
 					currentPage={pageResult.page}
 					totalPages={pageResult.totalPages}
 					totalItems={pageResult.total}
-					baseUrl={paginationBaseUrl}
-					pageParam="page"
+					basePath={catBase}
 				/>
 			</div>
 		)

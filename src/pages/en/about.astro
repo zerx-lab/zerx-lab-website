@@ -13,8 +13,8 @@
  *   URL 以 /en/ 开头时自动输出英文文案(About / In Numbers / Join us on / ...)。
  *
  * 数据源:
- *   - FALLBACK_SITE_SETTINGS / FALLBACK_LANGUAGE_STATS / FALLBACK_PROJECTS
- *   - 未来接入 Directus 后可替换为真实 site_settings 单例拉取
+ *   - src/content/data/{site,projects,language-stats}.json(构建期读取)
+ *   - GitHub API 的 stars / forks 快照(可选,拉不到就用内容里的静态值)
  *
  * 维护约定:
  *   若要修改关于页的结构/样式/数据拉取逻辑,只改

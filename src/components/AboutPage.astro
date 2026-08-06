@@ -6,7 +6,8 @@
  * 为什么抽成独立组件:
  *   中文 /about 与英文 /en/about 两个入口页面 95% 的逻辑相同,
  *   只有语言推导与少量默认文案不同。本组件负责:
- *     1. 从 Directus 拉取 site_settings / projects 统计(失败时 fallback)
+ *     1. 用 @lib/content / @lib/queries/site-settings 在构建期读取站点设置、
+ *        项目、语言占比等内容
  *     2. 把 Bilingual 字段按当前 lang 解包
  *     3. 展示:ABOUT / IN NUMBERS / JOIN US ON / STACK / CONTACT 分区
  *
@@ -34,12 +35,8 @@ import {
 	useTranslatedPath,
 } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
-import {
-	FALLBACK_LANGUAGE_STATS,
-	listFallbackProjects,
-	getFallbackCounts,
-} from "@lib/fallback-data";
-import { getGithubStatsBatch } from "@lib/github";
+import { loadLanguageStats } from "@lib/content";
+import { loadLiveCounts } from "@lib/queries/projects";
 import { loadSiteSettings } from "@lib/queries/site-settings";
 
 /* ----------------------------------------------------------------------------
@@ -58,55 +55,20 @@ const rssHref = tp("/rss.xml");
 /* ----------------------------------------------------------------------------
  * 数据
  * ----------------------------------------------------------------------------
- *   - settings       Directus site_settings 单例(含当前语言的 tagline /
- *                    description / location / social_*),失败时自动降级到
- *                    FALLBACK_SITE_SETTINGS。所有字段已按 lang 解包,
- *                    直接消费(不再需要 pickLang)。
- *   - projects       项目列表。这里暂用 fallback —— 本页 projects 主要消费
- *                    是 githubUrl(用于 GitHub stars 聚合),与 fallback 的
- *                    7 条记录一致,无需引入 Directus 查询。
- *   - counts         站点统计,来自 fallback 快照 + GitHub 实时聚合覆盖。
- *   - languageStats  语言占比,设计稿固定 8 条,不迁入 CMS。
+ *   - settings       @lib/queries/site-settings 的 loadSiteSettings(lang),
+ *                    已按当前语言解包 tagline / description / location /
+ *                    social_* 等字段,直接消费(不再需要 pickLang)。
+ *   - counts         @lib/queries/projects 的 loadLiveCounts():文章 / 分类等
+ *                    取内容仓库,projects / totalStars / totalForks 用 GitHub
+ *                    实时清单覆盖,与首页 meta、/projects 左栏同源同数。
+ *   - languageStats  @lib/content 的 loadLanguageStats(),按占比降序。
  * -------------------------------------------------------------------------- */
 
 const settings = await loadSiteSettings(lang);
-const fallbackCounts = getFallbackCounts();
-const projects = listFallbackProjects();
-const languageStats = FALLBACK_LANGUAGE_STATS;
-
-/* ----------------------------------------------------------------------------
- * GitHub 真实总数覆盖
- * ----------------------------------------------------------------------------
- * fallback-data 里的 totalStars / totalForks 是手填的快照,会漂。
- * 构建时通过 getGithubStatsBatch 并发拉一次真实数据(24h 磁盘缓存),
- * 把 counts.totalStars / totalForks 覆盖成权威值。
- *
- * 设计取舍:
- *   - 只覆盖 totalStars / totalForks,其他统计(posts / projects / tags 等
- *     本站自有数据)仍取 fallback 值,GitHub 不负责这些
- *   - 任一 repo 拉取失败(返回 null),其 star/fork 贡献回落到 fallback 快照,
- *     确保页面永远有数字可显示
- *   - GitHub API 全挂时,本逻辑等价于直接用 fallbackCounts,不会抛错
- * -------------------------------------------------------------------------- */
-
-const githubStatsList = await getGithubStatsBatch(
-	projects.map((p) => p.githubUrl),
-);
-
-let liveTotalStars = 0;
-let liveTotalForks = 0;
-for (let i = 0; i < projects.length; i++) {
-	const live = githubStatsList[i];
-	const fb = projects[i];
-	liveTotalStars += live?.stars ?? fb.stars;
-	liveTotalForks += live?.forks ?? fb.forks;
-}
-
-const counts = {
-	...fallbackCounts,
-	totalStars: liveTotalStars,
-	totalForks: liveTotalForks,
-};
+const [counts, languageStats] = await Promise.all([
+	loadLiveCounts(),
+	loadLanguageStats(),
+]);
 
 // settings 里的 tagline / description / location 已在 loadSiteSettings 内部
 // 按 lang 解包完毕,这里只做同名变量映射,尽量少改下面模板的引用点。

@@ -1,0 +1,42 @@
+---
+/**
+ * ============================================================================
+ * 博客列表页 (中文) —— 按分类筛选,第 N 页(N ≥ 2)
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /blog/cat/<slug>/page/2/, .../page/3/ …  → 本文件
+ *   /blog/cat/<slug>/                         → 该分类第 1 页
+ *
+ * 实现:
+ *   对每个"有文章的分类"分别调用 countPagesFor(cat) 算出该分类的总页数,
+ *   枚举 2..totalPages,与 blog/page/[page].astro 同样不重复生成第 1 页。
+ * ============================================================================
+ */
+
+import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
+import { countPagesFor, listCategorySlugsWithPosts } from "@lib/queries/posts";
+
+export async function getStaticPaths() {
+	const slugs = await listCategorySlugsWithPosts();
+	const paths = await Promise.all(
+		slugs.map(async (cat) => {
+			const totalPages = await countPagesFor(cat);
+			return Array.from({ length: Math.max(0, totalPages - 1) }, (_, i) => ({
+				params: { cat, page: String(i + 2) },
+			}));
+		}),
+	);
+	return paths.flat();
+}
+
+const { cat, page: pageParam } = Astro.params;
+const page = Number(pageParam);
+
+if (!cat || !Number.isInteger(page) || page < 2) {
+	throw new Error(
+		`[blog/cat/${cat}/page/${pageParam}] getStaticPaths 枚举出的参数非法 —— 构建失败。`,
+	);
+}
+---
+
+<BlogIndexPage lang="zh" page={page} categorySlug={cat} />

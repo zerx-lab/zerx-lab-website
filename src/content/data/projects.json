@@ -1,0 +1,261 @@
+[
+	{
+		"slug": "wordzero",
+		"name": "wordZero",
+		"description": {
+			"zh": "零依赖 Go 语言 Word 文档处理引擎,比主流 Python 方案快 21 倍。支持 18 种预定义样式与完整 OOXML。",
+			"en": "Zero-dependency Go engine for Word docs, 21× faster than the Python path. 18 built-in styles, full OOXML coverage."
+		},
+		"techStack": [
+			"Go",
+			"OOXML",
+			"Zero-dep"
+		],
+		"kind": "library",
+		"language": "Go",
+		"githubUrl": "https://github.com/zerx-lab/wordZero",
+		"demoUrl": null,
+		"docsUrl": "https://github.com/zerx-lab/wordZero#readme",
+		"npmUrl": null,
+		"stars": 670,
+		"forks": 53,
+		"featured": true,
+		"highlights": {
+			"zh": "零依赖 · 2.62ms 平均耗时 · 18 种预定义样式",
+			"en": "Zero deps · 2.62ms avg · 18 preset styles"
+		}
+	},
+	{
+		"slug": "penbridge",
+		"name": "PenBridge",
+		"description": {
+			"zh": "一键发布博客到多平台(知乎、掘金、CSDN 等),自动适配 Markdown 方言与图片托管。",
+			"en": "One-click blog publishing across multiple platforms with dialect-aware Markdown and image hosting."
+		},
+		"techStack": [
+			"TypeScript",
+			"Tauri",
+			"Rust"
+		],
+		"kind": "app",
+		"language": "TypeScript",
+		"githubUrl": "https://github.com/zerx-lab/PenBridge",
+		"demoUrl": null,
+		"docsUrl": null,
+		"npmUrl": null,
+		"stars": 25,
+		"forks": 2,
+		"featured": true,
+		"highlights": {
+			"zh": "多平台同步 · Markdown 方言适配 · 桌面端",
+			"en": "Cross-platform sync · Dialect-aware Markdown · Desktop app"
+		}
+	},
+	{
+		"slug": "siyuan-share",
+		"name": "siyuan-share",
+		"description": {
+			"zh": "思源笔记的分享扩展,让笔记以精致的页面公开分享,支持自定义主题与访问控制。",
+			"en": "A sharing extension for SiYuan Note — publish notes as polished pages with custom themes and access control."
+		},
+		"techStack": [
+			"TypeScript",
+			"SiYuan"
+		],
+		"kind": "tool",
+		"language": "TypeScript",
+		"githubUrl": "https://github.com/zerx-lab/siyuan-share",
+		"demoUrl": null,
+		"docsUrl": null,
+		"npmUrl": null,
+		"stars": 6,
+		"forks": 5,
+		"featured": false,
+		"highlights": {
+			"zh": "思源笔记扩展 · 主题可定制 · 访问控制",
+			"en": "SiYuan plugin · Themeable · Access control"
+		}
+	},
+	{
+		"slug": "rmx",
+		"name": "rmx",
+		"description": {
+			"zh": "Windows 上的高性能并行目录删除工具,处理 node_modules 这类深层嵌套目录比原生方式快一个数量级。",
+			"en": "High-performance parallel directory remover for Windows. Handles deeply nested trees like node_modules an order of magnitude faster than native."
+		},
+		"techStack": [
+			"Rust",
+			"Rayon",
+			"Win32"
+		],
+		"kind": "tool",
+		"language": "Rust",
+		"githubUrl": "https://github.com/zerx-lab/rmx",
+		"demoUrl": null,
+		"docsUrl": null,
+		"npmUrl": null,
+		"stars": 62,
+		"forks": 1,
+		"featured": true,
+		"highlights": {
+			"zh": "Rust 并行删除 · NTFS 优化 · 符号链接安全",
+			"en": "Parallel Rust remover · NTFS-tuned · Symlink safe"
+		}
+	},
+	{
+		"slug": "axon-ai",
+		"name": "axon-ai",
+		"description": {
+			"zh": "探索性的 Agent 编排框架,研究 LLM 作为「写代码的同事」而非玩具的可能性。",
+			"en": "An experimental agent orchestration framework exploring LLMs as coworkers that ship code, not toys."
+		},
+		"techStack": [
+			"TypeScript",
+			"LLM",
+			"Agents"
+		],
+		"kind": "experiment",
+		"language": "TypeScript",
+		"githubUrl": "https://github.com/zerx-lab/axon-ai",
+		"demoUrl": null,
+		"docsUrl": null,
+		"npmUrl": null,
+		"stars": 15,
+		"forks": 0,
+		"featured": false,
+		"highlights": {
+			"zh": "Agent 编排 · 工具调用 · 异步工作流",
+			"en": "Agent orchestration · Tool calling · Async workflows"
+		}
+	},
+	{
+		"slug": "lspproxy",
+		"name": "LspProxy",
+		"description": {
+			"zh": "LSP 中文翻译代理。以透明代理形式插入编辑器与 LSP 进程之间,将 hover、completion、diagnostics 的英文文档实时翻译为中文。",
+			"en": "A transparent LSP proxy that sits between your editor and the LSP server, translating hover / completion / diagnostics from English into Chinese in real time."
+		},
+		"techStack": [
+			"Go",
+			"LSP"
+		],
+		"kind": "tool",
+		"language": "Go",
+		"githubUrl": "https://github.com/zerx-lab/LspProxy",
+		"demoUrl": null,
+		"docsUrl": null,
+		"npmUrl": null,
+		"stars": 3,
+		"forks": 0,
+		"featured": false,
+		"highlights": {
+			"zh": "透明代理 · 支持 VSCode / Neovim / Zed",
+			"en": "Transparent proxy · VSCode / Neovim / Zed"
+		}
+	},
+	{
+		"slug": "fluxdown",
+		"name": "FluxDown",
+		"description": {
+			"zh": "Flutter UI + Rust 核心的多协议下载管理器,支持 HTTP / FTP / BitTorrent 磁力链接与 HLS / DASH 流媒体,覆盖 Windows / macOS / Linux / Android / iOS / Web 全端。AGPL-3.0 开源。",
+			"en": "Multi-protocol download manager with a Flutter UI and Rust core. HTTP / FTP / BitTorrent magnet links plus HLS / DASH streaming, across Windows, macOS, Linux, Android, iOS, and Web. Open source under AGPL-3.0."
+		},
+		"techStack": [
+			"Flutter",
+			"Rust",
+			"Dart"
+		],
+		"kind": "app",
+		"language": "Rust",
+		"githubUrl": "https://github.com/zerx-lab/FluxDown",
+		"demoUrl": "https://fluxdown.zerx.dev/",
+		"docsUrl": null,
+		"npmUrl": null,
+		"stars": 1527,
+		"forks": 75,
+		"featured": true,
+		"highlights": {
+			"zh": "全平台 · 多协议 · Rust 核心 · AGPL-3.0",
+			"en": "All platforms · Multi-protocol · Rust core · AGPL-3.0"
+		}
+	},
+	{
+		"slug": "openwarp",
+		"name": "OpenWarp",
+		"description": {
+			"zh": "完全去中心化的终端,Warp 的开源社区分支。剥离云端依赖,开放 AI 接入层,支持任意 OpenAI 兼容端点与第三方 CLI Agent,内置 SSH 管理与 tmux 集成,密钥与历史全部留在本地。",
+			"en": "A fully decentralized terminal forked from Warp. Strips cloud dependencies, opens the AI layer to any OpenAI-compatible endpoint and third-party CLI agents, ships built-in SSH + tmux management — keys and history stay local."
+		},
+		"techStack": [
+			"Rust",
+			"Tokio",
+			"genai"
+		],
+		"kind": "app",
+		"language": "Rust",
+		"githubUrl": "https://github.com/zerx-lab/warp",
+		"demoUrl": null,
+		"docsUrl": "https://github.com/zerx-lab/warp/blob/main/README.zh-CN.md",
+		"npmUrl": null,
+		"stars": 0,
+		"forks": 0,
+		"featured": true,
+		"highlights": {
+			"zh": "BYOP 多 Provider · 第三方 Agent · SSH 内置 · 零云端依赖",
+			"en": "BYOP providers · Third-party agents · Built-in SSH · Zero cloud"
+		}
+	},
+	{
+		"slug": "zpass",
+		"name": "ZPass",
+		"description": {
+			"zh": "零知识架构的开源密码管理器。端到端加密,只在本机解密,支持自托管。覆盖桌面端(Wails 3 + Go/React)、浏览器扩展(Chrome / Firefox)与移动端(Expo RN)。",
+			"en": "Zero-knowledge open-source password manager. End-to-end encrypted, decrypted only on your device, self-host friendly. Ships desktop (Wails 3 + Go/React), browser extension (Chrome / Firefox), and mobile (Expo RN)."
+		},
+		"techStack": [
+			"Go",
+			"React",
+			"Wails"
+		],
+		"kind": "app",
+		"language": "Go",
+		"githubUrl": "https://github.com/zerx-lab/zpass",
+		"demoUrl": null,
+		"docsUrl": "https://github.com/zerx-lab/zpass/blob/main/README.zh-CN.md",
+		"npmUrl": null,
+		"stars": 11,
+		"forks": 0,
+		"featured": true,
+		"highlights": {
+			"zh": "零知识加密 · 跨端 · 自托管 · AGPL-3.0",
+			"en": "Zero-knowledge · Cross-platform · Self-hostable · AGPL-3.0"
+		}
+	},
+	{
+		"slug": "zerxlab-website",
+		"name": "zerx-lab-website",
+		"description": {
+			"zh": "你正在看的这个站点。Astro + Bun + Tailwind v4,内容源是仓库里的 Markdown,GitHub Actions 构建后 rsync 到自有服务器。",
+			"en": "The site you are reading. Astro + Bun + Tailwind v4, content lives as Markdown in the repo, built by GitHub Actions and rsynced to a self-hosted server."
+		},
+		"techStack": [
+			"Astro",
+			"Bun",
+			"Tailwind",
+			"Static"
+		],
+		"kind": "app",
+		"language": "TypeScript",
+		"githubUrl": "https://github.com/zerx-lab/zerx-lab-website",
+		"demoUrl": "https://zerx.dev",
+		"docsUrl": null,
+		"npmUrl": null,
+		"stars": 0,
+		"forks": 0,
+		"featured": false,
+		"highlights": {
+			"zh": "Astro 6 · 双语 · 全 SSG · 自建部署",
+			"en": "Astro 6 · Bilingual · Full SSG · Self-hosted"
+		}
+	}
+]

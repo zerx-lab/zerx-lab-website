@@ -6,7 +6,7 @@
  * 为什么抽成独立组件:
  *   中文 /aur 与英文 /en/aur 两个入口页面 95% 的逻辑相同,
  *   只有语言推导与少量默认文案不同。本组件负责:
- *     1. 从 Directus 拉取 aur_packages(失败时 fallback)
+ *     1. 用 @lib/content 的 loadAurPackages() 在构建期读取 src/content/data/aur.json
  *     2. 把 Bilingual 字段按当前 lang 解包
  *     3. 顶部展示"一行安装命令"示例(yay / paru 双 tab)
  *     4. 列表展示每个包,带 badges、版本、上游/AUR 链接、复制安装命令
@@ -36,11 +36,10 @@ import {
 } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 import {
-	listFallbackAurPackages,
+	loadAurPackages,
 	pickLang,
-	type FallbackAurPackage,
-} from "@lib/fallback-data";
-import { directus, readItems, DIRECTUS_CONFIG } from "@lib/directus";
+	type AurPackageData,
+} from "@lib/content";
 import { getAurInfoBatch } from "@lib/aur-rpc";
 
 /* ----------------------------------------------------------------------------
@@ -65,7 +64,8 @@ interface AurVM {
 	maintained: boolean;
 }
 
-function fallbackToVM(pkg: FallbackAurPackage, currentLang: Lang): AurVM {
+/** 把 AurPackageData 转成 ViewModel(按当前 lang 解包 Bilingual) */
+function toVM(pkg: AurPackageData, currentLang: Lang): AurVM {
 	return {
 		slug: pkg.slug,
 		name: pkg.name,
@@ -78,20 +78,16 @@ function fallbackToVM(pkg: FallbackAurPackage, currentLang: Lang): AurVM {
 	};
 }
 
-/* ----------------------------------------------------------------------------
- * 尝试从 Directus 拉取,失败则走 Fallback
- * -------------------------------------------------------------------------- */
-
 /**
  * 用 AUR RPC 的实时版本号覆盖 VM 数组里的 version 字段。
  *
- * 为什么放在 Directus / Fallback 之后统一做:
- *   - 两条数据来源(Directus 成功 / fallback 降级)都能受益,逻辑只写一份
- *   - Directus 里的 version 作为"最后兜底"保留,AUR RPC 拿不到时展示不会崩
+ * 为什么单独做一次覆盖:
+ *   - 内容仓库里的 version 是撰写文章时手填的快照,作为"最后兜底"保留,
+ *     AUR RPC 拿不到时展示不会崩
  *
  * 失败策略(由 getAurInfoBatch 内部处理):
  *   - 网络超时 / RPC 整体挂:返回空 Map 或旧 stale 数据,不抛错
- *   - 单个包在 AUR 找不到:Map 里不出现该键,当前函数保留 Directus 原值
+ *   - 单个包在 AUR 找不到:Map 里不出现该键,当前函数保留内容仓库原值
  *
  * 性能:
  *   - AUR RPC v5 一次请求支持多个 arg[],所以总是 1 次 HTTP
@@ -115,7 +111,7 @@ async function mergeAurVersions(
 	} catch (err) {
 		// getAurInfoBatch 本身已经静默失败,这里再兜一层保险
 		console.warn(
-			"[aur] AUR RPC 合并失败,使用 Directus/fallback 版本号。原因:",
+			"[aur] AUR RPC 合并失败,使用内容仓库版本号。原因:",
 			(err as Error)?.message ?? err,
 		);
 		return packages;
@@ -123,76 +119,8 @@ async function mergeAurVersions(
 }
 
 async function loadPackages(): Promise<readonly AurVM[]> {
-	if (!DIRECTUS_CONFIG.hasReadToken) {
-		const base = listFallbackAurPackages().map((p) => fallbackToVM(p, lang));
-		return mergeAurVersions(base);
-	}
-
-	try {
-		const client = directus();
-		const langCode = lang === "zh" ? "zh-CN" : "en-US";
-
-		const pkgFields: any = [
-			"id",
-			"name",
-			"version",
-			"maintained",
-			"badges",
-			"aur_url",
-			"upstream_url",
-			"sort",
-			{
-				translations: ["languages_code", "description"],
-			},
-		];
-
-		const result = (await client.request(
-			readItems("aur_packages", {
-				filter: { status: { _eq: "published" } },
-				sort: ["sort", "name"],
-				fields: pkgFields,
-				limit: -1,
-			}),
-		)) as any[];
-
-		const base = result.map((row): AurVM => {
-			const tr = row?.translations?.find(
-				(x: any) =>
-					x.languages_code === langCode ||
-					x.languages_code?.code === langCode,
-			);
-
-			const badges: readonly string[] = Array.isArray(row?.badges)
-				? row.badges
-				: [];
-
-			// slug 从包名派生(去掉 zerx-lab- 前缀和 -bin 后缀)
-			const rawName = row?.name ?? "";
-			const slug = rawName
-				.replace(/^zerx-lab-/, "")
-				.replace(/-bin$/, "");
-
-			return {
-				slug,
-				name: rawName,
-				version: row?.version ?? "—",
-				description: tr?.description ?? "",
-				badges,
-				aurUrl: row?.aur_url ?? "",
-				upstreamUrl: row?.upstream_url ?? null,
-				maintained: row?.maintained !== false,
-			};
-		});
-
-		return mergeAurVersions(base);
-	} catch (err) {
-		console.warn(
-			"[aur] Directus 读取失败,使用 FALLBACK。原因:",
-			(err as Error)?.message ?? err,
-		);
-		const base = listFallbackAurPackages().map((p) => fallbackToVM(p, lang));
-		return mergeAurVersions(base);
-	}
+	const base = (await loadAurPackages()).map((p) => toVM(p, lang));
+	return mergeAurVersions(base);
 }
 
 const packages = await loadPackages();

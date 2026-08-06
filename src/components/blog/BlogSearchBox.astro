@@ -1,33 +1,33 @@
 ---
 /**
  * ============================================================================
- * BlogSearchBox - 博客列表页搜索入口
+ * BlogSearchBox - 博客列表页搜索入口(客户端搜索)
  * ----------------------------------------------------------------------------
  * 交互:
  *   - 默认态:一个放大镜小图标(与 SectionHeader 右上角 count 对齐)
  *   - 点击 / 聚焦:展开为输入框,自动聚焦
- *   - 有搜索词时:展开态保持,显示 ✕ 清空按钮
- *   - 回车:提交表单,浏览器走 GET 跳转到 /blog?q=xxx,SSR 重新渲染
- *   - 按 Esc:折叠回图标(若输入为空);有内容时 Esc 先清空再折叠
- *   - 点击空白处(outside click):折叠(若输入为空)
+ *   - 输入 ≥ 1 字符:接管页面 —— 隐藏 #post-grid / #blog-pagination /
+ *     #blog-category-tabs,把匹配结果渲染进 #search-results(0 命中则显示
+ *     #search-empty),这四个容器都由 BlogIndexPage 渲染,本组件只负责按 id 接管
+ *   - 清空输入(点击 ✕ / 手动删空 / Esc):恢复默认列表视图
+ *   - 按 Esc:输入非空先清空,输入为空则折叠图标
+ *   - 点击空白处(outside click):折叠(仅当输入为空)
  *
- * 架构选择:
- *   - 纯 <form method="GET">,没有 AJAX,没有实时搜索
- *     · 提交后浏览器导航到新 URL,SSR 直出结果,middleware 的缓存语义一致
- *     · 搜索词通过 URL 反映,支持分享 / 刷新保留状态
- *   - 展开 / 折叠 / 清空 这些纯 UI 交互走一小段内嵌 <script>,
- *     不引入 React 或其它框架
- *
- * URL 约定:
- *   - ?q=<keyword>  搜索词(已由 URL 自动 encode/decode)
- *   - 提交时如果输入为空,不带 q 参数,保持 URL 干净(跳到 /blog)
- *   - 提交时会清空 ?page,搜索结果始终从第 1 页开始
+ * 架构选择(全站切到纯静态构建后,不再有 SSR 可以按 ?q= 重新渲染):
+ *   - 搜索索引在构建期由 src/pages/search/[lang].json.ts 产出静态 JSON
+ *     (/search/zh.json、/search/en.json),覆盖当前语言下的全部已发布文章
+ *   - 首次输入时才 fetch 对应语言的索引,结果缓存在模块作用域(indexCache),
+ *     同一语言的索引只下载一次,后续按键仅在内存里过滤
+ *   - 搜索不再影响 URL / 不再分页 / 不再受当前分类筛选影响 —— 客户端搜索
+ *     覆盖全站该语言下的所有文章,体验上更像"站内检索"而非"列表过滤"
+ *   - 高亮复用 @lib/highlight 的 highlight():该函数已完成 HTML 转义,
+ *     结果用 innerHTML 写入是安全的;其余字段(分类名、日期等)一律用
+ *     textContent 写入,双重保险防 XSS
  *
  * a11y:
  *   - 放大镜按钮有 aria-label 与 aria-expanded
  *   - 输入框有 aria-label;图标用 aria-hidden
- *   - Esc / 回车交互遵循 https://www.w3.org/WAI/ARIA/apg/patterns/combobox/
- *     的常用子集(本组件不是真正的 combobox,只取用户熟悉的键盘约定)
+ *   - role="search" 标注整个交互区域
  *
  * 视觉约束:
  *   - 编辑派风格:无圆角,1px 发丝边框,展开动画仅宽度过渡
@@ -41,49 +41,17 @@ import type { Lang } from "@i18n/ui";
 
 interface Props {
 	/**
-	 * 表单 action URL。通常是当前列表页路径:
-	 *   - 中文: "/blog"
-	 *   - 英文: "/en/blog"
-	 * 组件不做 lang 推断,避免和调用方的 useTranslatedPath 重复。
+	 * 列表页根路径,不带结尾斜杠,例如 "/blog" 或 "/en/blog"。
+	 * 搜索结果链接会拼成 `${listBase}/<slug>/`。
 	 */
-	action: string;
-	/**
-	 * 当前搜索词(来自 URL ?q=),用于:
-	 *   1. 回显到输入框 value
-	 *   2. 决定初始展开 / 折叠状态(有词则展开)
-	 */
-	initialQuery?: string;
-	/**
-	 * 随表单一起提交的额外 hidden 字段(键值对)。
-	 * 用途:让搜索提交保留当前 URL 上的其它筛选参数(如 ?cat=<slug>),
-	 * 避免搜索时丢失已选分类。
-	 *
-	 * 约定:
-	 *   - 值为空串 / undefined 的键会被忽略(不渲染 hidden input)
-	 *   - 键名不做白名单校验,调用方自己负责合法性
-	 *   - 不会渲染 page 字段,搜索始终从第 1 页开始(与本组件原有语义一致)
-	 */
-	hiddenFields?: Readonly<Record<string, string | undefined>>;
+	listBase: string;
 	/** 额外类名 */
 	class?: string;
 }
 
-const {
-	action,
-	initialQuery = "",
-	hiddenFields,
-	class: className = "",
-} = Astro.props;
+const { listBase, class: className = "" } = Astro.props;
 
-// 过滤掉空值,得到真正要渲染的 hidden 字段列表
-const hiddenEntries: ReadonlyArray<readonly [string, string]> = hiddenFields
-	? Object.entries(hiddenFields).filter(
-			(entry): entry is [string, string] =>
-				typeof entry[1] === "string" && entry[1].length > 0,
-		)
-	: [];
-
-// 当前语言(仅用于 placeholder / aria-label 文案)
+// 当前语言(决定 placeholder / aria-label 文案,以及拉取哪份搜索索引)
 const lang = getLangFromUrl(Astro.url) as Lang;
 
 const LABELS = {
@@ -92,7 +60,6 @@ const LABELS = {
 		closeLabel: "关闭搜索",
 		inputLabel: "搜索文章",
 		clearLabel: "清空搜索",
-		submitLabel: "提交搜索",
 		placeholder: "搜索标题或内容…",
 	},
 	en: {
@@ -100,29 +67,19 @@ const LABELS = {
 		closeLabel: "Close search",
 		inputLabel: "Search posts",
 		clearLabel: "Clear search",
-		submitLabel: "Submit search",
 		placeholder: "Search title or content…",
 	},
 } as const;
 
 const L = LABELS[lang] ?? LABELS.zh;
-
-// 初始是否展开:有搜索词时保持展开,方便用户修改
-const initiallyExpanded = initialQuery.trim().length > 0;
 ---
 
-<form
+<div
 	role="search"
-	method="GET"
-	action={action}
 	data-blog-search
-	data-initial-expanded={initiallyExpanded ? "true" : "false"}
-	class:list={[
-		"blog-search",
-		"relative inline-flex items-center",
-		// data-expanded 为 true 时使用更宽的布局,详见下方 <style>
-		className,
-	]}
+	data-lang={lang}
+	data-list-base={listBase}
+	class:list={["blog-search", "relative inline-flex items-center", className]}
 >
 	{/* ------------------------------------------------------------------
 	 *  放大镜按钮(折叠态的视觉主体;展开态隐藏)
@@ -131,7 +88,7 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 		type="button"
 		data-blog-search-toggle
 		aria-label={L.openLabel}
-		aria-expanded={initiallyExpanded ? "true" : "false"}
+		aria-expanded="false"
 		class:list={[
 			"blog-search__toggle",
 			"inline-flex items-center justify-center",
@@ -165,8 +122,7 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 	{/* ------------------------------------------------------------------
 	 *  输入框容器(展开态的视觉主体;折叠态隐藏)
 	 *  ------------------------------------------------------------------
-	 *  结构:[小放大镜图标] [input] [可选的清空 ✕]
-	 *  放大镜 svg 同时承担"提交按钮"的语义(点击触发表单提交)
+	 *  结构:[小放大镜图标(纯装饰,不再是提交按钮)] [input] [可选的清空 ✕]
 	 * ------------------------------------------------------------------ */}
 	<div
 		data-blog-search-panel
@@ -181,40 +137,25 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 			"transition-[width,opacity] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
 		]}
 	>
-		{/* 提交按钮(表达成 icon button;回车提交时也会经过此按钮的默认动作) */}
-		<button
-			type="submit"
-			aria-label={L.submitLabel}
-			class:list={[
-				"inline-flex items-center justify-center",
-				"h-5 w-5 shrink-0",
-				"text-[color:var(--color-ink-tertiary)]",
-				"hover:text-[color:var(--color-ink-primary)]",
-				"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-				"bg-transparent border-0 p-0 cursor-pointer",
-				"focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-ink-primary)]",
-			]}
+		<svg
+			aria-hidden="true"
+			width="12"
+			height="12"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			class="shrink-0 text-[color:var(--color-ink-tertiary)]"
 		>
-			<svg
-				aria-hidden="true"
-				width="12"
-				height="12"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<circle cx="11" cy="11" r="7"></circle>
-				<line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-			</svg>
-		</button>
+			<circle cx="11" cy="11" r="7"></circle>
+			<line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+		</svg>
 
 		<input
 			type="search"
-			name="q"
-			value={initialQuery}
+			value=""
 			aria-label={L.inputLabel}
 			placeholder={L.placeholder}
 			autocomplete="off"
@@ -239,12 +180,12 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 			]}
 		/>
 
-		{/* 清空按钮:仅有 query 时显示(初始由服务端 SSR 决定;后续由 JS 按 input 值切换) */}
+		{/* 清空按钮:输入为空时隐藏,由 JS 按 input 值动态切换 */}
 		<button
 			type="button"
 			data-blog-search-clear
 			aria-label={L.clearLabel}
-			hidden={initialQuery.length === 0}
+			hidden
 			class:list={[
 				"inline-flex items-center justify-center",
 				"h-5 w-5 shrink-0",
@@ -271,106 +212,228 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 			</svg>
 		</button>
 	</div>
-
-	{/* ------------------------------------------------------------------
-	 *  保持 ?page 不污染搜索提交:不渲染 page hidden input
-	 *  (搜索提交后始终回到第 1 页,URL 不含 page 参数)
-	 *
-	 *  其它筛选参数(如 ?cat=<slug>)通过 hiddenFields prop 注入,
-	 *  以 hidden input 形式随表单一起提交,避免搜索时丢失分类选择。
-	 * ------------------------------------------------------------------ */}
-	{
-		hiddenEntries.map(([name, value]) => (
-			<input type="hidden" name={name} value={value} />
-		))
-	}
-</form>
+</div>
 
 {/* ====================================================================
- *                       折叠 / 展开 / 清空 脚本
+ *                  展开 / 折叠 / 搜索过滤 脚本
  * --------------------------------------------------------------------
- * 仅处理纯 UI 交互,不做任何数据请求。
- *   1. 折叠态 → 点击放大镜 → 展开态 + focus input
- *   2. 展开态 + input 为空 + 点击外部 → 折叠
- *   3. 展开态 + 按 Esc:
- *        - input 非空 → 先清空 + focus 保留
- *        - input 为空 → 折叠
- *   4. 点击 ✕ → 清空 + 保持展开 + focus
- *   5. input 输入时动态显示 / 隐藏 ✕ 按钮
- *
- * 每个 <form data-blog-search> 独立工作,页面可以同时存在多个实例
- * (虽然本项目只用一个)。
+ * 本组件不渲染搜索结果的容器 —— #post-grid / #search-results /
+ * #search-empty / #blog-pagination / #blog-category-tabs 都由
+ * BlogIndexPage 渲染,本脚本只按固定 id 接管它们的可见性 + 内容。
+ * 每个 [data-blog-search] 独立工作(本项目只用一个实例)。
  * ==================================================================== */}
 <script>
-	type SearchForm = HTMLFormElement & {
-		__blogSearchInitialized?: boolean;
-	};
+	import { highlight } from "@lib/highlight";
+	import { formatDate } from "@i18n/utils";
+	import { ui, type Lang } from "@i18n/ui";
 
-	function initBlogSearch(form: SearchForm): void {
-		if (form.__blogSearchInitialized) return;
-		form.__blogSearchInitialized = true;
+	/** src/pages/search/[lang].json.ts 产出的静态索引单条形状 */
+	interface SearchIndexItem {
+		slug: string;
+		title: string;
+		excerpt: string;
+		category: string;
+		categoryName: string;
+		date: string;
+		readingTime: number;
+		coverLabel: string;
+		text: string;
+	}
 
-		const toggleBtn = form.querySelector<HTMLButtonElement>(
+	type SearchRoot = HTMLElement & { __blogSearchInitialized?: boolean };
+
+	// 索引缓存:同一语言的 JSON 只 fetch 一次,模块作用域内跨多次按键复用
+	const indexCache = new Map<Lang, Promise<readonly SearchIndexItem[]>>();
+
+	function loadIndex(lang: Lang): Promise<readonly SearchIndexItem[]> {
+		let promise = indexCache.get(lang);
+		if (!promise) {
+			promise = fetch(`/search/${lang}.json`)
+				.then((res) => (res.ok ? (res.json() as Promise<SearchIndexItem[]>) : []))
+				.catch(() => []);
+			indexCache.set(lang, promise);
+		}
+		return promise;
+	}
+
+	function dotSeparator(): HTMLSpanElement {
+		const span = document.createElement("span");
+		span.setAttribute("aria-hidden", "true");
+		span.className = "text-[color:var(--color-ink-muted)]";
+		span.textContent = "·";
+		return span;
+	}
+
+	/** 视觉贴近 PostCard 文字区(标题 + 摘要 + 分类/日期/时长),无封面 */
+	function buildResultCard(
+		item: SearchIndexItem,
+		query: string,
+		listBase: string,
+		lang: Lang,
+	): HTMLAnchorElement {
+		const card = document.createElement("a");
+		card.href = `${listBase}/${item.slug}/`;
+		card.className =
+			"search-result-card group relative flex flex-col gap-2 " +
+			"px-4 sm:px-5 lg:px-6 py-5 lg:py-6 bg-transparent " +
+			"hover:bg-[color:var(--color-paper-muted)]/60 " +
+			"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)] " +
+			"no-underline cursor-pointer";
+
+		const title = document.createElement("h3");
+		title.className =
+			"font-medium text-[color:var(--color-ink-primary)] tracking-[-0.015em] " +
+			"leading-[1.35] text-[17px] sm:text-[18px] lg:text-[19px] line-clamp-2";
+		title.innerHTML = highlight(item.title, query);
+
+		const excerpt = document.createElement("p");
+		excerpt.className =
+			"text-[color:var(--color-ink-secondary)] text-[13.5px] sm:text-[14px] " +
+			"leading-[1.6] line-clamp-2 max-w-[72ch]";
+		excerpt.innerHTML = highlight(item.excerpt, query);
+
+		const meta = document.createElement("div");
+		meta.className =
+			"flex items-center gap-2 flex-wrap font-[var(--font-mono)] " +
+			"text-[10.5px] sm:text-[11px] leading-none tracking-[var(--tracking-wide)] " +
+			"text-[color:var(--color-ink-tertiary)] tabular-nums";
+
+		if (item.categoryName) {
+			const cat = document.createElement("span");
+			cat.className = "uppercase text-[color:var(--color-ink-secondary)]";
+			cat.textContent = item.categoryName;
+			meta.append(cat, dotSeparator());
+		}
+
+		const time = document.createElement("time");
+		const dateObj = new Date(item.date);
+		if (!Number.isNaN(dateObj.getTime())) {
+			time.dateTime = dateObj.toISOString();
+		}
+		time.textContent = formatDate(item.date, lang);
+		meta.append(time);
+
+		if (item.readingTime > 0) {
+			const rt = document.createElement("span");
+			rt.className = "uppercase";
+			rt.textContent = `${item.readingTime} ${ui[lang]["blog.minutes"]}`;
+			meta.append(dotSeparator(), rt);
+		}
+
+		card.append(title, excerpt, meta);
+		return card;
+	}
+
+	function initBlogSearch(root: SearchRoot): void {
+		if (root.__blogSearchInitialized) return;
+		root.__blogSearchInitialized = true;
+
+		const toggleBtn = root.querySelector<HTMLButtonElement>(
 			"[data-blog-search-toggle]",
 		);
-		const panel = form.querySelector<HTMLElement>(
-			"[data-blog-search-panel]",
-		);
-		const input = form.querySelector<HTMLInputElement>(
+		const panel = root.querySelector<HTMLElement>("[data-blog-search-panel]");
+		const input = root.querySelector<HTMLInputElement>(
 			"[data-blog-search-input]",
 		);
-		const clearBtn = form.querySelector<HTMLButtonElement>(
+		const clearBtn = root.querySelector<HTMLButtonElement>(
 			"[data-blog-search-clear]",
 		);
 
 		if (!toggleBtn || !panel || !input) return;
 
-		const initiallyExpanded =
-			form.getAttribute("data-initial-expanded") === "true";
+		const lang = (root.getAttribute("data-lang") as Lang | null) ?? "zh";
+		const listBase = root.getAttribute("data-list-base") ?? "/blog";
+
+		// 这四个容器都由 BlogIndexPage 渲染,id 全站唯一
+		const postGrid = document.getElementById("post-grid");
+		const pagination = document.getElementById("blog-pagination");
+		const categoryTabs = document.getElementById("blog-category-tabs");
+		const resultsContainer = document.getElementById("search-results");
+		const emptyContainer = document.getElementById("search-empty");
 
 		function setExpanded(expanded: boolean, focusInput = false): void {
-			form.setAttribute("data-expanded", expanded ? "true" : "false");
-			toggleBtn!.setAttribute(
-				"aria-expanded",
-				expanded ? "true" : "false",
-			);
+			root.setAttribute("data-expanded", expanded ? "true" : "false");
+			toggleBtn!.setAttribute("aria-expanded", expanded ? "true" : "false");
 			if (expanded && focusInput) {
-				// 下一帧再聚焦,避免 CSS 过渡被打断
 				requestAnimationFrame(() => input!.focus());
 			}
 		}
 
 		function updateClearVisibility(): void {
 			if (!clearBtn) return;
-			const hasValue = input!.value.length > 0;
-			clearBtn.hidden = !hasValue;
+			clearBtn.hidden = input!.value.length === 0;
 		}
 
-		// 初始状态
-		setExpanded(initiallyExpanded);
+		function showDefaultView(): void {
+			resultsContainer?.setAttribute("hidden", "");
+			emptyContainer?.setAttribute("hidden", "");
+			postGrid?.removeAttribute("hidden");
+			pagination?.removeAttribute("hidden");
+			categoryTabs?.removeAttribute("hidden");
+		}
+
+		function showSearchView(): void {
+			postGrid?.setAttribute("hidden", "");
+			pagination?.setAttribute("hidden", "");
+			categoryTabs?.setAttribute("hidden", "");
+		}
+
+		async function runSearch(rawQuery: string): Promise<void> {
+			const query = rawQuery.trim();
+			if (query.length === 0) {
+				showDefaultView();
+				return;
+			}
+
+			showSearchView();
+			const needle = query.toLowerCase();
+			const items = await loadIndex(lang);
+
+			// 异步期间用户可能已经改变了输入内容,回填前重新校验,避免竞态覆盖
+			if (input!.value.trim().toLowerCase() !== needle) return;
+			if (!resultsContainer || !emptyContainer) return;
+
+			const matches = items.filter((item) => item.text.includes(needle));
+
+			resultsContainer.replaceChildren(
+				...matches.map((item) => buildResultCard(item, query, listBase, lang)),
+			);
+
+			if (matches.length === 0) {
+				resultsContainer.setAttribute("hidden", "");
+				emptyContainer.removeAttribute("hidden");
+			} else {
+				resultsContainer.removeAttribute("hidden");
+				emptyContainer.setAttribute("hidden", "");
+			}
+		}
+
+		// 初始状态:折叠 + 隐藏清空按钮 + 默认列表视图
+		setExpanded(false);
 		updateClearVisibility();
 
-		// 点击放大镜 → 展开
 		toggleBtn.addEventListener("click", () => {
 			setExpanded(true, true);
 		});
 
-		// 输入时更新清空按钮可见性
-		input.addEventListener("input", updateClearVisibility);
+		input.addEventListener("input", () => {
+			updateClearVisibility();
+			void runSearch(input.value);
+		});
 
-		// 清空按钮
 		clearBtn?.addEventListener("click", () => {
 			input.value = "";
 			updateClearVisibility();
+			void runSearch("");
 			input.focus();
 		});
 
-		// Esc:优先清空,其次折叠
 		input.addEventListener("keydown", (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
 				if (input.value.length > 0) {
 					input.value = "";
 					updateClearVisibility();
+					void runSearch("");
 					e.preventDefault();
 				} else {
 					setExpanded(false);
@@ -385,7 +448,7 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 			(e: MouseEvent) => {
 				const target = e.target as Node | null;
 				if (!target) return;
-				if (form.contains(target)) return;
+				if (root.contains(target)) return;
 				if (input.value.length === 0) {
 					setExpanded(false);
 				}
@@ -396,7 +459,7 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 
 	function initAll(): void {
 		document
-			.querySelectorAll<SearchForm>("form[data-blog-search]")
+			.querySelectorAll<SearchRoot>("[data-blog-search]")
 			.forEach(initBlogSearch);
 	}
 
@@ -413,29 +476,18 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 	/* ------------------------------------------------------------------
 	 *  展开 / 折叠状态切换
 	 *  ------------------------------------------------------------------
-	 *  通过根 form 上的 data-expanded 属性,让子元素按状态显隐 / 调整宽度。
-	 *  CSS 里完成切换意味着 JS 只需翻转一个属性,无需手动增删 class,
-	 *  也方便用户代理在脚本加载前(SSR 首屏)就有正确的初始视觉。
+	 *  通过根元素上的 data-expanded 属性,让子元素按状态显隐 / 调整宽度。
+	 *  CSS 里完成切换意味着 JS 只需翻转一个属性,无需手动增删 class。
+	 *  首屏(JS 还没跑)默认折叠 —— 搜索不再由 URL 驱动初始状态。
 	 * ------------------------------------------------------------------ */
 
-	/* 折叠态:只显示放大镜按钮,panel 隐藏且不占空间 */
-	form[data-blog-search]:not([data-expanded="true"]) .blog-search__panel {
+	/* 折叠态(含首屏无 JS 时):只显示放大镜按钮,panel 隐藏且不占空间 */
+	[data-blog-search]:not([data-expanded="true"]) .blog-search__panel {
 		display: none;
 	}
 
 	/* 展开态:隐藏放大镜按钮,显示输入面板 */
-	form[data-blog-search][data-expanded="true"] .blog-search__toggle {
-		display: none;
-	}
-
-	/* SSR 首屏(JS 还没跑,data-expanded 属性尚未写入)按 initial-expanded 兜底
-	   避免出现"放大镜和输入框同时显示"的闪烁 */
-	form[data-blog-search][data-initial-expanded="true"]:not([data-expanded])
-		.blog-search__toggle {
-		display: none;
-	}
-	form[data-blog-search][data-initial-expanded="false"]:not([data-expanded])
-		.blog-search__panel {
+	[data-blog-search][data-expanded="true"] .blog-search__toggle {
 		display: none;
 	}
 
@@ -450,5 +502,26 @@ const initiallyExpanded = initialQuery.trim().length > 0;
 	.blog-search__input::-webkit-search-decoration {
 		-webkit-appearance: none;
 		appearance: none;
+	}
+
+	/* ------------------------------------------------------------------
+	 *  搜索高亮 <mark class="search-hit">
+	 *  ------------------------------------------------------------------
+	 *  由 @lib/highlight 的 highlight() 产出,通过 JS innerHTML 写入
+	 *  #search-results 里的结果卡片(不经过 PostCard,故这里不能依赖
+	 *  PostCard 的 scoped 样式,需要一份 :global() 规则兜底)。
+	 *  颜色 / 阴影与 PostCard 里的搜索高亮保持一致。
+	 * ------------------------------------------------------------------ */
+	:global(mark.search-hit) {
+		background-color: rgba(250, 204, 21, 0.32); /* amber-400 / ~32% */
+		color: inherit;
+		padding: 0 1px;
+		border-radius: 1px;
+		box-shadow: inset 0 -1px 0 rgba(202, 138, 4, 0.45);
+	}
+
+	:global(:root.dark mark.search-hit) {
+		background-color: rgba(250, 204, 21, 0.22);
+		box-shadow: inset 0 -1px 0 rgba(250, 204, 21, 0.35);
 	}
 </style>

@@ -1,0 +1,42 @@
+[
+	{
+		"name": "TypeScript",
+		"percent": 40.9,
+		"color": "#3178c6"
+	},
+	{
+		"name": "Go",
+		"percent": 22.7,
+		"color": "#00ADD8"
+	},
+	{
+		"name": "Rust",
+		"percent": 12.5,
+		"color": "#dea584"
+	},
+	{
+		"name": "C#",
+		"percent": 9.1,
+		"color": "#178600"
+	},
+	{
+		"name": "HTML",
+		"percent": 5.2,
+		"color": "#e34c26"
+	},
+	{
+		"name": "JavaScript",
+		"percent": 4.1,
+		"color": "#f1e05a"
+	},
+	{
+		"name": "MDX",
+		"percent": 3,
+		"color": "#fcb32c"
+	},
+	{
+		"name": "Other",
+		"percent": 2.5,
+		"color": "#8c8c8c"
+	}
+]

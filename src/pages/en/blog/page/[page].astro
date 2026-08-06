@@ -1,0 +1,34 @@
+---
+/**
+ * ============================================================================
+ * 博客列表页 (英文) —— 第 N 页(N ≥ 2)/ 全部分类
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /en/blog/page/2/, /en/blog/page/3/ …  → 本文件
+ *   /en/blog/                              → src/pages/en/blog/index.astro(第 1 页)
+ *
+ * 与中文版同构,详见 src/pages/blog/page/[page].astro 的注释。
+ * ============================================================================
+ */
+
+import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
+import { countPagesFor } from "@lib/queries/posts";
+
+export async function getStaticPaths() {
+	const totalPages = await countPagesFor(undefined);
+	return Array.from({ length: Math.max(0, totalPages - 1) }, (_, i) => ({
+		params: { page: String(i + 2) },
+	}));
+}
+
+const { page: pageParam } = Astro.params;
+const page = Number(pageParam);
+
+if (!Number.isInteger(page) || page < 2) {
+	throw new Error(
+		`[en/blog/page/${pageParam}] getStaticPaths 枚举出的页码非法 —— 构建失败。`,
+	);
+}
+---
+
+<BlogIndexPage lang="en" page={page} />

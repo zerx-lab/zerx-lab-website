@@ -9,9 +9,11 @@
  *   - 每个标签右上角显示该分类的文章数(小数字,mono 风格)
  *
  * 架构选择:
- *   - 纯 <a> 链接,无 JS:SSR 直出,middleware 缓存语义与搜索/分页一致
- *   - URL 约定:?cat=<slug>,第 1 个分类(ALL)不带 cat 参数,保持 URL 干净
- *   - 切换分类会清空 ?page(从第 1 页开始),保留 ?q(搜索词跨分类有效)
+ *   - 纯 <a> 链接,无 JS:SSG 静态直出,构建期已知每个分类的 URL
+ *   - URL 约定(路径化,不再使用 ?cat= 查询参数):
+ *       · ALL   → `${listBase}/`
+ *       · 分类  → `${listBase}/cat/<slug>/`
+ *     listBase 为不带结尾斜杠的列表页根路径("/blog" / "/en/blog")
  *
  * 视觉约束:
  *   - 继承 SectionHeader 下方的节奏:11px mono-label + 虚线
@@ -19,7 +21,7 @@
  *   - 小屏(<sm)下允许横向滚动,不换行,保证主体列表位置稳定
  *
  * 数据:
- *   - categories:静态类目列表(调用方传入,通常来自 FALLBACK_CATEGORIES)
+ *   - categories:静态类目列表(调用方传入,来自 listCategories(lang))
  *   - counts:每个 slug 的文章数,"__all__" 键保留给 "ALL" 计数
  *     若某 slug 未给 count,隐藏数字(不渲染 0,也不渲染 "—")
  * ============================================================================
@@ -30,8 +32,7 @@ import type { Lang } from "@i18n/ui";
 
 /**
  * 分类展示形态:slug + 已本地化的 name。
- * 不直接依赖 FallbackCategory —— 上游可以传 Directus 真实分类(经 listCategories 展平)
- * 或 FALLBACK_CATEGORIES 的降级数据,本组件只关心最小渲染所需字段。
+ * 本组件只关心最小渲染所需字段,上游传入 listCategories(lang) 的结果即可。
  */
 export interface CategoryTabItem {
 	readonly slug: string;
@@ -39,32 +40,26 @@ export interface CategoryTabItem {
 }
 
 interface Props {
-	/** 列表页路径(已做 lang 前缀处理,例如 "/blog" 或 "/en/blog") */
-	listPath: string;
+	/** 列表页根路径(已做 lang 前缀处理,不带结尾斜杠,例如 "/blog" 或 "/en/blog") */
+	listBase: string;
 	/** 分类列表(顺序即展示顺序,已按 lang 解包 name) */
 	categories: readonly CategoryTabItem[];
-	/** 当前激活的分类 slug;空串 / "all" 视为 ALL */
+	/** 当前激活的分类 slug;空串视为 ALL */
 	activeSlug: string;
 	/**
 	 * 每分类文章数。key = category.slug;"ALL" 计数用特殊键 "__all__"。
 	 * 未提供某 slug → 不显示数字(分类存在但可能聚合查询失败)。
 	 */
 	counts?: Readonly<Record<string, number>> | undefined;
-	/**
-	 * 当前搜索词(来自 URL ?q=)。切换分类时保留,不会丢失用户正在进行的搜索。
-	 * 空串表示没有搜索。
-	 */
-	currentQuery?: string;
 	/** 额外类名 */
 	class?: string;
 }
 
 const {
-	listPath,
+	listBase,
 	categories,
 	activeSlug,
 	counts,
-	currentQuery = "",
 	class: className = "",
 } = Astro.props;
 
@@ -88,33 +83,22 @@ const COPY = {
 const C = COPY[lang] ?? COPY.zh;
 
 /* ----------------------------------------------------------------------------
- * URL 构造
+ * URL 构造(路径式,不再拼 query string)
  * ----------------------------------------------------------------------------
- * 规则:
- *   - ALL → listPath [+ ?q=xxx]
- *   - 某分类 → listPath?cat=<slug> [&q=xxx]
- *   - 切换分类一律不带 page(回到第 1 页)
- *
- * 用 URLSearchParams 统一构造,避免手拼 &/? 出错。
+ *   - ALL   → `${listBase}/`
+ *   - 分类  → `${listBase}/cat/<slug>/`
  * -------------------------------------------------------------------------- */
 function buildHref(slug: string): string {
-	const params = new URLSearchParams();
-	if (slug && slug !== "all") params.set("cat", slug);
-	if (currentQuery) params.set("q", currentQuery);
-	const qs = params.toString();
-	return qs ? `${listPath}?${qs}` : listPath;
+	return slug ? `${listBase}/cat/${slug}/` : `${listBase}/`;
 }
 
 /* ----------------------------------------------------------------------------
  * 归一化激活态
  * ----------------------------------------------------------------------------
- * 上游传入的 activeSlug 可能是 "" / "all" / 实际 slug,这里一次性转成
+ * 上游传入的 activeSlug 可能是 "" / 实际 slug,这里一次性转成
  * "" 表示 ALL,其余保留。
  * -------------------------------------------------------------------------- */
-const normalizedActive =
-	!activeSlug || activeSlug.toLowerCase() === "all"
-		? ""
-		: activeSlug.toLowerCase();
+const normalizedActive = (activeSlug || "").toLowerCase();
 
 /* ----------------------------------------------------------------------------
  * 渲染用的标签列表(ALL + 所有分类)

@@ -1,20 +1,16 @@
 ---
 /**
  * ============================================================================
- * 博客列表页 (英文)
+ * 博客列表页 (英文) —— 第 1 页 / 全部分类
  * ----------------------------------------------------------------------------
  * 路由:
- *   /en/blog/  → 本文件(en)
- *   /blog/     → src/pages/blog/index.astro(默认中文,无前缀)
+ *   /en/blog/           → 本文件(en,第 1 页)
+ *   /en/blog/page/N/    → src/pages/en/blog/page/[page].astro(en,第 N ≥ 2 页)
+ *   /en/blog/cat/<c>/   → src/pages/en/blog/cat/[cat]/index.astro(en,分类第 1 页)
+ *   /blog/              → src/pages/blog/index.astro(默认中文,无前缀)
  *
  * 实现:
- *   与中文版完全同构,共用 BlogIndexPage 组件。
- *   BlogIndexPage 内部通过 getLangFromUrl(Astro.url) 推断当前语言,
- *   URL 以 /en/ 开头时自动输出英文文案与英文分类/标签名。
- *
- * 数据源:
- *   - Directus posts 集合(已 bootstrap 时)
- *   - 失败/未 bootstrap 时自动 fallback 到 src/lib/fallback-data.ts
+ *   与中文版完全同构,共用 BlogIndexPage 组件,只把 lang 固定传成 "en"。
  *
  * 维护约定:
  *   若要修改博客列表的结构/样式/数据拉取逻辑,只改
@@ -25,4 +21,4 @@
 import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
 ---
 
-<BlogIndexPage />
+<BlogIndexPage lang="en" page={1} />

@@ -1,0 +1,31 @@
+---
+/**
+ * ============================================================================
+ * 博客列表页 (英文) —— 按分类筛选,第 1 页
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /en/blog/cat/<slug>/            → 本文件(第 1 页)
+ *   /en/blog/cat/<slug>/page/N/     → src/pages/en/blog/cat/[cat]/page/[page].astro
+ *
+ * 与中文版同构,详见 src/pages/blog/cat/[cat]/index.astro 的注释。
+ * ============================================================================
+ */
+
+import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
+import { listCategorySlugsWithPosts } from "@lib/queries/posts";
+
+export async function getStaticPaths() {
+	const slugs = await listCategorySlugsWithPosts();
+	return slugs.map((cat) => ({ params: { cat } }));
+}
+
+const { cat } = Astro.params;
+
+if (!cat) {
+	throw new Error(
+		"[en/blog/cat] getStaticPaths 枚举出的分类 slug 为空 —— 构建失败。",
+	);
+}
+---
+
+<BlogIndexPage lang="en" page={1} categorySlug={cat} />

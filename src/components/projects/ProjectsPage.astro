@@ -6,10 +6,15 @@
  * 为什么抽成独立组件:
  *   中文 /projects 与英文 /en/projects 两个入口页面 95% 的逻辑相同,
  *   只有语言推导与少量默认文案不同。本组件负责:
- *     1. 从 Directus 拉取 projects(失败时 fallback 到 FALLBACK_PROJECTS)
+ *     1. 用 @lib/queries/projects 的 loadLiveProjects() 在构建期取合并后的
+ *        项目清单:GitHub 提供仓库、stars / forks / language / description,
+ *        projects.json 提供双语文案、techStack、kind 与各类链接
  *     2. 把 Bilingual 字段按当前 lang 解包
- *     3. 分类展示:Featured(精选) + All(全部)
+ *     3. 分类展示:Featured(精选) + All(全部),两段都按 star 降序
  *     4. 组合左栏(项目统计 meta)与右栏(分区 + 列表)
+ *
+ *   收录规则与降级行为见 @lib/queries/projects 的模块注释;首页九宫格用的是
+ *   同一个查询层,所以两页的数字与顺序在同一次构建里必然一致。
  *
  * 视觉策略(参考 better-auth.com 的"编辑派 + 数据点"组合):
  *   - Featured 分区:每个项目一张大卡,带编号、stars/forks、语言徽标、外链按钮
@@ -33,14 +38,8 @@ import {
 	useTranslatedPath,
 } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
-import {
-	listFallbackProjects,
-	FALLBACK_LANGUAGE_STATS,
-	pickLang,
-	type FallbackProject,
-} from "@lib/fallback-data";
-import { directus, readItems, DIRECTUS_CONFIG } from "@lib/directus";
-import { getGithubStatsBatch } from "@lib/github";
+import { loadLanguageStats, pickLang } from "@lib/content";
+import { loadLiveProjects, type LiveProject } from "@lib/queries/projects";
 
 /* ----------------------------------------------------------------------------
  * 当前语言 / 翻译工具
@@ -53,7 +52,8 @@ const tp = useTranslatedPath(lang);
 /* ----------------------------------------------------------------------------
  * 数据适配器
  * ----------------------------------------------------------------------------
- * 统一的 ViewModel:无论从 Directus 还是 Fallback 来,列表渲染只认这一个形状。
+ * 统一的 ViewModel:查询层给出的 LiveProject 按当前语言解包成列表渲染只认
+ * 的这一个形状。
  * -------------------------------------------------------------------------- */
 
 interface ProjectVM {
@@ -62,6 +62,7 @@ interface ProjectVM {
 	description: string;
 	highlights: string;
 	techStack: readonly string[];
+	/** projects.json 登记过才有;未登记仓库为空串,渲染时回落成 Repo / Fork */
 	kind: string;
 	language: string;
 	githubUrl: string;
@@ -71,17 +72,18 @@ interface ProjectVM {
 	stars: number;
 	forks: number;
 	featured: boolean;
+	fork: boolean;
 }
 
-/** 把 FallbackProject 转成 ViewModel(按当前 lang 解包 Bilingual) */
-function fallbackToVM(project: FallbackProject, currentLang: Lang): ProjectVM {
+/** 把 LiveProject 转成 ViewModel(按当前 lang 解包 Bilingual) */
+function toVM(project: LiveProject, currentLang: Lang): ProjectVM {
 	return {
 		slug: project.slug,
 		name: project.name,
 		description: pickLang(project.description, currentLang),
 		highlights: pickLang(project.highlights, currentLang),
 		techStack: project.techStack,
-		kind: project.kind,
+		kind: project.kind ?? "",
 		language: project.language,
 		githubUrl: project.githubUrl,
 		demoUrl: project.demoUrl,
@@ -90,141 +92,12 @@ function fallbackToVM(project: FallbackProject, currentLang: Lang): ProjectVM {
 		stars: project.stars,
 		forks: project.forks,
 		featured: project.featured,
+		fork: project.fork,
 	};
 }
 
-/* ----------------------------------------------------------------------------
- * 尝试从 Directus 拉取,失败则走 Fallback
- * -------------------------------------------------------------------------- */
-
-async function loadProjects(): Promise<readonly ProjectVM[]> {
-	if (!DIRECTUS_CONFIG.hasReadToken) {
-		return listFallbackProjects().map((p) => fallbackToVM(p, lang));
-	}
-
-	try {
-		const client = directus();
-		const langCode = lang === "zh" ? "zh-CN" : "en-US";
-
-		const projectFields: any = [
-			"id",
-			"slug",
-			"name",
-			"tech_stack",
-			"kind",
-			"github_url",
-			"demo_url",
-			"docs_url",
-			"npm_url",
-			"stars",
-			"forks",
-			"featured",
-			"sort",
-			{
-				translations: [
-					"languages_code",
-					"description",
-					"highlights",
-				],
-			},
-		];
-
-		const result = (await client.request(
-			readItems("projects", {
-				filter: { status: { _eq: "published" } },
-				sort: ["-stars", "sort"],
-				fields: projectFields,
-				limit: -1,
-			}),
-		)) as any[];
-
-		return result.map((row): ProjectVM => {
-			const tr = row?.translations?.find(
-				(x: any) =>
-					x.languages_code === langCode ||
-					x.languages_code?.code === langCode,
-			);
-
-			// highlights 可能是数组或字符串,列表展示用一行字符串
-			const rawHighlights = tr?.highlights;
-			const highlightsStr = Array.isArray(rawHighlights)
-				? rawHighlights.join(" · ")
-				: typeof rawHighlights === "string"
-					? rawHighlights
-					: "";
-
-			const techStack: readonly string[] = Array.isArray(row?.tech_stack)
-				? row.tech_stack
-				: [];
-
-			// 推断主语言:优先用 tech_stack 首项,否则 fallback 到 "Unknown"
-			const language =
-				typeof row?.language === "string"
-					? row.language
-					: (techStack[0] ?? "Unknown");
-
-			return {
-				slug: row?.slug ?? "",
-				name: row?.name ?? row?.slug ?? "",
-				description: tr?.description ?? "",
-				highlights: highlightsStr,
-				techStack,
-				kind: row?.kind ?? "library",
-				language,
-				githubUrl: row?.github_url ?? "",
-				demoUrl: row?.demo_url ?? null,
-				docsUrl: row?.docs_url ?? null,
-				npmUrl: row?.npm_url ?? null,
-				stars: typeof row?.stars === "number" ? row.stars : 0,
-				forks: typeof row?.forks === "number" ? row.forks : 0,
-				featured: Boolean(row?.featured),
-			};
-		});
-	} catch (err) {
-		console.warn(
-			"[projects] Directus 读取失败,使用 FALLBACK。原因:",
-			(err as Error)?.message ?? err,
-		);
-		return listFallbackProjects().map((p) => fallbackToVM(p, lang));
-	}
-}
-
-const projects = await enrichWithGithubStats(await loadProjects());
-
-/* ----------------------------------------------------------------------------
- * GitHub 实时数据覆盖层
- * ----------------------------------------------------------------------------
- * 策略:从 Directus / fallback 拿到的 stars / forks / language 是"快照",
- * 真实权威数据在 GitHub 上。构建时统一用 getGithubStats 并发拉一次,
- * 24h 磁盘缓存(见 src/lib/github.ts),命中则覆盖快照字段。
- *
- * 设计取舍:
- *   - 只覆盖 stars / forks / language 三个真的会漂的字段,其他字段(slug /
- *     techStack / featured / description)继续以 Directus 为准
- *   - GitHub API 失败(限流 / 404 / 网络)时 `getGithubStats` 返回 null,
- *     此处保留快照值,不会让页面显示 0
- *   - language 只在快照里取不到(Unknown)时才用 GitHub 回填,避免把
- *     "TypeScript 项目但主要代码是 Go"这种人工判断覆盖掉
- * -------------------------------------------------------------------------- */
-
-async function enrichWithGithubStats(
-	items: readonly ProjectVM[],
-): Promise<readonly ProjectVM[]> {
-	// 并发拉:getGithubStatsBatch 内部有去重 + 磁盘缓存,不会重复发请求
-	const statsList = await getGithubStatsBatch(items.map((p) => p.githubUrl));
-
-	return items.map((p, i) => {
-		const s = statsList[i];
-		if (!s) return p; // 拉取失败保持快照
-		return {
-			...p,
-			stars: s.stars,
-			forks: s.forks,
-			language:
-				p.language && p.language !== "Unknown" ? p.language : (s.language ?? p.language),
-		};
-	});
-}
+const { items } = await loadLiveProjects();
+const projects = items.map((p) => toVM(p, lang));
 
 /* ----------------------------------------------------------------------------
  * 左栏 meta 数据计算
@@ -233,8 +106,9 @@ async function enrichWithGithubStats(
 const totalStars = projects.reduce((sum, p) => sum + (p.stars ?? 0), 0);
 const totalForks = projects.reduce((sum, p) => sum + (p.forks ?? 0), 0);
 
-// 前 3 语言(按 GitHub 统计),紧凑显示
-const topLanguages = FALLBACK_LANGUAGE_STATS.slice(0, 3)
+// 前 3 语言(按占比排序),紧凑显示
+const topLanguages = (await loadLanguageStats())
+	.slice(0, 3)
 	.map((l) => l.name)
 	.join(" / ");
 
@@ -306,6 +180,16 @@ function formatCount(n: number): string {
 	if (n < 1000) return String(n);
 	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
 	return `${Math.round(n / 1000)}k`;
+}
+
+/**
+ * 类型徽标文案。
+ * projects.json 登记过的走 kinds 字典;未登记的仓库没有人工分类,
+ * 按 fork 与否退化成 FORK / REPO,不假装它有类型。
+ */
+function kindLabelOf(project: ProjectVM): string {
+	if (project.kind) return C.kinds[project.kind] ?? project.kind;
+	return project.fork ? "Fork" : "Repo";
 }
 ---
 
@@ -447,7 +331,7 @@ function formatCount(n: number): string {
 												"uppercase",
 											]}
 										>
-											{C.kinds[project.kind] ?? project.kind}
+											{kindLabelOf(project)}
 										</span>
 
 										{/* 主语言徽标 */}
@@ -750,7 +634,7 @@ function formatCount(n: number): string {
 															"uppercase",
 														]}
 													>
-														{C.kinds[project.kind] ?? project.kind}
+														{kindLabelOf(project)}
 													</span>
 												</div>
 

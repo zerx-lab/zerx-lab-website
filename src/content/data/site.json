@@ -1,0 +1,23 @@
+{
+	"siteName": "ZerxLab",
+	"tagline": {
+		"zh": "全栈实验室",
+		"en": "Full-Stack Laboratory"
+	},
+	"description": {
+		"zh": "聚焦高性能应用、现代技术架构与开源工具,探索代码与工程的边界。",
+		"en": "Building high-performance apps, exploring modern architecture, and shipping open-source tools."
+	},
+	"socialGithub": "https://github.com/zerx-lab",
+	"socialX": null,
+	"socialEmail": "1603852@qq.com",
+	"socialDiscord": null,
+	"establishedYear": 2020,
+	"location": {
+		"zh": "中国 · 北京",
+		"en": "Beijing, CN"
+	},
+	"focus": "FULL-STACK / RUST / GO",
+	"contributors": 12,
+	"ogImage": null
+}

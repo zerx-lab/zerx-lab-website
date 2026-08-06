@@ -1,30 +1,40 @@
 # ============================================================================
-# Daily Tech News - 每日技术资讯自动发布(MCP 直发版)
+# Daily Tech News - 每日技术资讯自动发布(Markdown + git push 版)
 # ----------------------------------------------------------------------------
 # 流程:
 #   1. 每天北京时间 07:00 (UTC 23:00 前一天) 触发,也支持手动触发
 #   2. Calculate date: 计算"昨天"(北京时间),作为搜索目标日期
 #   3. Run Claude Code: 调 claude-code-action 执行 .claude/skills/daily-tech-news
 #      skill,让 Claude:
-#        · 通过 Directus MCP 查近 7 天已发文章做去重基线
+#        · Glob + Read 仓库内近 7 天的 daily-tech-news-* 文章做去重基线
 #        · WebSearch + WebFetch 多源搜集资讯
 #        · 交叉验证 + 重要性评分 + Top 3 深度分析
-#        · 通过 Directus MCP 直接 create posts + posts_translations + posts_tags
-#          (status=published,一步到位,不走脚本中转)
+#        · 用 Write 把中英双语正文直接写成仓库内两个 Markdown 文件
+#   4. Verify: 纯 shell 校验产物文件是否存在、frontmatter 是否完整、
+#      正文是否够长、是否残留占位符 —— 任一项不过,直接 fail,后续
+#      提交 / 部署 / 发信 job 都不会执行
+#   5. Commit & push: 校验通过才 `git add` + commit + push 到 main
+#   6. deploy job: 复用 deploy.yml(reusable workflow)把新文章构建并发布到 Pages
+#   7. notify job: 站点真的上线之后,才通过 SMTP 发邮件通知订阅者
+#
+# 为什么 deploy 要显式 `uses: ./.github/workflows/deploy.yml`:
+#   GitHub 明确禁止用默认 GITHUB_TOKEN 推送触发新的 workflow(防递归)。
+#   所以 push 到 main **不会**自动跑 deploy.yml。这里把 deploy 作为可复用
+#   workflow 直接调用,既避免额外配 PAT,又保证「发信时站点已经是新的」。
 #
 # 身份与权限:
-#   - Claude Code 用 CLAUDE_CODE_OAUTH_TOKEN 驱动 WebSearch / WebFetch / MCP
-#   - Directus MCP 用 DIRECTUS_AI_WRITER_TOKEN 鉴权
-#     AI Writer policy 已放宽(允许直接 published + 允许 create 新元数据)
-#     Directus settings.mcp_system_prompt 里有软约束:
-#       · 交互式 MCP 对话默认 draft
-#       · 自动化脚本调度场景(本 workflow)明确写 published
-#     工作流 prompt 会声明"自动化场景",Claude 按软约束判定使用 published。
+#   - Claude Code 用 CLAUDE_CODE_OAUTH_TOKEN 驱动 WebSearch / WebFetch / 文件读写
+#   - git push 用 GITHUB_TOKEN(job 级 `contents: write` 权限自带),
+#     提交者身份固定为 github-actions[bot]
 #
-# 必需的 GitHub Secrets:
-#   - CLAUDE_CODE_OAUTH_TOKEN  — Claude Code Action 授权 (本地 `claude setup-token`)
-#   - DIRECTUS_URL             — Directus 实例地址 (如 https://directus.zerx.dev)
-#   - DIRECTUS_AI_WRITER_TOKEN — AI Writer token,对应本地 .env 同名变量
+# 必需的 GitHub Secrets(敏感,值不可见):
+#   - CLAUDE_CODE_OAUTH_TOKEN — Claude Code Action 授权 (本地 `claude setup-token`)
+#   - SMTP_USER / SMTP_PASS   — 发信邮箱账号与授权码
+#
+# 必需的 GitHub Variables(非敏感,值可见可改):
+#   - SMTP_HOST / SMTP_PORT   — 发信服务器,如 smtp.163.com / 465
+#   - MAIL_FROM               — 发件地址(163 要求与 SMTP_USER 一致)
+#   - MAIL_TO                 — 收件人,逗号分隔;加订阅者只改这一个变量
 #
 # 可选变量:
 #   - 手动触发时可通过 inputs.date 指定目标日期 (YYYY-MM-DD),留空则用昨天
@@ -44,17 +54,26 @@ on:
         type: string
 
 concurrency:
-  # 同一天只跑一次,防止手动触发 + schedule 撞车时并发写库
+  # 同一天只跑一次,防止手动触发 + schedule 撞车时并发写同一份文件 / 重复推送
   group: daily-tech-news
   cancel-in-progress: false
 
 jobs:
-  generate-and-publish:
+  generate:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
+    # 下游 deploy / notify job 需要的全部信息
+    outputs:
+      committed: ${{ steps.commit.outputs.committed }}
+      sha: ${{ steps.commit.outputs.sha }}
+      slug: ${{ steps.verify.outputs.slug }}
+      target_date: ${{ steps.date.outputs.target_date }}
+      title: ${{ steps.verify.outputs.title }}
+
     permissions:
-      contents: read
+      # 需要把生成的文章 commit + push 回 main
+      contents: write
       # claude-code-action 运行时需要 status check / 评论等
       pull-requests: write
       issues: write
@@ -62,7 +81,8 @@ jobs:
 
     steps:
       # ------------------------------------------------------------------
-      # 1. Checkout (拉 .claude/skills 供 Claude 读取 SKILL.md)
+      # 1. Checkout (拉 .claude/skills 供 Claude 读取 SKILL.md,也是后面
+      #    commit/push 的工作区)
       # ------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -76,143 +96,287 @@ jobs:
         id: date
         run: |
           if [ -n "${{ github.event.inputs.date }}" ]; then
-            echo "target_date=${{ github.event.inputs.date }}" >> $GITHUB_OUTPUT
+            echo "target_date=${{ github.event.inputs.date }}" >> "$GITHUB_OUTPUT"
           else
             # 北京时间 (UTC+8) 昨天
             # cron 在 UTC 23:00 跑时,北京时间是次日 07:00
             # "昨天" (北京时区) = UTC 今天
-            echo "target_date=$(TZ='Asia/Shanghai' date -d 'yesterday' '+%Y-%m-%d')" >> $GITHUB_OUTPUT
+            echo "target_date=$(TZ='Asia/Shanghai' date -d 'yesterday' '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
           fi
-          echo "✓ 目标日期: $(cat $GITHUB_OUTPUT | grep target_date | cut -d= -f2)"
+          echo "✓ 目标日期: $(cat "$GITHUB_OUTPUT" | grep target_date | cut -d= -f2)"
 
       # ------------------------------------------------------------------
-      # 3. 让 Claude 通过 Directus MCP 直接搜集并发布
+      # 3. 让 Claude 搜集资讯并把成稿直接写入仓库 Markdown 文件
       # ------------------------------------------------------------------
-      - name: Run Claude Code (collect news + publish via MCP)
+      - name: Run Claude Code (collect news + write markdown files)
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
           prompt: |
-            执行 `.claude/skills/daily-tech-news/SKILL.md` 完成每日技术资讯的搜集与发布。
+            执行 `.claude/skills/daily-tech-news/SKILL.md` 完成每日技术资讯的搜集与撰写。
 
             === 运行上下文(注入给 skill) ===
 
             TARGET_DATE:   ${{ steps.date.outputs.target_date }}
             RUN_MODE:      github-actions-automation
-            TARGET_STATUS: published
 
             说明:
-            - 本次是 **GitHub Actions 自动化批量产出**,非交互式 MCP 对话
-            - 所有日期派生(slug / date_published / 标题日期 / cover_label)
+            - 本次是 **GitHub Actions 自动化批量产出**,非交互式对话
+            - 所有日期派生(文件路径 / date / 标题日期 / cover_label)
               必须基于 TARGET_DATE,禁止使用"今天/昨天"等相对日期
 
-            === 🚨 邮件触发机制(最高优先级约束) ===
+            === 产物契约(必须完全遵守) ===
 
-            Directus 有 Flow 监听 `items.create + status=published + category.slug=news` →
-            **在 create 的那一瞬间**给订阅者发邮件。Flow 只听 create,update 不会再发。
+            成稿是两个 Markdown 文件,用 Write 工具直接写入仓库,**不经过任何
+            数据库或 MCP**:
 
-            含义: payload 里 translations.content 写的是什么,订阅者收到的邮件就是什么。
-            写占位符 → 订阅者收到占位符,**无法召回**。4-16 事件就是这样,一次性把空邮件发出去了。
+              src/content/posts/daily-tech-news-${{ steps.date.outputs.target_date }}/zh.md
+              src/content/posts/daily-tech-news-${{ steps.date.outputs.target_date }}/en.md
 
-            **硬规则**:
-            1. Phase 4 必须真正写完中英双语完整 Markdown 正文(每篇 ≥ 100 字符、多段结构),
-               才能进入 Phase 5.1。**禁止**以"先占位、后 update 回填"的任何形式开头 ——
-               第一次 create 就必须是最终版。
-            2. Step 5.1 create 的 payload 必须完全复刻本地已验证可行的形态(SKILL.md
-               §5.1 示例): status="published"、slug/date_published/author/category 齐全、
-               translations 两条(zh-CN + en-US)带完整 content/title/excerpt/cover_label、
-               tags 带 daily-news 的 id。
-            3. 严禁在 translations.content / excerpt 里写 `placeholder-*`、`TBD`、`TODO`、
-               空字符串等任何占位符。担心 context 或 token 不够 → 不要 create,直接报错退出,
-               让这次 run 红掉,等人工介入。
-            4. update 路径(Step 5.2,修复已有文章)不会触发 Flow,可以自由使用。但不要
-               把它当成"先 create 空壳、再 update 填充"的后路 —— 空壳已经发邮件了,来不及。
+            每个文件的 frontmatter(YAML,字符串一律双引号包裹)紧跟在文件开头的
+            `---` 之后,字段如下:
+
+            ```yaml
+            ---
+            title: "每日技术资讯 - 2026年XX月XX日"
+            excerpt: "50-150 字摘要,突出 Top 3"
+            coverLabel: "XX/XX"
+            date: "${{ steps.date.outputs.target_date }}T00:00:00.000Z"
+            author: "ai"
+            category: "news"
+            tags: ["daily-news", "ai"]
+            featured: false
+            ---
+            ```
+
+            frontmatter 后紧跟正文(Markdown 原文,不需要再包一层代码块)。
+
+            === 硬规则 ===
+
+            1. 正文必须是 Phase 4 完整撰写好的中英双语 Markdown 全文(每篇
+               ≥ 100 字符、多段结构),**禁止**任何形式的占位符(如
+               `placeholder-*`、`TBD`、`TODO`、空字符串)。后面有专门的
+               shell 校验 step,写了占位符这次 run 会直接失败,不会提交
+               也不会发信 —— 不存在"先占位后回填"的空间,老老实实一次写完。
+            2. 两个文件(zh.md / en.md)都必须写,内容独立撰写,不是互译。
 
             === 执行要求 ===
 
             严格按 SKILL.md 的 Phase 0-7 顺序执行,**不要跳过任何 Phase**:
-              Phase 0: Directus MCP 基线(system-prompt + 近 7 天去重 + 元数据 id)
+              Phase 0: 仓库内近 7 天文章去重基线(Glob + Read)
               Phase 1: 多源 WebSearch + WebFetch
               Phase 2: 交叉验证 + 重要性评分 + 应用 EXCLUDE_LIST
               Phase 3: Top 3 深度分析
-              Phase 4: 按模板撰写中英双语完整 content(真正写完,不是写个提纲)
-              Phase 5: 通过 mcp__directus__items 一次性 create published 发布
+              Phase 4: 按模板撰写中英双语完整正文(真正写完,不是写个提纲)
+              Phase 5: 用 Write 工具写入上述两个 Markdown 文件
               Phase 6: 发布前自检清单逐项过关
               Phase 7: 输出 "PUBLISHED: <slug>" 结束标志
 
-            MCP endpoint 已通过 --mcp-config 注入,直接用 mcp__directus__*
-            工具即可,无需额外配置鉴权。
-
           claude_args: |
-            --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(wc:*),mcp__directus__system-prompt,mcp__directus__items,mcp__directus__schema,mcp__directus__fields"
+            --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Glob,Grep,Bash(ls:*),Bash(cat:*),Bash(wc:*),Bash(date:*)"
             --max-turns 60
-            --mcp-config '{"mcpServers":{"directus":{"type":"http","url":"${{ secrets.DIRECTUS_URL }}/mcp","headers":{"Authorization":"Bearer ${{ secrets.DIRECTUS_AI_WRITER_TOKEN }}"}}}}'
 
       # ------------------------------------------------------------------
-      # 4. Post-check: 反向从 Directus 校验
-      #    (a) posts.status == "published"
-      #    (b) 两条 translations.content 均 ≥ 100 字符且不含 placeholder 子串
-      #    任一项不过 → fail this run。占位符此时已被 Flow 发邮件飞出,邮件无法召回,
-      #    但 CI 红掉能第一时间通知人工介入,去 Directus 修正 content 并手动补发
-      #    "更正版"邮件给订阅者。
+      # 4. Verify: 纯 shell 校验产物,不合格直接 fail,后面的提交 / 发信
+      #    都不会执行(GitHub Actions 默认逐 step 顺序执行,某 step 失败
+      #    整个 job 后续 step 全部跳过)
       # ------------------------------------------------------------------
-      - name: Verify published content is non-placeholder
+      - name: Verify generated markdown is complete
+        id: verify
         env:
-          DIRECTUS_URL: ${{ secrets.DIRECTUS_URL }}
-          DIRECTUS_TOKEN: ${{ secrets.DIRECTUS_AI_WRITER_TOKEN }}
           TARGET_DATE: ${{ steps.date.outputs.target_date }}
         run: |
           set -euo pipefail
+
           SLUG="daily-tech-news-${TARGET_DATE}"
+          DIR="src/content/posts/${SLUG}"
+          ZH_FILE="${DIR}/zh.md"
+          EN_FILE="${DIR}/en.md"
+
           echo "🔍 校验 ${SLUG}..."
 
-          # 1. 拉 post 主表,断言 status=published
-          POST_RESP=$(curl -sS -f \
-            -H "Authorization: Bearer ${DIRECTUS_TOKEN}" \
-            --get \
-            --data-urlencode 'fields=id,slug,status' \
-            --data-urlencode "filter[slug][_eq]=${SLUG}" \
-            "${DIRECTUS_URL}/items/posts")
+          # 1. 两个文件都必须存在
+          for f in "$ZH_FILE" "$EN_FILE"; do
+            if [ ! -f "$f" ]; then
+              echo "::error title=Daily Tech News verify failed::缺少文件 ${f}"
+              exit 1
+            fi
+          done
 
-          echo "$POST_RESP" | jq -r '.data[] | "  post: id=\(.id) slug=\(.slug) status=\(.status)"'
+          # 2. 逐文件校验 frontmatter 与正文
+          for f in "$ZH_FILE" "$EN_FILE"; do
+            echo "--- 校验 ${f} ---"
 
-          STATUS=$(echo "$POST_RESP" | jq -r '.data[0].status // "MISSING"')
-          if [ "$STATUS" != "published" ]; then
-            echo "::error title=Daily Tech News status check failed::post ${SLUG} status='${STATUS}' (期望 'published')"
-            exit 1
+            # frontmatter 必须以 --- 开头,且第二个 --- 分隔正文
+            if [ "$(sed -n '1p' "$f")" != "---" ]; then
+              echo "::error title=Daily Tech News verify failed::${f} 缺少 frontmatter 起始的 ---"
+              exit 1
+            fi
+
+            FM_END=$(awk 'NR>1 && /^---$/ {print NR; exit}' "$f")
+            if [ -z "$FM_END" ]; then
+              echo "::error title=Daily Tech News verify failed::${f} 缺少 frontmatter 结束的 ---"
+              exit 1
+            fi
+
+            FRONTMATTER=$(sed -n "2,$((FM_END - 1))p" "$f")
+
+            for field in 'title:' 'excerpt:' 'date:'; do
+              if ! echo "$FRONTMATTER" | grep -q "^${field}"; then
+                echo "::error title=Daily Tech News verify failed::${f} frontmatter 缺少 ${field} 字段"
+                exit 1
+              fi
+            done
+
+            if ! echo "$FRONTMATTER" | grep -q '^category: "news"'; then
+              echo "::error title=Daily Tech News verify failed::${f} frontmatter 的 category 必须是 \"news\""
+              exit 1
+            fi
+
+            # 正文 = frontmatter 结束标记之后的全部内容,去除首尾空白后计字符数
+            BODY=$(tail -n "+$((FM_END + 1))" "$f")
+            BODY_LEN=$(printf '%s' "$BODY" | tr -d '[:space:]' | wc -c)
+            if [ "$BODY_LEN" -lt 100 ]; then
+              echo "::error title=Daily Tech News verify failed::${f} 正文字符数 ${BODY_LEN} < 100"
+              exit 1
+            fi
+
+            # 全文(含 frontmatter)不得含占位符,大小写不敏感
+            LOWER=$(tr '[:upper:]' '[:lower:]' < "$f")
+            for bad in placeholder tbd todo; do
+              if printf '%s' "$LOWER" | grep -q "$bad"; then
+                echo "::error title=Daily Tech News verify failed::${f} 含有占位符子串 '${bad}'"
+                exit 1
+              fi
+            done
+          done
+
+          echo "✓ ${SLUG} 两个文件均通过校验"
+          echo "slug=${SLUG}" >> "$GITHUB_OUTPUT"
+          # 邮件主题用的纯文本标题(中文版)
+          echo "title=$(sed -n 's/^title: *"\(.*\)"$/\1/p' "src/content/posts/${SLUG}/zh.md" | head -n1)" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------------
+      # 5. Commit & push:校验通过才提交,无变更则跳过后续 step
+      # ------------------------------------------------------------------
+      - name: Commit and push generated post
+        id: commit
+        env:
+          TARGET_DATE: ${{ steps.date.outputs.target_date }}
+          SLUG: ${{ steps.verify.outputs.slug }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "src/content/posts/${SLUG}"
+
+          if git diff --cached --quiet; then
+            echo "ℹ️ 没有新增/变更内容,跳过提交"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          # 2. 拉 translations,断言 content 长度 / 无 placeholder
-          TR_RESP=$(curl -sS -f \
-            -H "Authorization: Bearer ${DIRECTUS_TOKEN}" \
-            --get \
-            --data-urlencode 'fields=languages_code,content' \
-            --data-urlencode "filter[posts_id][slug][_eq]=${SLUG}" \
-            "${DIRECTUS_URL}/items/posts_translations")
+          git commit -m "feat(news): daily tech news ${TARGET_DATE}"
+          git push
 
-          echo "$TR_RESP" | jq -r '.data[] | "  \(.languages_code): content length = \(.content // "" | length)"'
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          # deploy job 要构建的是这个新 commit,而不是 workflow 启动时的旧 SHA
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "✓ 已提交并推送 ${SLUG}"
 
-          FAIL=$(echo "$TR_RESP" | jq -r '
-            .data as $rows
-            | if ($rows | length) < 2 then
-                "expected 2 translations (zh-CN + en-US), got \($rows | length)"
-              else
-                [ $rows[]
-                  | select(
-                      ((.content // "") | length) < 100
-                      or ((.content // "") | ascii_downcase | contains("placeholder"))
-                    )
-                  | "\(.languages_code): len=\((.content // "") | length), contains_placeholder=\((.content // "") | ascii_downcase | contains("placeholder"))"
-                ] | if length == 0 then "" else join("; ") end
-              end
-          ')
+      # 邮件正文在 notify job 里就地从仓库文件读取 —— 长正文塞不进 job outputs
+      # (多行值会被折叠,且有大小上限)。
 
-          if [ -n "$FAIL" ]; then
-            echo "::error title=Daily Tech News content check failed::${FAIL}"
-            echo "⚠️ Flow 已在 create 瞬间给订阅者发了含占位符的邮件,无法召回。需人工去 Directus 修正 ${SLUG} 的 content,并评估是否发补正邮件。"
-            exit 1
-          fi
+  # ----------------------------------------------------------------------
+  # 7. Deploy:复用 deploy.yml 构建并 rsync 到自有服务器
+  #    必须显式调用 —— GITHUB_TOKEN 推的 commit 不会触发 deploy.yml 自身的
+  #    push 事件(GitHub 的防递归规则)。
+  # ----------------------------------------------------------------------
+  deploy:
+    needs: generate
+    if: needs.generate.outputs.committed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      ref: ${{ needs.generate.outputs.sha }}
+    secrets: inherit
 
-          echo "✓ status=published + 中英文 content 均 ≥ 100 字符且不含占位符"
+  # ----------------------------------------------------------------------
+  # 8. Notify:站点已经上线,邮件里的链接必然可访问,这时才发信
+  # ----------------------------------------------------------------------
+  notify:
+    needs: [generate, deploy]
+    if: needs.generate.outputs.committed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      # 邮件正文直接读仓库里的成稿。不用 job outputs 传正文:多行值会被折叠,
+      # 且 outputs 有大小上限,长文必被截断。
+      - name: Checkout published commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.generate.outputs.sha }}
+          fetch-depth: 1
+
+      - name: Compose mail body
+        env:
+          SLUG: ${{ needs.generate.outputs.slug }}
+          TARGET_DATE: ${{ needs.generate.outputs.target_date }}
+        run: |
+          set -euo pipefail
+
+          ZH_FILE="src/content/posts/${SLUG}/zh.md"
+
+          # 正文原样拼进 HTML,& < > 必须转义,否则含尖括号的 Markdown
+          # (比较符号、伪代码)会把邮件排版搞乱
+          html_escape() {
+            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+          }
+
+          TITLE_HTML=$(sed -n 's/^title: *"\(.*\)"$/\1/p' "$ZH_FILE" | head -n1 | html_escape)
+          EXCERPT_HTML=$(sed -n 's/^excerpt: *"\(.*\)"$/\1/p' "$ZH_FILE" | head -n1 | html_escape)
+
+          # frontmatter 的第二个 --- 之后才是正文
+          FM_END=$(awk 'NR>1 && /^---$/ {print NR; exit}' "$ZH_FILE")
+
+          {
+            printf '<h2>%s</h2>\n' "$TITLE_HTML"
+            printf '<p>%s</p>\n' "$EXCERPT_HTML"
+            printf '<p>发布时间: %s</p>\n' "$TARGET_DATE"
+            printf '<p>中文: <a href="https://zerx.dev/blog/%s/">https://zerx.dev/blog/%s/</a><br />\n' "$SLUG" "$SLUG"
+            printf 'English: <a href="https://zerx.dev/en/blog/%s/">https://zerx.dev/en/blog/%s/</a></p>\n' "$SLUG" "$SLUG"
+            printf '<hr />\n'
+            printf '<pre style="white-space: pre-wrap; font-family: inherit;">\n'
+            tail -n "+$((FM_END + 1))" "$ZH_FILE" | html_escape
+            printf '</pre>\n'
+          } > mail.html
+
+          echo "✓ 邮件正文已生成 ($(wc -c < mail.html) 字节)"
+
+      # 收件人 / 服务器 / 发件人都放仓库 Variables(Settings → Secrets and
+      # variables → Actions → Variables):值可见可改,加订阅者只要编辑
+      # MAIL_TO 这一个变量(逗号分隔,支持任意多个)。只有账号密码是 Secrets。
+      - name: Send notification mail
+        # 钉死 commit SHA:第三方 action 能读到 SMTP 凭据,而 `@v4` 是可移动
+        # tag,被改写就等于凭据泄露。升级时用
+        #   gh api repos/dawidd6/action-send-mail/git/ref/tags/v4 -q .object.sha
+        # 重新解析,并人工看一眼 diff。
+        uses: dawidd6/action-send-mail@611879133a9569642c41be66f4a323286e9b8a3b # v4
+        with:
+          server_address: ${{ vars.SMTP_HOST }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          # 465 = 隐式 TLS(secure);587 / 25 = STARTTLS,action 会自行升级连接。
+          # 写死 true 会让 587 直接连不上,所以按端口判定。
+          secure: ${{ vars.SMTP_PORT == '465' }}
+          from: ZerxLab <${{ vars.MAIL_FROM }}>
+          # 多收件人:逗号分隔。163 单封信收件人上限较低,人多了改用邮件列表别名。
+          to: ${{ vars.MAIL_TO }}
+          subject: "[ZerxLab] 新资讯已发布: ${{ needs.generate.outputs.title }}"
+          html_body: file://mail.html

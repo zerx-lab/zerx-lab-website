@@ -1,0 +1,57 @@
+[
+	{
+		"slug": "engineering",
+		"name": {
+			"zh": "工程",
+			"en": "Engineering"
+		},
+		"description": {
+			"zh": "架构、性能、工具链与代码质量。",
+			"en": "Architecture, performance, tooling and code quality."
+		}
+	},
+	{
+		"slug": "release",
+		"name": {
+			"zh": "发布",
+			"en": "Releases"
+		},
+		"description": {
+			"zh": "开源项目的版本发布与变更记录。",
+			"en": "Release notes and changelogs of open-source projects."
+		}
+	},
+	{
+		"slug": "notes",
+		"name": {
+			"zh": "笔记",
+			"en": "Notes"
+		},
+		"description": {
+			"zh": "零散的技术笔记与实验手记。",
+			"en": "Scattered engineering notes and experiment logs."
+		}
+	},
+	{
+		"slug": "meta",
+		"name": {
+			"zh": "关于",
+			"en": "Meta"
+		},
+		"description": {
+			"zh": "关于实验室本身、这个网站与内容方针。",
+			"en": "About the lab, this site, and editorial notes."
+		}
+	},
+	{
+		"slug": "news",
+		"name": {
+			"zh": "资讯",
+			"en": "News"
+		},
+		"description": {
+			"zh": "每日技术资讯汇总:AI、开源、前端、后端、基础设施等领域的重要动态。",
+			"en": "Daily tech news digest: AI, open source, frontend, backend, infrastructure and beyond."
+		}
+	}
+]

@@ -3,7 +3,7 @@
  * ZerxLab Website - i18n UI 字典
  * ----------------------------------------------------------------------------
  * 用途: 承载站点框架层的 UI 文案(导航、按钮、元信息 label 等)。
- *       内容层(博客/项目/AUR 等)通过 Directus translations 关联表管理,
+ *       内容层(博客/项目/AUR 等)在 src/content/ 下以 Markdown / JSON 管理,
  *       不写在此文件。
  *
  * 新增字符串规范:
@@ -106,6 +106,7 @@ export const ui = {
 		"blog.nextPost": "下一篇",
 		"blog.relatedPosts": "相关文章",
 		"blog.featured": "精选",
+		"blog.comments": "评论",
 
 		// ---------- 项目 ----------
 		"projects.title": "开源项目",
@@ -151,6 +152,7 @@ export const ui = {
 		"common.error": "加载失败",
 		"common.retry": "重试",
 		"common.empty": "暂无内容",
+		"search.empty": "没有找到匹配的文章。",
 	},
 
 	en: {
@@ -227,6 +229,7 @@ export const ui = {
 		"blog.nextPost": "Next",
 		"blog.relatedPosts": "Related",
 		"blog.featured": "Featured",
+		"blog.comments": "Comments",
 
 		// ---------- Projects ----------
 		"projects.title": "Open-source projects",
@@ -275,6 +278,7 @@ export const ui = {
 		"common.error": "Failed to load",
 		"common.retry": "Retry",
 		"common.empty": "Nothing here yet",
+		"search.empty": "No matching posts found.",
 	},
 } as const;
 

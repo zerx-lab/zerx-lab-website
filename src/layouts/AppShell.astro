@@ -74,8 +74,8 @@ interface Props {
 	title?: string;
 	/** 页面 meta description */
 	description?: string;
-	/** OG 分享图 URL */
-	ogImage?: string;
+	/** OG 分享图 URL;未配置传 null 或不传,BaseHead 会跳过 og:image 标签 */
+	ogImage?: string | null;
 	/** OG 类型 */
 	ogType?: "website" | "article";
 	/** 文章类型专用:发布时间 */

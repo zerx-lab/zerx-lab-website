@@ -1,0 +1,40 @@
+---
+/**
+ * ============================================================================
+ * 博客列表页 (中文) —— 第 N 页(N ≥ 2)/ 全部分类
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /blog/page/2/, /blog/page/3/ …  → 本文件
+ *   /blog/                          → src/pages/blog/index.astro(第 1 页)
+ *
+ * 为什么不生成第 1 页:
+ *   第 1 页已经是 /blog/,若这里也生成 /blog/page/1/ 会产生同一份内容的
+ *   两个 URL(重复内容,对 SEO 不友好),所以枚举从 2 开始。
+ *
+ * 实现:
+ *   getStaticPaths 用 countPagesFor(undefined)(不带分类过滤)算出总页数,
+ *   枚举 2..totalPages 生成静态路径。
+ * ============================================================================
+ */
+
+import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
+import { countPagesFor } from "@lib/queries/posts";
+
+export async function getStaticPaths() {
+	const totalPages = await countPagesFor(undefined);
+	return Array.from({ length: Math.max(0, totalPages - 1) }, (_, i) => ({
+		params: { page: String(i + 2) },
+	}));
+}
+
+const { page: pageParam } = Astro.params;
+const page = Number(pageParam);
+
+if (!Number.isInteger(page) || page < 2) {
+	throw new Error(
+		`[blog/page/${pageParam}] getStaticPaths 枚举出的页码非法 —— 构建失败。`,
+	);
+}
+---
+
+<BlogIndexPage lang="zh" page={page} />

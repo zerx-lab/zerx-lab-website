@@ -2,12 +2,12 @@
  * ============================================================================
  * ZerxLab Website - AUR RPC 客户端(带 24h 缓存)
  * ----------------------------------------------------------------------------
- * 全站 SSR 场景下,/aur 页面的 `version` 字段需要实时反映 AUR 仓库的最新版本,
- * 而不是 Directus 里手动 seed 的静态值。本模块负责:
+ * /aur 页面的 `version` 字段要反映 AUR 仓库的最新版本,而不是内容文件里手写
+ * 的静态值。本模块负责:
  *
  *   1. 调用 AUR RPC v5 的 /rpc/v5/info 接口一次性拿多个包的元数据
- *   2. 双层 24h 缓存(进程内 Map + 磁盘 JSON),避免每次 CDN 回源都打 AUR
- *   3. 失败降级:返回 null / 部分结果,调用方用 Directus 里的旧 version 兜底
+ *   2. 双层 24h 缓存(进程内 Map + 磁盘 JSON),避免每次构建都打 AUR
+ *   3. 失败降级:返回 null / 部分结果,调用方用 aur.json 里的静态 version 兜底
  *
  * 为什么要双层缓存(与 src/lib/github.ts 同思路):
  *   - 进程内 Map:同一次 Node 进程内,不同页面请求共享,零延迟
@@ -44,8 +44,7 @@
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 /* ----------------------------------------------------------------------------
  * 类型
@@ -95,20 +94,16 @@ const AUR_RPC_ENDPOINT = "https://aur.archlinux.org/rpc/v5/info";
 const USER_AGENT = "zerx-lab-website (+https://zerx.dev)";
 
 /**
- * 定位项目根:本文件在 `<root>/src/lib/aur-rpc.ts`,上溯 2 级就是根。
- * fileURLToPath 兼容 Node / Bun / Vite 各种运行时的 ESM。
- */
-const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = resolve(MODULE_DIR, "..", "..");
-
-/**
  * 磁盘缓存文件位置。
+ * 锚点用 `process.cwd()`(执行 `astro build` 的项目根)而非 `import.meta.url`:
+ * 构建后本模块被打包进 `dist/`,按模块位置上溯会把缓存写成
+ * `dist/node_modules/.cache/`,跟着静态产物一起发布出去。
+ *
  * 用 node_modules/.cache/ 与 github.ts 保持一致:
  *   - .gitignore 已天然忽略
  *   - 跨工具约定位置,不会被当作"项目资产"误判
- *   - 容器镜像里 node_modules 通常是分层缓存的一部分,不会被清
  */
-const CACHE_DIR = resolve(PROJECT_ROOT, "node_modules/.cache");
+const CACHE_DIR = resolve(process.cwd(), "node_modules/.cache");
 const CACHE_FILE = resolve(CACHE_DIR, "zerx-aur-info.json");
 
 /* ----------------------------------------------------------------------------

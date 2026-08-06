@@ -1,0 +1,40 @@
+---
+/**
+ * ============================================================================
+ * 博客列表页 (英文) —— 按分类筛选,第 N 页(N ≥ 2)
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /en/blog/cat/<slug>/page/2/, .../page/3/ …  → 本文件
+ *   /en/blog/cat/<slug>/                         → 该分类第 1 页
+ *
+ * 与中文版同构,详见 src/pages/blog/cat/[cat]/page/[page].astro 的注释。
+ * ============================================================================
+ */
+
+import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
+import { countPagesFor, listCategorySlugsWithPosts } from "@lib/queries/posts";
+
+export async function getStaticPaths() {
+	const slugs = await listCategorySlugsWithPosts();
+	const paths = await Promise.all(
+		slugs.map(async (cat) => {
+			const totalPages = await countPagesFor(cat);
+			return Array.from({ length: Math.max(0, totalPages - 1) }, (_, i) => ({
+				params: { cat, page: String(i + 2) },
+			}));
+		}),
+	);
+	return paths.flat();
+}
+
+const { cat, page: pageParam } = Astro.params;
+const page = Number(pageParam);
+
+if (!cat || !Number.isInteger(page) || page < 2) {
+	throw new Error(
+		`[en/blog/cat/${cat}/page/${pageParam}] getStaticPaths 枚举出的参数非法 —— 构建失败。`,
+	);
+}
+---
+
+<BlogIndexPage lang="en" page={page} categorySlug={cat} />

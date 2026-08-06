@@ -1,0 +1,128 @@
+[
+	{
+		"slug": "go",
+		"name": {
+			"zh": "Go",
+			"en": "Go"
+		}
+	},
+	{
+		"slug": "rust",
+		"name": {
+			"zh": "Rust",
+			"en": "Rust"
+		}
+	},
+	{
+		"slug": "typescript",
+		"name": {
+			"zh": "TypeScript",
+			"en": "TypeScript"
+		}
+	},
+	{
+		"slug": "performance",
+		"name": {
+			"zh": "性能",
+			"en": "Performance"
+		}
+	},
+	{
+		"slug": "open-source",
+		"name": {
+			"zh": "开源",
+			"en": "Open Source"
+		}
+	},
+	{
+		"slug": "architecture",
+		"name": {
+			"zh": "架构",
+			"en": "Architecture"
+		}
+	},
+	{
+		"slug": "astro",
+		"name": {
+			"zh": "Astro",
+			"en": "Astro"
+		}
+	},
+	{
+		"slug": "bun",
+		"name": {
+			"zh": "Bun",
+			"en": "Bun"
+		}
+	},
+	{
+		"slug": "docker",
+		"name": {
+			"zh": "Docker",
+			"en": "Docker"
+		}
+	},
+	{
+		"slug": "wordzero",
+		"name": {
+			"zh": "WordZero",
+			"en": "WordZero"
+		}
+	},
+	{
+		"slug": "daily-news",
+		"name": {
+			"zh": "每日资讯",
+			"en": "Daily News"
+		}
+	},
+	{
+		"slug": "ai",
+		"name": {
+			"zh": "AI",
+			"en": "AI"
+		}
+	},
+	{
+		"slug": "llm",
+		"name": {
+			"zh": "大模型",
+			"en": "LLM"
+		}
+	},
+	{
+		"slug": "github",
+		"name": {
+			"zh": "GitHub",
+			"en": "GitHub"
+		}
+	},
+	{
+		"slug": "frontend",
+		"name": {
+			"zh": "前端",
+			"en": "Frontend"
+		}
+	},
+	{
+		"slug": "backend",
+		"name": {
+			"zh": "后端",
+			"en": "Backend"
+		}
+	},
+	{
+		"slug": "infra",
+		"name": {
+			"zh": "基础设施",
+			"en": "Infrastructure"
+		}
+	},
+	{
+		"slug": "devtools",
+		"name": {
+			"zh": "开发工具",
+			"en": "Dev Tools"
+		}
+	}
+]

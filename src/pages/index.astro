@@ -9,13 +9,16 @@
  *
  * 布局:
  *   - 左栏:Logo + Eyebrow(README)+ Hero 大标题 + 描述 + CTA + 社交 + 元信息
- *   - 右栏:README 分区 + FEATURES 九宫格 + STACK 代码片段区
+ *   - 右栏:README 分区 + PROJECTS 动态九宫格 + 继续探索
  *
  * 数据来源:
- *   - 站点级配置 (site_name / tagline / 社交链接 / 建立年份 / 项目数 / ...)
- *     → Directus site_settings 单例
- *   - 当 DIRECTUS_READ_TOKEN 未配置或请求失败时,使用本文件底部的 FALLBACK_DATA
- *     兜底,保证首屏始终能展示"实验室骨架"
+ *   - 站点级配置(siteName / tagline / 社交链接 / 建立年份 / 定位 ...)
+ *     → src/content/data/site.json,经 @lib/content 的 loadSite() 在构建期读取
+ *   - AUR 包 / 文章计数 → @lib/content;项目数与 star 汇总 → @lib/queries/projects
+ *     的 loadLiveCounts()(GitHub 实时清单),与关于页、/projects 左栏同源
+ *   - 首页项目九宫格 → @components/home/ProjectShowcase.astro,构建期从
+ *     GitHub 实时拉 zerx-lab 的公开仓库,按 star 降序(失败回落内容仓库快照)
+ *   其余内容全部内置在仓库里,读取失败即视为构建失败,不再做降级兜底
  *
  * 视觉参考: better-auth.com(README 页)
  * ============================================================================
@@ -24,13 +27,10 @@
 import AppShell from "@layouts/AppShell.astro";
 import SectionHeader from "@components/ui/SectionHeader.astro";
 import FeatureCard from "@components/ui/FeatureCard.astro";
+import ProjectShowcase from "@components/home/ProjectShowcase.astro";
 import MetaRow from "@components/ui/MetaRow.astro";
-import {
-	directus,
-	readSingleton,
-	readItems,
-	DIRECTUS_CONFIG,
-} from "@lib/directus";
+import { loadSite, pickLang } from "@lib/content";
+import { loadLiveCounts } from "@lib/queries/projects";
 import { getLangFromUrl, useTranslations, useTranslatedPath } from "@i18n/utils";
 
 // ---------- 当前语言 / 翻译工具 ----------
@@ -39,12 +39,7 @@ const t = useTranslations(lang);
 const tp = useTranslatedPath(lang);
 
 /* ----------------------------------------------------------------------------
- * 数据获取:站点设置 + 项目计数 + AUR 包计数
- * ----------------------------------------------------------------------------
- * 策略:
- *   1. 优先从 Directus 拉取,失败/空值时使用 FALLBACK_DATA
- *   2. 所有错误都被 catch,不阻塞首屏渲染(构建阶段 Directus 可能未 bootstrap)
- *   3. 构建时如拉取失败,控制台会输出警告,供开发者排查
+ * 数据获取:站点设置 + 项目 / AUR 包 / 文章计数
  * -------------------------------------------------------------------------- */
 
 interface HomeData {
@@ -62,202 +57,23 @@ interface HomeData {
 	postCount: number;
 }
 
-/** 无 Directus 时的兜底数据 —— 基于用户 GitHub / 项目实际情况手写 */
-const FALLBACK_DATA: HomeData = {
-	siteName: "ZerxLab",
-	tagline: lang === "zh" ? "全栈实验室" : "Full-Stack Laboratory",
-	description:
-		lang === "zh"
-			? "聚焦高性能应用、现代技术架构与开源工具,探索代码与工程的边界。"
-			: "Building high-performance apps, exploring modern architecture, and shipping open-source tools.",
-	github: "https://github.com/zerx-lab",
-	x: null,
-	email: "1603852@qq.com",
-	establishedYear: 2020,
-	location: "北京市",
-	focus: "FULL-STACK / RUST / GO",
-	projectCount: 9,
-	aurCount: 4,
-	postCount: 0,
+const site = await loadSite();
+const counts = await loadLiveCounts();
+
+const data: HomeData = {
+	siteName: site.siteName,
+	tagline: pickLang(site.tagline, lang),
+	description: pickLang(site.description, lang),
+	github: site.socialGithub,
+	x: site.socialX,
+	email: site.socialEmail,
+	establishedYear: site.establishedYear,
+	location: pickLang(site.location, lang),
+	focus: site.focus,
+	projectCount: counts.projects,
+	aurCount: counts.aurPackages,
+	postCount: counts.posts,
 };
-
-async function loadHomeData(): Promise<HomeData> {
-	// 未配置只读 token 时,直接走 fallback,避免无意义的网络请求
-	if (!DIRECTUS_CONFIG.hasReadToken) {
-		return FALLBACK_DATA;
-	}
-
-	try {
-		const client = directus();
-
-		// 并行拉取:单例 + 集合聚合计数
-		// Directus SDK 21 的 fields 泛型对嵌套 translations 的推导比较严苛,
-		// 在手写 Schema 尚未精确映射前使用 any 绕过,运行时行为不受影响。
-		// typegen 脚本跑完后会生成精确类型,届时可移除此断言。
-		const settingsFields: any = [
-			"site_name",
-			"social_github",
-			"social_x",
-			"social_email",
-			"established_year",
-			"location",
-			"focus",
-			{
-				translations: ["languages_code", "tagline", "description"],
-			},
-		];
-
-		const [settings, projects, aurPackages, posts] = await Promise.all([
-			client
-				.request(
-					readSingleton("site_settings", {
-						fields: settingsFields,
-					}),
-				)
-				.catch(() => null),
-
-			client
-				.request(
-					readItems("projects", {
-						filter: { status: { _eq: "published" } },
-						aggregate: { count: "*" },
-					}),
-				)
-				.catch(() => [{ count: { "*": FALLBACK_DATA.projectCount } }]),
-
-			client
-				.request(
-					readItems("aur_packages", {
-						filter: { status: { _eq: "published" } },
-						aggregate: { count: "*" },
-					}),
-				)
-				.catch(() => [{ count: { "*": FALLBACK_DATA.aurCount } }]),
-
-			client
-				.request(
-					readItems("posts", {
-						filter: { status: { _eq: "published" } },
-						aggregate: { count: "*" },
-					}),
-				)
-				.catch(() => [{ count: { "*": FALLBACK_DATA.postCount } }]),
-		]);
-
-		// 从 translations 数组中挑选当前语言对应的字段
-		const langCode = lang === "zh" ? "zh-CN" : "en-US";
-		const tr = (settings as any)?.translations?.find(
-			(x: any) =>
-				x.languages_code === langCode ||
-				x.languages_code?.code === langCode,
-		);
-
-		return {
-			siteName: (settings as any)?.site_name ?? FALLBACK_DATA.siteName,
-			tagline: tr?.tagline ?? FALLBACK_DATA.tagline,
-			description: tr?.description ?? FALLBACK_DATA.description,
-			github: (settings as any)?.social_github ?? FALLBACK_DATA.github,
-			x: (settings as any)?.social_x ?? FALLBACK_DATA.x,
-			email: (settings as any)?.social_email ?? FALLBACK_DATA.email,
-			establishedYear:
-				(settings as any)?.established_year ??
-				FALLBACK_DATA.establishedYear,
-			location: (settings as any)?.location ?? FALLBACK_DATA.location,
-			focus: (settings as any)?.focus ?? FALLBACK_DATA.focus,
-			projectCount:
-				(projects as any)?.[0]?.count?.["*"] ??
-				FALLBACK_DATA.projectCount,
-			aurCount:
-				(aurPackages as any)?.[0]?.count?.["*"] ?? FALLBACK_DATA.aurCount,
-			postCount:
-				(posts as any)?.[0]?.count?.["*"] ?? FALLBACK_DATA.postCount,
-		};
-	} catch (err) {
-		console.warn(
-			"[home] Directus 读取失败,使用 FALLBACK_DATA。原因:",
-			(err as Error)?.message ?? err,
-		);
-		return FALLBACK_DATA;
-	}
-}
-
-const data = await loadHomeData();
-
-/* ----------------------------------------------------------------------------
- * 右栏内容:核心能力九宫格
- * ----------------------------------------------------------------------------
- * 9 张卡片,按 ZerxLab 的实际关注方向组织,对应首页 "FEATURES" 分区。
- * 内容与品牌定位(全栈/性能/开源)强相关,不是空话。
- * -------------------------------------------------------------------------- */
-
-interface FeatureItem {
-	number: string;
-	eyebrow: { zh: string; en: string };
-	badge?: string;
-	title: { zh: string; en: string };
-	description: { zh: string; en: string };
-	tags?: string[];
-}
-
-const FEATURES: readonly FeatureItem[] = [
-	{
-		number: "01",
-		eyebrow: { zh: "全栈工程", en: "Full-Stack" },
-		title: { zh: "多语言协作开发", en: "Polyglot by design" },
-		description: {
-			zh: "TypeScript 用于前端,Go 用于后端服务,Rust 用于系统工具,Python 用于脚本,按场景选型。",
-			en: "TypeScript for frontend, Go for services, Rust for systems tooling, Python for scripts.",
-		},
-		tags: ["TypeScript", "Rust", "Go", "Python"],
-	},
-	{
-		number: "02",
-		eyebrow: { zh: "高性能", en: "High Performance" },
-		title: { zh: "WordZero 对比 Python 快 21×", en: "WordZero: 21× over Python" },
-		description: {
-			zh: "Go 实现的零依赖 OOXML 引擎,单文档处理平均 2.62ms,内置 18 种预定义样式。",
-			en: "Zero-dependency Go OOXML engine, 2.62ms average per document, 18 built-in styles.",
-		},
-		tags: ["Benchmark", "Profiling", "Zero-dep"],
-	},
-	{
-		number: "03",
-		eyebrow: { zh: "系统编程", en: "Systems" },
-		title: { zh: "rmx:Rust 并行目录删除", en: "rmx: parallel rm for Windows" },
-		description: {
-			zh: "基于 Rayon 并行与 NTFS API,在 Windows 下处理 node_modules 等深层目录比原生方式快一个数量级,并保证符号链接安全。",
-			en: "Built on Rayon and the NTFS API. Removes deeply nested trees like node_modules an order of magnitude faster than native tooling, with symlink safety.",
-		},
-	},
-	{
-		number: "04",
-		eyebrow: { zh: "开发者工具", en: "Dev Tools" },
-		title: { zh: "PenBridge / LspProxy", en: "PenBridge / LspProxy" },
-		description: {
-			zh: "PenBridge 将 Markdown 一键发布至知乎、掘金、CSDN 等平台;LspProxy 以透明代理方式将 LSP hover 与 diagnostics 实时翻译为中文。",
-			en: "PenBridge publishes Markdown to Zhihu / Juejin / CSDN in one click. LspProxy transparently translates LSP hover and diagnostics into Chinese.",
-		},
-	},
-	{
-		number: "05",
-		eyebrow: { zh: "AUR 维护", en: "AUR" },
-		title: { zh: "4 个 -bin 包常备", en: "4 -bin packages on AUR" },
-		description: {
-			zh: "为 Arch Linux 维护 pencil-bin、fluxdown-bin、dida365-bin、hexhub-bin,支持 yay -S 直接安装。",
-			en: "Maintaining pencil-bin, fluxdown-bin, dida365-bin, and hexhub-bin. Install via yay -S.",
-		},
-		tags: ["yay", "paru", "binary"],
-	},
-	{
-		number: "06",
-		eyebrow: { zh: "工程美学", en: "Craft" },
-		title: { zh: "视觉细节规范", en: "Visual details" },
-		description: {
-			zh: "等宽标签、虚线分隔、01/02/03 编号、tabular-nums 数字对齐,视觉参考 better-auth。",
-			en: "Monospace labels, hairline dashes, 01/02/03 numbering, tabular digits. Visual reference: better-auth.",
-		},
-	},
-] as const;
 
 /* ----------------------------------------------------------------------------
  * 左栏 CTA 按钮文案
@@ -524,61 +340,8 @@ const ctaSecondary = {
 		</div>
 	</div>
 
-	{/* ---------- FEATURES 九宫格 ---------- */}
-	<SectionHeader
-		eyebrow={t("section.features")}
-		count={FEATURES.length}
-		spacious
-	/>
-
-	<div
-		class:list={[
-			"mt-6 lg:mt-8",
-			"grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
-			// 靠父容器的 divide 虚线在卡片间形成分割
-			"border border-dashed border-[color:var(--color-hairline)]",
-			"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
-			// 让 divide 在行首列首不重绘成双线
-			"[&>*]:border-[color:var(--color-hairline)]",
-		]}
-	>
-		{
-			FEATURES.map((f) => (
-				<FeatureCard
-					number={f.number}
-					eyebrow={f.eyebrow[lang]}
-					badge={f.badge}
-					title={f.title[lang]}
-					description={f.description[lang]}
-				>
-					{f.tags && (
-						<Fragment slot="visual">
-							<div class="flex flex-wrap gap-1.5">
-								{f.tags.map((tag) => (
-									<span
-										class:list={[
-											"inline-flex items-center",
-											"px-2 py-[3px]",
-											"font-[var(--font-mono)]",
-											"text-[10px]",
-											"leading-none",
-											"tracking-[var(--tracking-wide)]",
-											"text-[color:var(--color-ink-secondary)]",
-											"bg-[color:var(--color-paper-muted)]/60",
-											"border border-[color:var(--color-hairline)]",
-											"rounded-[var(--radius-sm)]",
-										]}
-									>
-										{tag}
-									</span>
-								))}
-							</div>
-						</Fragment>
-					)}
-				</FeatureCard>
-			))
-		}
-	</div>
+	{/* ---------- PROJECTS 动态九宫格(GitHub 实时 star 排序) ---------- */}
+	<ProjectShowcase lang={lang} />
 
 	{/* ---------- 底部:博客 / 项目引导 ---------- */}
 	<SectionHeader

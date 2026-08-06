@@ -1,0 +1,31 @@
+---
+/**
+ * ============================================================================
+ * 博客列表页 (中文) —— 按分类筛选,第 1 页
+ * ----------------------------------------------------------------------------
+ * 路由:
+ *   /blog/cat/<slug>/            → 本文件(第 1 页)
+ *   /blog/cat/<slug>/page/N/     → src/pages/blog/cat/[cat]/page/[page].astro
+ *
+ * 实现:
+ *   getStaticPaths 用 listCategorySlugsWithPosts() 枚举"至少有一篇已发布
+ *   文章"的分类 slug —— 没有文章的分类不占位置,点进去也没意义。
+ * ============================================================================
+ */
+
+import BlogIndexPage from "@components/blog/BlogIndexPage.astro";
+import { listCategorySlugsWithPosts } from "@lib/queries/posts";
+
+export async function getStaticPaths() {
+	const slugs = await listCategorySlugsWithPosts();
+	return slugs.map((cat) => ({ params: { cat } }));
+}
+
+const { cat } = Astro.params;
+
+if (!cat) {
+	throw new Error("[blog/cat] getStaticPaths 枚举出的分类 slug 为空 —— 构建失败。");
+}
+---
+
+<BlogIndexPage lang="zh" page={1} categorySlug={cat} />

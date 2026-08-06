@@ -39,8 +39,8 @@ interface Props {
 	title?: string;
 	/** 页面描述(150-160 字符最佳) */
 	description?: string;
-	/** Open Graph 分享图(相对 /public 或绝对 URL) */
-	ogImage?: string;
+	/** Open Graph 分享图(相对 /public 或绝对 URL);未配置传 null 或不传 */
+	ogImage?: string | null;
 	/** OG 类型:website(默认)/ article(博客详情页) */
 	ogType?: "website" | "article";
 	/** 文章发布时间(仅 ogType=article 使用) */
@@ -77,7 +77,10 @@ const htmlLang = languageTags[lang];
 
 // 站点级配置(从环境/i18n 字典读取,保持与左栏 brand 一致)
 const SITE_NAME = "ZerxLab";
-const siteUrl = (import.meta.env.SITE ?? "https://zerx.dev").replace(
+// 静态构建下没有请求头可用,siteUrl 必须来自 astro.config 的 `site` 字段
+// (对应构建期环境变量 SITE_URL),而不是 import.meta.env.SITE —— 后者在
+// Astro 3+ 已被移除,继续使用会永远拿到 undefined 并静默回退到硬编码域名。
+const siteUrl = (Astro.site?.toString() ?? "https://zerx.dev").replace(
 	/\/$/,
 	"",
 );
@@ -96,12 +99,15 @@ const pageDescription = description ?? t("brand.description");
 const canonicalUrl = canonical ?? new URL(Astro.url.pathname, siteUrl).href;
 
 // ---------- OG Image ----------
-// 支持相对路径(拼 siteUrl)/ 绝对 URL / 默认站点 OG
+// ogImage 来自调用方(通常是 loadSiteSettings().ogImage 或文章 cover),
+// 语义是 "/public 下的相对路径" 或 null(未配置)。站内没有兜底默认图,
+// 未配置时不应该拼出一个 404 的 URL —— 因此 null/undefined 时不解析,
+// 由下方渲染逻辑整体跳过 og:image / twitter:image 标签。
 const resolvedOgImage = ogImage
 	? /^https?:\/\//i.test(ogImage)
 		? ogImage
 		: new URL(ogImage, siteUrl).href
-	: new URL("/og-default.png", siteUrl).href;
+	: null;
 
 // ---------- hreflang 多语言互指 ----------
 const hreflangLinks = getHreflangLinks(Astro.url, siteUrl);
@@ -143,9 +149,13 @@ const generator = Astro.generator;
 <meta property="og:title" content={pageTitle} />
 <meta property="og:description" content={pageDescription} />
 <meta property="og:url" content={canonicalUrl} />
-<meta property="og:image" content={resolvedOgImage} />
-<meta property="og:image:width" content="1200" />
-<meta property="og:image:height" content="630" />
+{resolvedOgImage && (
+	<>
+		<meta property="og:image" content={resolvedOgImage} />
+		<meta property="og:image:width" content="1200" />
+		<meta property="og:image:height" content="630" />
+	</>
+)}
 <meta property="og:locale" content={htmlLang.replace("-", "_")} />
 {lang === "zh" ? (
 	<meta property="og:locale:alternate" content="en_US" />
@@ -165,10 +175,10 @@ const generator = Astro.generator;
 )}
 
 {/* ---------- Twitter Card ---------- */}
-<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:card" content={resolvedOgImage ? "summary_large_image" : "summary"} />
 <meta name="twitter:title" content={pageTitle} />
 <meta name="twitter:description" content={pageDescription} />
-<meta name="twitter:image" content={resolvedOgImage} />
+{resolvedOgImage && <meta name="twitter:image" content={resolvedOgImage} />}
 
 {/* ---------- Favicon / 图标 ---------- */}
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

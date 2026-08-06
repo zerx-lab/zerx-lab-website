@@ -1,0 +1,111 @@
+---
+/**
+ * ============================================================================
+ * ProjectShowcase - 首页「开源项目」动态九宫格
+ * ----------------------------------------------------------------------------
+ * 取代原先手写死的 FEATURES 六宫格:卡片内容改为构建期从 GitHub 实时拉取,
+ * 按 star 降序排列,中英文页面共用本组件(只差一个 lang prop)。
+ *
+ * 数据来源:@lib/queries/projects 的 loadLiveProjects({ includeUnlisted: true })
+ *   —— 账号下全部公开仓库(含 fork 与归档,不做收录过滤),按 stars 降序,
+ *   projects.json 只用于补双语描述与 techStack。首页取前 N 个,口径就是
+ *   "star 最多的前 N 个仓库":不因为缺描述、是 fork 就跳过,否则会漏掉账号里
+ *   star 最高的仓库,和"动态排名"的语义冲突。fork 在 eyebrow 上标注。
+ *
+ *   与 /projects 共用同一个查询层,保证同一次构建里两页的数字与顺序一致。
+ *
+ * 降级:GitHub 拉取失败时查询层回落到 projects.json 快照,页面照常渲染。
+ * ============================================================================
+ */
+
+import SectionHeader from "@components/ui/SectionHeader.astro";
+import FeatureCard from "@components/ui/FeatureCard.astro";
+import { pickLang } from "@lib/content";
+import { loadLiveProjects } from "@lib/queries/projects";
+import { useTranslations, useTranslatedPath } from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+
+interface Props {
+	lang: Lang;
+	/** 展示几张卡片,默认 6(3 列 × 2 行) */
+	limit?: number;
+}
+
+const { lang, limit = 6 } = Astro.props;
+const t = useTranslations(lang);
+const tp = useTranslatedPath(lang);
+
+/* ----------------------------------------------------------------------------
+ * 数据获取
+ * -------------------------------------------------------------------------- */
+
+const { items } = await loadLiveProjects({ includeUnlisted: true });
+const cards = items.slice(0, limit);
+
+/** 1527 → "1.5k";首页卡片徽标空间有限,四位数以上折算 */
+function formatStars(n: number): string {
+	return n >= 1000 ? `${(n / 100 / 10).toFixed(1)}k` : String(n);
+}
+
+/** eyebrow:主语言 + fork 标记(fork 来的仓库不冒充自研) */
+function eyebrowOf(card: (typeof cards)[number]): string {
+	const base = card.language !== "Unknown" ? card.language : t("nav.projects");
+	return card.fork ? `${base} · Fork` : base;
+}
+---
+
+<SectionHeader
+	eyebrow={t("section.projects")}
+	count={cards.length}
+	linkText={lang === "zh" ? "全部项目 →" : "All projects →"}
+	linkHref={tp("/projects")}
+	spacious
+/>
+
+<div
+	class:list={[
+		"mt-6 lg:mt-8",
+		"grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
+		"border border-dashed border-[color:var(--color-hairline)]",
+		"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
+		"[&>*]:border-[color:var(--color-hairline)]",
+	]}
+>
+	{
+		cards.map((card, i) => (
+			<FeatureCard
+				number={i + 1}
+				eyebrow={eyebrowOf(card)}
+				badge={`★ ${formatStars(card.stars)}`}
+				title={card.name}
+				description={pickLang(card.description, lang)}
+				href={card.githubUrl}
+			>
+				{card.techStack.length > 0 && (
+					<Fragment slot="visual">
+						<div class="flex flex-wrap gap-1.5">
+							{card.techStack.slice(0, 4).map((tag) => (
+								<span
+									class:list={[
+										"inline-flex items-center",
+										"px-2 py-[3px]",
+										"font-[var(--font-mono)]",
+										"text-[10px]",
+										"leading-none",
+										"tracking-[var(--tracking-wide)]",
+										"text-[color:var(--color-ink-secondary)]",
+										"bg-[color:var(--color-paper-muted)]/60",
+										"border border-[color:var(--color-hairline)]",
+										"rounded-[var(--radius-sm)]",
+									]}
+								>
+									{tag}
+								</span>
+							))}
+						</div>
+					</Fragment>
+				)}
+			</FeatureCard>
+		))
+	}
+</div>

@@ -3,21 +3,20 @@ import { defineConfig } from "astro/config";
 import react from "@astrojs/react";
 import mdx from "@astrojs/mdx";
 import sitemap from "@astrojs/sitemap";
-import node from "@astrojs/node";
+
 import tailwindcss from "@tailwindcss/vite";
 
 // https://astro.build/config
 export default defineConfig({
 	site: process.env.SITE_URL || "https://zerx.dev",
 
-	// 部署策略:全站 SSR (Node standalone)
-	// - 以 Directus 实时数据为准,后台改动立即对用户可见
-	// - 缓存策略在 src/middleware.ts 统一下发 Cache-Control 头,
-	//   由上游 CDN / nginx 做边缘缓存,实时性与源站压力在 HTTP 层平衡
-	// - 运行时需要环境变量:DIRECTUS_URL / DIRECTUS_READ_TOKEN / SITE_URL
-	// - 入口:node ./dist/server/entry.mjs,默认监听 4321
-	output: "server",
-	adapter: node({ mode: "standalone" }),
+	// 部署策略:全站静态预渲染(output: "static")
+	// - 内容源是仓库内的 src/content/**,构建期一次性读完,运行时零外部依赖
+	// - 产物是纯静态文件,交给 GitHub Pages / 任意 CDN 托管,无需 Node 进程
+	// - 缓存由托管平台负责(public/_headers),不再有 SSR middleware
+	// - 构建期需要的环境变量:SITE_URL(canonical/RSS/sitemap)、
+	//   GITHUB_TOKEN(可选,拉 repo stars)
+	output: "static",
 
 	// i18n 策略:
 	// --------------------------------------------------------------------------

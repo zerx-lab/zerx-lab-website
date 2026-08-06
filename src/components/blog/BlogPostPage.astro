@@ -6,10 +6,10 @@
  * 为什么抽成独立组件:
  *   中文 /blog/[slug] 与英文 /en/blog/[slug] 两个动态路由入口复用完全相同
  *   的渲染逻辑。本组件负责:
- *     1. 按 slug 从 Directus / Fallback 拉取单篇文章
- *     2. 把 Bilingual 字段按当前 lang 解包
- *     3. 渲染 Markdown 正文(含 TOC 抽取、Shiki 代码高亮、字数统计)
- *     4. 组合左栏(文章 meta)与右栏(正文 + TOC + 上一篇/下一篇)
+ *     1. 消费页面层已经查好的 PostVM(不再自己查一次 loadPostBySlug)
+ *     2. 用 astro:content 的 render() 渲染 Markdown 正文,拿到 <Content />
+ *        与 TOC 用的 headings 列表
+ *     3. 组合左栏(文章 meta)与右栏(正文 + TOC + 上一篇/下一篇 + 评论)
  *
  * 左栏信息布局:
  *   - 覆盖默认 LabMark,改为展示文章 meta 卡片
@@ -20,27 +20,32 @@
  *   - BLOG · slug 面包屑
  *   - 文章标题 + excerpt
  *   - TOC(仅当文章有 H2/H3 时显示)
- *   - Markdown 正文(prose 样式)
+ *   - Markdown 正文(prose 样式,<Content /> 渲染)
  *   - 分割线 + 上一篇 / 下一篇导航
+ *   - giscus 评论区(未配置时静默跳过)
  *
- * 使用方式(页面文件,SSR):
+ * 使用方式(页面文件,静态构建,getStaticPaths 枚举 slug):
  *   ---
  *   import BlogPostPage from "@components/blog/BlogPostPage.astro";
- *   const { slug } = Astro.params;
- *   if (!slug) return new Response(null, { status: 404 });
+ *   import { loadPostBySlug } from "@lib/queries/posts";
+ *   const post = await loadPostBySlug(slug, lang);
+ *   if (!post) throw new Error(...); // 静态构建下不可达,宁可构建失败
  *   ---
- *   <BlogPostPage slug={slug} />
+ *   <BlogPostPage post={post} />
  *
- * 错误处理:
- *   - slug 不存在 → 直接 return 404 Response(运行时由 loadPostBySlug 判定)
- *   - Markdown 渲染失败 → 降级为纯文本 <pre>,不让页面炸
+ * 为什么不在组件内部再查一次文章:
+ *   页面文件已经需要 loadPostBySlug 来产出运行时数据,把查好的 PostVM
+ *   直接当 prop 传进来,避免同一篇文章在页面 + 组件里各查一次
+ *   Content Collection。
  * ============================================================================
  */
 
+import { render } from "astro:content";
 import AppShell from "@layouts/AppShell.astro";
 import SectionHeader from "@components/ui/SectionHeader.astro";
 import MetaRow from "@components/ui/MetaRow.astro";
 import TableOfContents from "@components/blog/TableOfContents.astro";
+import Comments from "@components/blog/Comments.astro";
 import Logo from "@components/ui/Logo.astro";
 import {
 	getLangFromUrl,
@@ -50,20 +55,16 @@ import {
 	formatDateCompact,
 } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
-import {
-	loadPostBySlug,
-	loadAdjacentPosts,
-	type PostVM,
-} from "@lib/queries/posts";
-import { renderMarkdown, type MarkdownHeading } from "@lib/markdown";
+import { loadAdjacentPosts, type PostVM } from "@lib/queries/posts";
+import { readingStats } from "@lib/reading-time";
 import "@styles/prose.css";
 
 interface Props {
-	/** 文章 slug(来自 dynamic route 的 Astro.params.slug) */
-	slug: string;
+	/** 页面层已查好的文章 ViewModel(避免组件内再查一次 Content Collection) */
+	post: PostVM;
 }
 
-const { slug } = Astro.props;
+const { post } = Astro.props;
 
 /* ----------------------------------------------------------------------------
  * 当前语言 / 翻译工具
@@ -74,71 +75,29 @@ const t = useTranslations(lang);
 const tp = useTranslatedPath(lang);
 
 /* ----------------------------------------------------------------------------
- * 加载文章
- * ----------------------------------------------------------------------------
- * 所有数据源优先级、fallback 降级、Directus fields 映射都收敛在
- * src/lib/queries/posts.ts,本文件只消费 PostVM。
- *
- * 三层优先级(由 loadPostBySlug 内部处理):
- *   1. Directus posts + translations + author + category + tags
- *   2. fallback-data 的 FALLBACK_POSTS
- *   3. 都找不到 → null
- *
- * 404 边界在页面文件(src/pages/blog/[slug].astro 与 /en/blog/[slug].astro)
- * 已经前置拦截:slug 查不到时页面直接 Astro.redirect("/404", 404),
- * 根本不会渲染到本组件。本组件里若仍然拿到 null 属于"契约被破坏"的 bug,
- * 应当抛错而不是 return Response —— Astro 的 `.astro` 子组件里
- * return Response 行为未定义,会触发 ResponseSentError。
- * -------------------------------------------------------------------------- */
-
-const post: PostVM | null = await loadPostBySlug(slug, lang);
-
-if (!post) {
-	// 理论上不可达:页面层已前置拦截 null 情况。若真的走到这里,
-	// 说明调用方没按契约使用本组件,直接抛错便于排查而不是静默降级。
-	throw new Error(
-		`[BlogPostPage] loadPostBySlug("${slug}") returned null. ` +
-			`调用方应在页面级先做存在性判断并跳转 404,不应把不存在的 slug 传进本组件。`,
-	);
-}
-
-/* ----------------------------------------------------------------------------
  * 相邻文章(上一篇/下一篇)
  * -------------------------------------------------------------------------- */
 
-const { previous: prevVM, next: nextVM } = await loadAdjacentPosts(slug, lang);
+const { previous: prevVM, next: nextVM } = await loadAdjacentPosts(
+	post.slug,
+	lang,
+);
 
 /* ----------------------------------------------------------------------------
- * Markdown 渲染
+ * 正文渲染(Astro 6 Content Layer)
  * ----------------------------------------------------------------------------
- * 失败兜底:渲染失败时降级为转义后的 <pre>,保证文章页永远能打开。
+ * render() 内部跑 remark/rehype 管线(含 Shiki 双主题高亮,见
+ * astro.config.mjs 的 markdown.shikiConfig),渲染失败会在构建期直接
+ * 让 `bun build` 报错 —— 比运行时兜底降级为 <pre> 更早暴露问题,
+ * 静态站也没有"运行时"可以兜底,因此不再需要 try/catch 降级。
+ *
+ * 阅读时长直接用查询层已经算好的 post.readingTime(与列表页/搜索索引
+ * 同一份口径);字数额外算一次仅用于"字数"这一行展示。
  * -------------------------------------------------------------------------- */
 
-let renderedHtml = "";
-let headings: readonly MarkdownHeading[] = [];
-let wordCount = 0;
-let readingTimeMin = post.readingTime;
-
-try {
-	const result = await renderMarkdown(post.content);
-	renderedHtml = result.html;
-	headings = result.headings;
-	wordCount = result.wordCount;
-	// 以实际字数推算的阅读时长优先,fallback 到数据字段
-	if (result.readingTimeMin > 0) {
-		readingTimeMin = result.readingTimeMin;
-	}
-} catch (err) {
-	console.warn(
-		`[blog/${slug}] Markdown 渲染失败,降级为纯文本。原因:`,
-		(err as Error)?.message ?? err,
-	);
-	const escaped = post.content
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;");
-	renderedHtml = `<pre>${escaped}</pre>`;
-}
+const { Content, headings } = await render(post.entry);
+const { wordCount } = readingStats(post.content);
+const readingTimeMin = post.readingTime;
 
 /* ----------------------------------------------------------------------------
  * 页面级文案
@@ -185,7 +144,7 @@ const C = COPY[lang] ?? COPY.zh;
  * 提升搜索引擎对博客内容的理解。仅在文章有作者与日期时生成。
  * -------------------------------------------------------------------------- */
 
-const siteUrl = (import.meta.env.SITE ?? "https://zerx.dev").replace(
+const siteUrl = (Astro.site?.toString() ?? "https://zerx.dev").replace(
 	/\/$/,
 	"",
 );
@@ -221,8 +180,8 @@ const jsonLd = JSON.stringify({
 ---
 
 <AppShell
-	title={post.title}
-	description={post.excerpt}
+	title={post.seoTitle ?? post.title}
+	description={post.seoDescription ?? post.excerpt}
 	ogType="article"
 	articlePublishedTime={post.date}
 	articleModifiedTime={post.updatedDate ?? undefined}
@@ -705,8 +664,9 @@ const jsonLd = JSON.stringify({
 				// 全宽填充,不再施加 ch 级别的 max-width 上限
 				"max-w-none",
 			]}
-			set:html={renderedHtml}
-		/>
+		>
+			<Content />
+		</article>
 
 		{/* TOC(桌面端右侧 sticky 贴边,平板/移动置于正文上方) */}
 		{headings.length > 0 && (
@@ -783,7 +743,7 @@ const jsonLd = JSON.stringify({
 			{/* 上一篇 */}
 			{prevVM ? (
 				<a
-					href={tp(`/blog/${prevVM.slug}`)}
+					href={tp(`/blog/${prevVM.slug}/`)}
 					class:list={[
 						"group",
 						"flex flex-col gap-2",
@@ -843,7 +803,7 @@ const jsonLd = JSON.stringify({
 			{/* 下一篇 */}
 			{nextVM ? (
 				<a
-					href={tp(`/blog/${nextVM.slug}`)}
+					href={tp(`/blog/${nextVM.slug}/`)}
 					class:list={[
 						"group",
 						"flex flex-col gap-2 items-end text-right",
@@ -900,6 +860,9 @@ const jsonLd = JSON.stringify({
 			)}
 		</nav>
 	)}
+
+	{/* ---- 评论区(giscus,未配置 PUBLIC_GISCUS_* 时静默跳过) ---- */}
+	<Comments lang={lang} />
 </AppShell>
 
 <style>

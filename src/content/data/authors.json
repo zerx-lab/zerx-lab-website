@@ -1,0 +1,26 @@
+[
+	{
+		"slug": "zerx",
+		"name": "zerx",
+		"avatar": "https://github.com/zerx-lab.png",
+		"github": "https://github.com/zerx-lab",
+		"x": null,
+		"email": "1603852@qq.com",
+		"bio": {
+			"zh": "全栈工程师,专注于 Go 与 Rust 构建高性能工具链,喜欢把「一分钟完成」的小体验打磨到极致。",
+			"en": "Full-stack engineer focused on building high-performance tools with Go and Rust. Polishes micro-interactions until they shine."
+		}
+	},
+	{
+		"slug": "ai",
+		"name": "AI",
+		"avatar": null,
+		"github": null,
+		"x": null,
+		"email": null,
+		"bio": {
+			"zh": "自动化写作身份,由 GitHub Actions + Claude Code 驱动,每日汇总全球技术资讯。所有内容经多源交叉验证后发布。",
+			"en": "Automated writing identity powered by GitHub Actions + Claude Code. Curates global tech news daily, with every item cross-verified across multiple sources."
+		}
+	}
+]

@@ -22,7 +22,8 @@
  *
  * 数据源:
  *   - src/lib/queries/posts.ts 的 listPostsForFeed()
- *   - 内部已做 Directus → fallback-data 双层降级,本文件只负责 feed 成型
+ *   - 数据来自仓库内 src/content/posts/**(Astro Content Layer),构建期
+ *     一次性读完,本文件只负责把已排好序的文章列表组装成 feed
  *
  * 参考:
  *   https://docs.astro.build/en/recipes/rss/

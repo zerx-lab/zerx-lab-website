@@ -28,9 +28,9 @@
  * 用法:
  *   <TableOfContents
  *     headings={[
- *       { level: 2, text: "引言", slug: "intro" },
- *       { level: 3, text: "为什么要做这个", slug: "why" },
- *       { level: 2, text: "技术栈", slug: "stack" },
+ *       { depth: 2, text: "引言", slug: "intro" },
+ *       { depth: 3, text: "为什么要做这个", slug: "why" },
+ *       { depth: 2, text: "技术栈", slug: "stack" },
  *     ]}
  *   />
  *
@@ -43,10 +43,10 @@
  */
 
 import { getLangFromUrl } from "@i18n/utils";
-import type { MarkdownHeading } from "@lib/markdown";
+import type { MarkdownHeading } from "astro";
 
 interface Props {
-	/** 标题列表(来自 renderMarkdown 的返回值) */
+	/** 标题列表(来自 astro:content render() 的返回值) */
 	headings: readonly MarkdownHeading[];
 	/** 最小层级(默认 2,即从 H2 开始) */
 	minDepth?: number;
@@ -98,13 +98,13 @@ interface TocItem {
 const items: readonly TocItem[] = headings
 	.filter(
 		(h: MarkdownHeading) =>
-			h.level >= minDepth && h.level <= maxDepth && h.slug,
+			h.depth >= minDepth && h.depth <= maxDepth && h.slug,
 	)
 	.map((h: MarkdownHeading): TocItem => {
-		const offset = h.level - minDepth;
+		const offset = h.depth - minDepth;
 		const indent = (offset >= 2 ? 2 : offset) as 0 | 1 | 2;
 		return {
-			level: h.level,
+			level: h.depth,
 			indent,
 			text: h.text,
 			slug: h.slug,

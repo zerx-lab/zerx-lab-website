@@ -46,7 +46,7 @@
 import { getLangFromUrl, useTranslations, formatDate } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 
-/** 标签数据结构(与 FALLBACK_TAGS 解析后的单项一致) */
+/** 标签数据结构(与 PostVM.tags 的单项一致) */
 export interface PostCardTag {
 	/** URL slug,用于生成跳转链接或作为 key */
 	slug: string;

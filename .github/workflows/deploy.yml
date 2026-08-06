@@ -1,29 +1,33 @@
 # ============================================================================
-# Deploy - 推送到部署分支后自动 SSH 到服务器,拉代码 + docker compose 重建上线
+# Deploy - 静态构建后 rsync 到自有服务器
 # ----------------------------------------------------------------------------
+# 触发方式:
+#   - push 到 main / 手动触发
+#   - 被其它 workflow `uses: ./.github/workflows/deploy.yml` 复用调用
+#     (daily-tech-news.yml 就这么干 —— GITHUB_TOKEN 推的 commit 不会触发
+#      上面的 push 事件,必须显式调用)
+#
 # 流程:
-#   1. push 到目标分支(默认 main)触发,也支持手动触发
-#   2. 通过 SSH 私钥连接到部署服务器
-#   3. 在 DEPLOY_PATH 目录执行:
-#        · git fetch + reset --hard 到目标分支(确保与远端一致,避免本地脏改阻塞)
-#        · docker compose up -d --build(重建镜像并滚动替换容器)
-#        · docker image prune(清理悬空镜像,防止磁盘膨胀)
+#   1. checkout(可指定 ref)→ 装 Bun → 装依赖 → `astro build` 产出全静态 dist/
+#   2. rsync -a --delete 把 dist/ 推到 ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}
 #
-# 前置约定:
-#   - 服务器 DEPLOY_PATH 目录已是本仓库的 git clone,且已配置好可拉取的 remote
-#   - 服务器 DEPLOY_PATH 目录下已存在 .env(含 DIRECTUS_URL / DIRECTUS_READ_TOKEN
-#     等敏感信息)。CI 不下发 .env,运行时变量完全由服务器本地 .env 提供,
-#     docker compose 自动读取同目录 .env 做变量插值。
+# 为什么用 rsync 而不是打包上传:
+#   增量传输,一次日常发布通常只有几个改动的 HTML + 一个新 _astro chunk。
+#   --delete 保证服务器上不残留上一版的孤儿文件(旧文章下线后不会还能访问)。
 #
-# 必需的 GitHub Secrets:
-#   - DEPLOY_HOST     — 服务器 IP / 域名
-#   - DEPLOY_USER     — SSH 登录用户名
-#   - DEPLOY_SSH_KEY  — SSH 私钥全文(对应服务器上 authorized_keys 的公钥)
-#   - DEPLOY_PATH     — 服务器上仓库所在绝对路径
+# 必需的 GitHub Secrets(敏感):
+#   - DEPLOY_SSH_KEY      — 部署用私钥(ed25519),对应公钥已在服务器
+#                           ~/.ssh/authorized_keys(注释 github-actions-deploy@zerx-lab-website)
+#   - DEPLOY_KNOWN_HOSTS  — 服务器 SSH 主机公钥,钉住防中间人
 #
-# 可选的 GitHub Secrets / Variables:
-#   - DEPLOY_PORT     — SSH 端口,缺省 22
-#   - DEPLOY_BRANCH   — 部署分支,缺省 main
+# 必需的 GitHub Variables(非敏感,值可见可改):
+#   - DEPLOY_HOST — 服务器地址
+#   - DEPLOY_USER — SSH 用户
+#   - DEPLOY_PATH — 站点根目录绝对路径(必须落在 nginx 容器能读到的挂载点内)
+#
+# 可选 Secrets(giscus 评论区,缺失则评论区静默不渲染):
+#   - PUBLIC_GISCUS_REPO / PUBLIC_GISCUS_REPO_ID
+#   - PUBLIC_GISCUS_CATEGORY / PUBLIC_GISCUS_CATEGORY_ID
 # ============================================================================
 
 name: Deploy
@@ -33,12 +37,20 @@ on:
     branches:
       - main
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: "要构建的 git ref / SHA;留空则用触发事件的 SHA"
+        required: false
+        type: string
 
 concurrency:
-  # 同一时刻只允许一个部署在跑;新 push 进来排队等待上一个结束,
-  # 不取消进行中的部署(避免 compose 重建到一半被打断留下半残容器)
+  # 同一时刻只允许一次部署;新的排队等待,不打断进行中的 rsync
   group: deploy
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
@@ -46,50 +58,71 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          # 端口缺省 22;在 secret 留空时回退
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
-          script_stop: true
-          script: |
-            set -euo pipefail
+          # workflow_call 时 github.sha 仍是 caller 触发时的旧 SHA;
+          # 调用方(daily-tech-news)会把 push 之后的新 HEAD 传进来
+          ref: ${{ inputs.ref || github.sha }}
 
-            DEPLOY_PATH="${{ secrets.DEPLOY_PATH }}"
-            DEPLOY_BRANCH="${{ secrets.DEPLOY_BRANCH || 'main' }}"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
-            echo "▶ 部署目录: ${DEPLOY_PATH}"
-            echo "▶ 部署分支: ${DEPLOY_BRANCH}"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
-            cd "${DEPLOY_PATH}"
+      - name: Build static site
+        run: bun run build
+        env:
+          SITE_URL: https://zerx.dev
+          # 构建期读 GitHub API 拉 projects 的 stars/forks
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLIC_GISCUS_REPO: ${{ secrets.PUBLIC_GISCUS_REPO }}
+          PUBLIC_GISCUS_REPO_ID: ${{ secrets.PUBLIC_GISCUS_REPO_ID }}
+          PUBLIC_GISCUS_CATEGORY: ${{ secrets.PUBLIC_GISCUS_CATEGORY }}
+          PUBLIC_GISCUS_CATEGORY_ID: ${{ secrets.PUBLIC_GISCUS_CATEGORY_ID }}
 
-            # 确保 .env 存在(运行时敏感变量来源),缺失直接报错暴露配置问题
-            if [ ! -f .env ]; then
-              echo "::error::部署目录缺少 .env 文件: ${DEPLOY_PATH}/.env"
-              exit 1
-            fi
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # 钉住主机公钥,不用 StrictHostKeyChecking=no 的 TOFU
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
-            echo "▶ 拉取最新代码..."
-            git fetch --prune origin
-            # 强制对齐远端分支:丢弃服务器本地任何脏改,保证可重复部署
-            git reset --hard "origin/${DEPLOY_BRANCH}"
+      - name: Rsync dist to server
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
 
-            echo "▶ 重建并启动容器..."
-            # 优先用 docker compose(v2 插件);老机器回退 docker-compose
-            if docker compose version >/dev/null 2>&1; then
-              COMPOSE="docker compose"
-            else
-              COMPOSE="docker-compose"
-            fi
-            $COMPOSE up -d --build
+          test -f dist/index.html || { echo "::error::dist/index.html 不存在,构建产物不完整"; exit 1; }
 
-            echo "▶ 清理悬空镜像..."
-            docker image prune -f
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_PATH}'"
 
-            echo "▶ 当前服务状态:"
-            $COMPOSE ps
+          rsync -az --delete --checksum \
+            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes" \
+            dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
 
-            echo "✓ 部署完成"
+          echo "✓ 已部署到 ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
+
+      - name: Verify site responds
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          # 从服务器本机打源站,绕开 CDN 缓存,确认这次的产物真的在伺服
+          CODE=$(ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "curl -sS -k -o /dev/null -w '%{http_code}' --resolve zerx.dev:443:127.0.0.1 https://zerx.dev/ --max-time 15")
+          echo "源站首页返回: ${CODE}"
+          [ "$CODE" = "200" ] || { echo "::error::源站首页返回 ${CODE},部署后站点不可用"; exit 1; }

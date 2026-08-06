@@ -1,0 +1,126 @@
+---
+/**
+ * ============================================================================
+ * Comments - giscus 评论区(基于 GitHub Discussions)
+ * ----------------------------------------------------------------------------
+ * 数据来源:giscus 官方 <script src="https://giscus.app/client.js">,
+ * data-* 配置来自构建期注入的 PUBLIC_GISCUS_* 环境变量,运行时由 giscus.app
+ * 的客户端脚本接管渲染(内嵌 iframe)。
+ *
+ * 环境变量(构建期,public,见部署 workflow secrets):
+ *   PUBLIC_GISCUS_REPO          仓库,形如 "owner/repo"
+ *   PUBLIC_GISCUS_REPO_ID       仓库 ID(giscus 配置向导生成)
+ *   PUBLIC_GISCUS_CATEGORY      Discussion 分类名
+ *   PUBLIC_GISCUS_CATEGORY_ID   Discussion 分类 ID
+ *
+ * 任一缺失 → 组件整体不渲染任何内容(静默跳过),不报错、不占位。
+ * 本地开发 / 未配置 giscus 的临时部署因此不会出现空评论区块。
+ *
+ * 主题跟随:
+ *   本站深浅色由 ThemeToggle.astro 在 <html> 上加 / 去 `.dark` 类实现
+ *   (见 global.css)。giscus 没有 CSS 变量联动能力,只能整体切换主题名,
+ *   这里做两件事让它跟手:
+ *     1. 挂载时按当前 `.dark` 类算出初始 theme("light" / "dark"),
+ *        避免用 preferred_color_scheme 时和站点手动切换的主题不一致。
+ *     2. 用 MutationObserver 监听 `.dark` 类变化(不管是 ThemeToggle 点击
+ *        还是系统 prefers-color-scheme 变化触发的),通过 giscus 官方的
+ *        postMessage setConfig API 实时同步 iframe 内的主题,无需刷新页面。
+ * ============================================================================
+ */
+
+import SectionHeader from "@components/ui/SectionHeader.astro";
+import { useTranslations } from "@i18n/utils";
+import type { Lang } from "@i18n/ui";
+
+interface Props {
+	/** 当前语言,决定评论区标题文案与传给 giscus 的 data-lang */
+	lang: Lang;
+}
+
+const { lang } = Astro.props;
+const t = useTranslations(lang);
+
+const repo = import.meta.env.PUBLIC_GISCUS_REPO;
+const repoId = import.meta.env.PUBLIC_GISCUS_REPO_ID;
+const category = import.meta.env.PUBLIC_GISCUS_CATEGORY;
+const categoryId = import.meta.env.PUBLIC_GISCUS_CATEGORY_ID;
+
+// 四个变量任一缺失就整体不渲染 —— 不给未配置 giscus 的环境(本地开发 /
+// 临时预览部署)留一个打不开的空评论区。
+const isConfigured = Boolean(repo && repoId && category && categoryId);
+
+const giscusLang = lang === "zh" ? "zh-CN" : "en";
+---
+
+{
+	isConfigured && (
+		<section aria-label={t("blog.comments")} class="mt-2 mb-16">
+			<SectionHeader eyebrow={t("blog.comments")} spacious />
+
+			<div
+				id="giscus-container"
+				class="mt-6 lg:mt-8"
+				data-repo={repo}
+				data-repo-id={repoId}
+				data-category={category}
+				data-category-id={categoryId}
+				data-lang={giscusLang}
+			/>
+		</section>
+	)
+}
+
+<script>
+	// ----------------------------------------------------------------------
+	// 挂载 giscus <script> + 站内主题实时同步
+	// 用 container.dataset 读配置,而不是把值直接内联进这段 <script> 源码,
+	// 避免仓库 / 未来协作者把这份文件误当成"写死配置"的地方去改。
+	// ----------------------------------------------------------------------
+
+	const container = document.getElementById("giscus-container");
+
+	if (container) {
+		const resolveTheme = (): "light" | "dark" =>
+			document.documentElement.classList.contains("dark") ? "dark" : "light";
+
+		const giscusScript = document.createElement("script");
+		giscusScript.src = "https://giscus.app/client.js";
+		giscusScript.async = true;
+		giscusScript.crossOrigin = "anonymous";
+		giscusScript.setAttribute("data-repo", container.dataset.repo ?? "");
+		giscusScript.setAttribute("data-repo-id", container.dataset.repoId ?? "");
+		giscusScript.setAttribute(
+			"data-category",
+			container.dataset.category ?? "",
+		);
+		giscusScript.setAttribute(
+			"data-category-id",
+			container.dataset.categoryId ?? "",
+		);
+		giscusScript.setAttribute("data-mapping", "pathname");
+		giscusScript.setAttribute("data-strict", "1");
+		giscusScript.setAttribute("data-reactions-enabled", "1");
+		giscusScript.setAttribute("data-emit-metadata", "0");
+		giscusScript.setAttribute("data-input-position", "top");
+		giscusScript.setAttribute("data-theme", resolveTheme());
+		giscusScript.setAttribute("data-lang", container.dataset.lang ?? "en");
+		container.appendChild(giscusScript);
+
+		// 站内切换 light/dark(或系统 prefers-color-scheme 变化)时,
+		// 把新主题通过 postMessage 同步给已经渲染好的 giscus iframe。
+		// 参考: https://github.com/giscus/giscus/blob/main/ADVANCED-USAGE.md
+		const observer = new MutationObserver(() => {
+			const iframe = document.querySelector<HTMLIFrameElement>(
+				"iframe.giscus-frame",
+			);
+			iframe?.contentWindow?.postMessage(
+				{ giscus: { setConfig: { theme: resolveTheme() } } },
+				"https://giscus.app",
+			);
+		});
+		observer.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ["class"],
+		});
+	}
+</script>

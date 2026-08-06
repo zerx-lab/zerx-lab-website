@@ -1,59 +1,65 @@
 /**
  * ============================================================================
- * ZerxLab Website - Posts 查询层
+ * 文章查询层(Content Collections)
  * ----------------------------------------------------------------------------
- * 博客详情页与相关路由的"数据网关"。把三个前端真正需要的操作收敛到此:
+ * 唯一数据源:src/content/posts/<slug>/{zh,en}.md(见 src/content.config.ts)。
  *
- *   1. listPublishedPostSlugs()    - 枚举所有已发布文章的 slug
- *      供 `src/pages/blog/[slug].astro` 与 `src/pages/en/blog/[slug].astro`
- *      的 getStaticPaths 用。两个入口共用同一套 slug(URL 不做翻译,靠 /en/
- *      前缀区分)。
+ * 双语模型:
+ *   一篇文章 = 一个目录 + 两个语言文件。entry.id 形如 "<slug>/zh"。
+ *   语言无关字段(date / author / category / tags / featured / cover / draft)
+ *   **以 zh 文件为准**,en 文件的同名字段被忽略,避免同一事实两处漂移。
+ *   en 文件缺失时英文页回落到中文正文。
  *
- *   2. loadPostBySlug(slug, lang)  - 单篇文章 + 关联(作者 / 分类 / 标签)
- *      返回渲染就绪的 PostVM;文章不存在返回 null;Directus 失败回落 fallback。
- *
- *   3. loadAdjacentPosts(slug)     - 按 date_published 降序相邻的文章
- *      生成"上一篇 / 下一篇"卡片,返回的已经是 PostVM(需要传 lang),
- *      以避免调用方重复处理 Bilingual 解包。
- *
- * 数据源优先级(每个函数都遵守):
- *   Directus(带 DIRECTUS_READ_TOKEN)→ fallback-data → 空值
- *
- *   - 任一层异常不会向外抛错,只打 console.warn 并降级
- *   - fallback 的存在保证 Directus 挂掉 / token 失效 / schema 变更不影响构建
- *
- * 为什么把这一块独立成文件:
- *   - BlogPostPage.astro 已经 300+ 行,再塞三段异构数据加载逻辑会更糟
- *   - RSS / sitemap / blog-index 未来可能复用 listPublishedPostSlugs
- *   - 抽离后配合 posts/index.ts 可以做单元测试(目前还没建,预留通路)
- * ============================================================================ */
+ * 与迁移前的差异:
+ *   - 不再有 status;用 frontmatter 的 draft 表达"不发布"
+ *   - listPostsPaged 不再接受搜索词 —— 静态站的搜索在客户端做
+ *     (索引由 src/pages/search/[lang].json.ts 构建期产出)
+ *   - PostVM 多带一个 entry 字段,供详情页调用 render() 渲染正文与 TOC
+ * ========================================================================== */
+
+import { getCollection, type CollectionEntry } from "astro:content";
 
 import {
-	directus,
-	readItems,
-	aggregate,
-	DIRECTUS_CONFIG,
-	assetUrl,
-} from "@/lib/directus";
-import {
-	findFallbackPost,
-	listFallbackPosts,
-	getAdjacentPosts,
-	findAuthor,
-	findCategory,
-	findTag,
+	loadAuthorMap,
+	loadCategoryMap,
+	loadTagMap,
 	pickLang,
-	FALLBACK_CATEGORIES,
-	type FallbackPost,
-} from "@/lib/fallback-data";
+	type AuthorData,
+	type CategoryData,
+} from "@/lib/content";
+import { readingStats } from "@/lib/reading-time";
 import type { Lang } from "@/i18n/ui";
+
+/**
+ * 文章 frontmatter —— `src/content.config.ts` 里 posts schema 的手写镜像。
+ *
+ * Astro 本版本的 Content Layer 没把 zod 推导传到 `entry.data`(退化成 any),
+ * 所以这里显式声明一次形状,再把 CollectionEntry 的 data 换掉。两边字段必须
+ * 同步修改,schema 是唯一的运行时校验。
+ */
+export interface PostFrontmatter {
+	title: string;
+	excerpt: string;
+	coverLabel: string;
+	seoTitle?: string;
+	seoDescription?: string;
+	date: Date;
+	updatedDate?: Date;
+	author: string;
+	category: string;
+	tags: string[];
+	featured: boolean;
+	cover?: string;
+	draft: boolean;
+}
+
+export type PostEntry = Omit<CollectionEntry<"posts">, "data"> & {
+	data: PostFrontmatter;
+};
 
 /* ----------------------------------------------------------------------------
  * 对外类型
- * ----------------------------------------------------------------------------
- * PostVM 是"博客详情页最终会渲染的形状"。两个数据源都要折成这个形状,
- * 页面组件 BlogPostPage.astro 已经按此消费,改动最小。
- * ---------------------------------------------------------------------------- */
+ * -------------------------------------------------------------------------- */
 
 /** 单个标签的展示形态(slug 做 key / 链接,name 做显示文本) */
 export interface PostTagVM {
@@ -62,13 +68,13 @@ export interface PostTagVM {
 }
 
 /**
- * 博客详情页的 ViewModel。
+ * 博客详情页 / 列表卡片共用的 ViewModel。
  *
  * 关键字段说明:
- *   - content      Markdown 原文,未渲染
- *   - coverLabel   封面缺失时的大字占位文本(列表卡片、OG 图都能用)
- *   - cover        封面图绝对 URL(Directus 来源会自动拼 /assets/<uuid>?...)
- *   - updatedDate  文章被编辑过才有值,未编辑过为 null —— 页面据此决定是否显示
+ *   - content      Markdown 原文,未渲染(搜索索引、摘要截断用)
+ *   - entry        Content Layer 条目;详情页 `render(entry)` 拿 Content + headings
+ *   - coverLabel   封面缺失时的大字占位文本
+ *   - updatedDate  文章被编辑过才有值,否则 null —— 页面据此决定是否显示
  */
 export interface PostVM {
 	slug: string;
@@ -88,333 +94,183 @@ export interface PostVM {
 	updatedDate: string | null;
 	readingTime: number;
 	featured: boolean;
+	seoTitle: string | null;
+	seoDescription: string | null;
+	entry: PostEntry;
 }
 
 /* ----------------------------------------------------------------------------
- * 语言代码映射
- * ----------------------------------------------------------------------------
- * 项目内部用 "zh" / "en" 这种短码(URL 与 i18n/ui.ts 的惯例);
- * Directus translations 表用完整 BCP 47 "zh-CN" / "en-US"。
- * 所有 Directus 交互都在本文件内完成,映射也收敛在此。
- * ---------------------------------------------------------------------------- */
+ * entry.id 解析
+ * -------------------------------------------------------------------------- */
 
-function langToDirectusCode(lang: Lang): "zh-CN" | "en-US" {
-	return lang === "zh" ? "zh-CN" : "en-US";
+interface ParsedId {
+	readonly slug: string;
+	readonly lang: Lang;
+}
+
+/** "<slug>/zh" → { slug, lang }。不符合约定的 id 返回 null(会被静默跳过)。 */
+function parseId(id: string): ParsedId | null {
+	const cut = id.lastIndexOf("/");
+	if (cut <= 0) return null;
+	const lang = id.slice(cut + 1);
+	if (lang !== "zh" && lang !== "en") return null;
+	return { slug: id.slice(0, cut), lang };
+}
+
+/* ----------------------------------------------------------------------------
+ * 索引:一次装载,全站共享
+ * ----------------------------------------------------------------------------
+ * 构建期同一个 Node 进程会渲染上百个页面,每页都重扫一遍 collection 是纯浪费。
+ * 这里按语言缓存一份「已排序的 slug → entry」索引。
+ * -------------------------------------------------------------------------- */
+
+interface PostIndex {
+	/** 按发布时间倒序 */
+	readonly ordered: readonly string[];
+	/** slug → 中文条目(语言无关字段的权威来源) */
+	readonly zh: ReadonlyMap<string, PostEntry>;
+	/** slug → 英文条目;缺失表示该文尚无英文版 */
+	readonly en: ReadonlyMap<string, PostEntry>;
+}
+
+let indexPromise: Promise<PostIndex> | null = null;
+
+async function buildIndex(): Promise<PostIndex> {
+	const entries = (await getCollection("posts")) as PostEntry[];
+
+	const zh = new Map<string, PostEntry>();
+	const en = new Map<string, PostEntry>();
+
+	for (const entry of entries) {
+		const parsed = parseId(entry.id);
+		if (!parsed) continue;
+		(parsed.lang === "zh" ? zh : en).set(parsed.slug, entry);
+	}
+
+	// 发布与否只看中文条目的 draft —— 它是语言无关字段的权威来源
+	const ordered = [...zh.entries()]
+		.filter(([, entry]) => !entry.data.draft)
+		.sort((a, b) => b[1].data.date.getTime() - a[1].data.date.getTime())
+		.map(([slug]) => slug);
+
+	return { ordered, zh, en };
+}
+
+function getIndex(): Promise<PostIndex> {
+	indexPromise ??= buildIndex();
+	return indexPromise;
+}
+
+/* ----------------------------------------------------------------------------
+ * entry → PostVM
+ * -------------------------------------------------------------------------- */
+
+interface Relations {
+	readonly authors: ReadonlyMap<string, AuthorData>;
+	readonly categories: ReadonlyMap<string, CategoryData>;
+	readonly tags: ReadonlyMap<string, { slug: string; name: { zh: string; en: string } }>;
+}
+
+let relationsPromise: Promise<Relations> | null = null;
+
+function getRelations(): Promise<Relations> {
+	relationsPromise ??= (async () => {
+		const [authors, categories, tags] = await Promise.all([
+			loadAuthorMap(),
+			loadCategoryMap(),
+			loadTagMap(),
+		]);
+		return { authors, categories, tags };
+	})();
+	return relationsPromise;
 }
 
 /**
- * 在一组 translations 里按语言代码挑一条。
- * 兼容 languages_code 是 M2O 被展开成 { code: "zh-CN" } 对象,或者只留字符串 code 两种形态。
- *
- * 返回值类型故意是 Record<string, any>:
- *   - Directus SDK 对深层嵌套 translations 的泛型推导覆盖不到业务字段
- *     (title / bio / name / cover_label 等都是 bootstrap 动态添加的)
- *   - 如果沿用传入泛型 T,调用处访问 .title / .bio 会触发 TS "Property does not exist"
- *   - 本文件已经把 Directus 查询结果当 any 处理,translation 子对象也保持同级别的宽松
- *
- * 本函数仅用于本文件内部,风险可控。
+ * 组装 ViewModel。
+ * `base` 是中文条目(语言无关字段来源),`localized` 是目标语言条目
+ * (英文缺失时二者相同 —— 英文页会显示中文正文,好过 404)。
  */
-function pickTranslation(
-	translations: readonly { languages_code?: unknown }[] | undefined | null,
-	langCode: string,
-): Record<string, any> | undefined {
-	if (!translations || translations.length === 0) return undefined;
-	return translations.find((x) => {
-		const code = x?.languages_code;
-		if (typeof code === "string") return code === langCode;
-		if (code && typeof code === "object" && "code" in code) {
-			return (code as { code?: string }).code === langCode;
-		}
-		return false;
-	}) as Record<string, any> | undefined;
-}
+function toVM(
+	slug: string,
+	base: PostEntry,
+	localized: PostEntry,
+	lang: Lang,
+	rel: Relations,
+): PostVM {
+	const shared = base.data;
+	const text = localized.data;
 
-/* ----------------------------------------------------------------------------
- * Fallback → PostVM
- * ----------------------------------------------------------------------------
- * 与 BlogPostPage.astro 里原本的 fallbackToVM 逻辑一致,这里收编以保持一致性。
- * 注意:authorAvatar 在 fallback 里是 URL 字符串(GitHub 头像),直接透传即可;
- * Directus 路径上则是 file uuid,需要经 assetUrl 拼完整 URL。
- * ---------------------------------------------------------------------------- */
-
-function fallbackToVM(post: FallbackPost, lang: Lang): PostVM {
-	const author = findAuthor(post.authorSlug);
-	const category = findCategory(post.categorySlug);
-
-	const tags = post.tagSlugs
-		.map((s): PostTagVM | null => {
-			const tag = findTag(s);
-			if (!tag) return null;
-			return { slug: tag.slug, name: pickLang(tag.name, lang) };
-		})
-		.filter((x): x is PostTagVM => x !== null);
+	const author = rel.authors.get(shared.author);
+	const category = rel.categories.get(shared.category);
 
 	return {
-		slug: post.slug,
-		title: pickLang(post.title, lang),
-		excerpt: pickLang(post.excerpt, lang),
-		content: pickLang(post.content, lang),
-		coverLabel: pickLang(post.coverLabel, lang),
-		cover: post.cover,
+		slug,
+		title: text.title,
+		excerpt: text.excerpt,
+		content: localized.body ?? "",
+		coverLabel: text.coverLabel,
+		cover: shared.cover ?? null,
 		authorName: author?.name ?? null,
 		authorBio: author ? pickLang(author.bio, lang) : null,
 		authorGithub: author?.github ?? null,
 		authorAvatar: author?.avatar ?? null,
-		categorySlug: category?.slug ?? null,
+		categorySlug: shared.category,
 		categoryName: category ? pickLang(category.name, lang) : null,
-		tags,
-		date: post.date,
-		updatedDate: post.updatedDate,
-		readingTime: post.readingTime,
-		featured: post.featured,
+		tags: shared.tags.flatMap((tagSlug) => {
+			const tag = rel.tags.get(tagSlug);
+			// 未登记的 tag 直接丢弃 —— 显示裸 slug 比不显示更糟
+			return tag ? [{ slug: tag.slug, name: pickLang(tag.name, lang) }] : [];
+		}),
+		date: shared.date.toISOString(),
+		updatedDate: shared.updatedDate?.toISOString() ?? null,
+		readingTime: readingStats(localized.body ?? "").minutes,
+		featured: shared.featured,
+		seoTitle: text.seoTitle ?? null,
+		seoDescription: text.seoDescription ?? null,
+		entry: localized,
 	};
 }
 
-/* ----------------------------------------------------------------------------
- * Directus → PostVM
- * ----------------------------------------------------------------------------
- * 展开规则(fields 参数):
- *   - posts 主体字段
- *   - translations:按当前语言挑 title/excerpt/content/cover_label
- *   - author(M2O): name / github / avatar / translations.bio(当前语言)
- *   - category(M2O): slug / translations.name(当前语言)
- *   - tags(M2M via posts_tags): tags_id.slug / tags_id.translations.name
- *
- * 返回的 row 形状取自 Directus 实际 OAS(typegen 生成的 Schema),
- * 但嵌套 translations / M2M 的 fields 深度 Schema 很难 100% 推到底,
- * 所以内部查询用 `any` 断言,由本函数自己保证字段访问安全。
- * ---------------------------------------------------------------------------- */
-
-const POST_FIELDS_FULL = [
-	"id",
-	"slug",
-	"status",
-	"featured",
-	"reading_time",
-	"date_published",
-	"date_updated",
-	"cover",
-	{
-		author: [
-			"id",
-			"slug",
-			"name",
-			"github",
-			"avatar",
-			{
-				translations: ["languages_code", "bio"],
-			},
-		],
-	},
-	{
-		category: [
-			"id",
-			"slug",
-			{
-				translations: ["languages_code", "name"],
-			},
-		],
-	},
-	{
-		tags: [
-			{
-				tags_id: [
-					"id",
-					"slug",
-					{
-						translations: ["languages_code", "name"],
-					},
-				],
-			},
-		],
-	},
-	{
-		translations: [
-			"languages_code",
-			"title",
-			"excerpt",
-			"content",
-			"cover_label",
-		],
-	},
-];
-
-function directusRowToVM(row: any, lang: Lang): PostVM | null {
-	if (!row || typeof row !== "object" || !row.slug) return null;
-
-	const langCode = langToDirectusCode(lang);
-
-	const tr =
-		pickTranslation(row.translations, langCode) ?? row.translations?.[0];
-	const catTr = pickTranslation(row.category?.translations, langCode);
-	const authorTr = pickTranslation(row.author?.translations, langCode);
-
-	// tags: posts_tags 中间表 → tags_id 是展开后的 tag 对象
-	const tags: PostTagVM[] = Array.isArray(row.tags)
-		? row.tags
-				.map((link: any): PostTagVM | null => {
-					const tag = link?.tags_id;
-					if (!tag?.slug) return null;
-					const tagTr = pickTranslation(tag.translations, langCode);
-					return {
-						slug: tag.slug,
-						name: tagTr?.name ?? tag.slug,
-					};
-				})
-				.filter((x: PostTagVM | null): x is PostTagVM => x !== null)
-		: [];
-
-	// cover 是 file uuid,需要拼 /assets/<uuid>?... 才能直接用作 <img src>
-	const cover =
-		typeof row.cover === "string" && row.cover
-			? assetUrl(row.cover, { width: 1200, format: "webp", quality: 85 })
-			: null;
-
-	// author.avatar 同理
-	const authorAvatar =
-		typeof row.author?.avatar === "string" && row.author.avatar
-			? assetUrl(row.author.avatar, {
-					width: 96,
-					height: 96,
-					fit: "cover",
-					format: "webp",
-				})
-			: null;
-
-	return {
-		slug: String(row.slug),
-		title: tr?.title ?? "(untitled)",
-		excerpt: tr?.excerpt ?? "",
-		content: tr?.content ?? "",
-		coverLabel: tr?.cover_label ?? tr?.title ?? "",
-		cover,
-		authorName: row.author?.name ?? null,
-		authorBio: authorTr?.bio ?? null,
-		authorGithub: row.author?.github ?? null,
-		authorAvatar,
-		categorySlug: row.category?.slug ?? null,
-		categoryName: catTr?.name ?? null,
-		tags,
-		date: row.date_published ?? new Date().toISOString(),
-		updatedDate: row.date_updated ?? null,
-		readingTime: typeof row.reading_time === "number" ? row.reading_time : 0,
-		featured: Boolean(row.featured),
-	};
+/** 在索引里取某篇文章某语言的条目对;文章不存在或未发布时返回 null */
+async function resolve(
+	slug: string,
+	lang: Lang,
+	index: PostIndex,
+): Promise<{ base: PostEntry; localized: PostEntry } | null> {
+	const base = index.zh.get(slug);
+	if (!base || base.data.draft) return null;
+	const localized = lang === "en" ? (index.en.get(slug) ?? base) : base;
+	return { base, localized };
 }
 
 /* ============================================================================
- * 1. listPublishedPostSlugs() — 供 getStaticPaths 使用
- * ----------------------------------------------------------------------------
- * 返回全部"已发布且可以生成详情页"的 slug。
- *
- * 为什么要合并两个来源:
- *   - Directus 是权威源,真实内容都在这
- *   - 但 fallback-data 里的文章可能还没迁进 Directus(bootstrap/seed 之前的状态),
- *     如果只用 Directus,老链接会 404
- *   → 取两边的 slug 并集,优先信任 Directus 顺序
- *
- * 去重策略:Directus 的 slug 先进集合,fallback 只补缺失项。
- * 排序策略:不排序,返回顺序仅影响 Astro 生成页面的顺序,不影响用户可见结果。
+ * 1. listPublishedPostSlugs() —— 供 getStaticPaths / sitemap 使用
  * ========================================================================== */
 
 export async function listPublishedPostSlugs(): Promise<readonly string[]> {
-	const slugs = new Set<string>();
-
-	// 1. Directus
-	if (DIRECTUS_CONFIG.hasReadToken || !DIRECTUS_CONFIG.hasReadToken) {
-		// 即使没有 token 也尝试匿名读 —— Public policy 允许读 published。
-		// 失败无所谓,下面 fallback 兜底。
-		try {
-			const client = directus();
-			const rows = (await client.request(
-				readItems("posts", {
-					filter: { status: { _eq: "published" } },
-					fields: ["slug"],
-					limit: -1,
-				}),
-			)) as Array<{ slug?: string }>;
-
-			for (const row of rows) {
-				if (row?.slug) slugs.add(row.slug);
-			}
-		} catch (err) {
-			console.warn(
-				"[posts] listPublishedPostSlugs 从 Directus 读取失败,仅使用 fallback:",
-				(err as Error)?.message ?? err,
-			);
-		}
-	}
-
-	// 2. Fallback 补充(并集,保证老链接永远有页面)
-	for (const p of listFallbackPosts()) {
-		slugs.add(p.slug);
-	}
-
-	return Array.from(slugs);
+	return (await getIndex()).ordered;
 }
 
 /* ============================================================================
- * 2. loadPostBySlug(slug, lang) — 单篇详情
- * ----------------------------------------------------------------------------
- * 先从 Directus 拉,拉不到或报错则查 fallback-data;都找不到返回 null。
- * 返回的 PostVM 已经按 lang 解包完毕,页面直接渲染。
+ * 2. loadPostBySlug(slug, lang) —— 单篇详情
  * ========================================================================== */
 
 export async function loadPostBySlug(
 	slug: string,
 	lang: Lang,
 ): Promise<PostVM | null> {
-	if (!slug) return null;
-
-	// 1. Directus
-	try {
-		const client = directus();
-		// 用 readItems + filter 而不是 readItem:readItem 要传数字/uuid id,
-		// 而我们只有 slug;readItems + limit:1 是 Directus 官方推荐模式。
-		const rows = (await client.request(
-			readItems("posts", {
-				filter: {
-					_and: [{ status: { _eq: "published" } }, { slug: { _eq: slug } }],
-				},
-				fields: POST_FIELDS_FULL as any,
-				limit: 1,
-			}),
-		)) as any[];
-
-		const row = rows[0];
-		const vm = directusRowToVM(row, lang);
-		if (vm) return vm;
-	} catch (err) {
-		console.warn(
-			`[posts] loadPostBySlug("${slug}") Directus 读取失败,尝试 fallback:`,
-			(err as Error)?.message ?? err,
-		);
-	}
-
-	// 2. Fallback
-	const fb = findFallbackPost(slug);
-	if (fb) return fallbackToVM(fb, lang);
-
-	// 3. 真的没这篇文章
-	return null;
+	const index = await getIndex();
+	const pair = await resolve(slug, lang, index);
+	if (!pair) return null;
+	return toVM(slug, pair.base, pair.localized, lang, await getRelations());
 }
 
 /* ============================================================================
- * 3. loadAdjacentPosts(slug, lang) — 上一篇 / 下一篇
+ * 3. loadAdjacentPosts(slug, lang) —— 上一篇 / 下一篇
  * ----------------------------------------------------------------------------
- * "相邻"语义:按 date_published 降序排列,当前文章的前后两条即为 next/previous。
- *
- *   sorted(desc by date_published):
- *     [0] 最新        ← 如果当前是 [i],那 [i-1] 是 next(更新)
- *     [1]
- *     [i] ← 当前
- *     [i+1] 是 previous(更老)
- *
- * 当前策略:拉全部已发布的 { slug, title, date_published },在内存里定位。
- * 成本极低(博客总量几百篇以内),避免"两次带 _lt/_gt 的复杂查询"。
- *
- * 返回的是已经按 lang 解包的轻量 VM(只含卡片需要的 slug / title / date),
- * 调用方不需要再跑一次 loadPostBySlug。
+ * 顺序与列表页一致(发布时间倒序):
+ *   previous = 时间上更早的一篇(列表中排在后面)
+ *   next     = 时间上更晚的一篇(列表中排在前面)
  * ========================================================================== */
 
 export interface AdjacentPostVM {
@@ -432,88 +288,168 @@ export async function loadAdjacentPosts(
 	slug: string,
 	lang: Lang,
 ): Promise<AdjacentPair> {
-	if (!slug) return { previous: null, next: null };
+	const index = await getIndex();
+	const at = index.ordered.indexOf(slug);
+	if (at < 0) return { previous: null, next: null };
 
-	// 1. Directus
-	try {
-		const client = directus();
-		const langCode = langToDirectusCode(lang);
-
-		const rows = (await client.request(
-			readItems("posts", {
-				filter: { status: { _eq: "published" } },
-				sort: ["-date_published"],
-				fields: [
-					"slug",
-					"date_published",
-					{ translations: ["languages_code", "title"] },
-				] as any,
-				limit: -1,
-			}),
-		)) as any[];
-
-		const index = rows.findIndex((r) => r?.slug === slug);
-		if (index === -1) {
-			// Directus 里没有这篇(可能还在 fallback 里),交给下面降级
-			throw new Error("slug not in Directus result");
-		}
-
-		const toVM = (row: any): AdjacentPostVM | null => {
-			if (!row?.slug) return null;
-			const tr = pickTranslation(row.translations, langCode);
-			return {
-				slug: String(row.slug),
-				title: tr?.title ?? String(row.slug),
-				date: row.date_published ?? "",
-			};
-		};
-
-		// 降序数组里:i-1 更新(next),i+1 更老(previous)
+	const pick = (i: number): AdjacentPostVM | null => {
+		const target = index.ordered[i];
+		if (!target) return null;
+		const base = index.zh.get(target);
+		if (!base) return null;
+		const localized = lang === "en" ? (index.en.get(target) ?? base) : base;
 		return {
-			previous: toVM(rows[index + 1] ?? null),
-			next: toVM(rows[index - 1] ?? null),
+			slug: target,
+			title: localized.data.title,
+			date: base.data.date.toISOString(),
 		};
-	} catch (err) {
-		// 错误不打 warn:slug 不在 Directus 里是正常分支(fallback only 文章)
-		void err;
-	}
-
-	// 2. Fallback
-	const { previous, next } = getAdjacentPosts(slug);
-	const fbToAdj = (p: FallbackPost | null): AdjacentPostVM | null =>
-		p ? { slug: p.slug, title: pickLang(p.title, lang), date: p.date } : null;
-
-	return {
-		previous: fbToAdj(previous),
-		next: fbToAdj(next),
 	};
+
+	return { previous: pick(at + 1), next: pick(at - 1) };
 }
 
 /* ============================================================================
- * 4. listPostsForFeed() — 供 RSS / sitemap 等"全量双语列表"场景
+ * 4. listPostsPaged({ lang, page, pageSize, categorySlug }) —— 列表页分页
  * ----------------------------------------------------------------------------
- * RSS feed 的消费特征与详情页不同:
- *   - 需要同一篇文章的中英两个版本(作为两条 <item>)
- *   - 每条只要 title / excerpt / author / category name,不需要 content
- *   - 对 tag / cover / reading_time / featured 等字段不关心
- *
- * 直接复用 loadPostBySlug 逐篇查会引发 N+1 请求(博客越多越慢),
- * 这里用一次查询把全部已发布文章连同两种语言的 translation 拉回来,
- * 在内存里把 Bilingual 解包成 FeedPost 的扁平结构。
- *
- * 三层降级:Directus → fallback-data → 空数组(极端情况,不抛错)。
+ * 静态站的分页走路径(/blog/page/2),page 由 getStaticPaths 生成,一定合法;
+ * 仍然做 clamp,避免手写路由时静默产出空页。
+ * ========================================================================== */
+
+export const DEFAULT_PAGE_SIZE = 10;
+
+export interface PostsPageResult {
+	items: readonly PostVM[];
+	total: number;
+	page: number;
+	pageSize: number;
+	totalPages: number;
+}
+
+export interface PostsPageParams {
+	lang: Lang;
+	/** 1-indexed */
+	page: number;
+	/** 每页条数,默认 10 */
+	pageSize?: number;
+	/** 分类 slug;空串 / undefined / "all" 表示不过滤 */
+	categorySlug?: string;
+}
+
+/** 归一化分类参数:空串 / "all" / 全空白 → 空串("不过滤") */
+function normalizeCategorySlug(v: string | undefined | null): string {
+	const s = (v ?? "").trim();
+	return s === "" || s === "all" ? "" : s;
+}
+
+export async function listPostsPaged(
+	params: PostsPageParams,
+): Promise<PostsPageResult> {
+	const { lang } = params;
+	const pageSize = Math.max(1, params.pageSize ?? DEFAULT_PAGE_SIZE);
+	const category = normalizeCategorySlug(params.categorySlug);
+
+	const index = await getIndex();
+	const slugs = category
+		? index.ordered.filter((s) => index.zh.get(s)?.data.category === category)
+		: index.ordered;
+
+	const total = slugs.length;
+	const totalPages = Math.max(1, Math.ceil(total / pageSize));
+	const page = Math.min(Math.max(1, Math.floor(params.page) || 1), totalPages);
+
+	const rel = await getRelations();
+	const items = slugs
+		.slice((page - 1) * pageSize, page * pageSize)
+		.flatMap((slug) => {
+			const base = index.zh.get(slug);
+			if (!base) return [];
+			const localized = lang === "en" ? (index.en.get(slug) ?? base) : base;
+			return [toVM(slug, base, localized, lang, rel)];
+		});
+
+	return { items, total, page, pageSize, totalPages };
+}
+
+/** 某个分类下的总页数 —— 供 getStaticPaths 枚举分页路由 */
+export async function countPagesFor(
+	categorySlug: string | undefined,
+	pageSize = DEFAULT_PAGE_SIZE,
+): Promise<number> {
+	const category = normalizeCategorySlug(categorySlug);
+	const index = await getIndex();
+	const total = category
+		? index.ordered.filter((s) => index.zh.get(s)?.data.category === category)
+				.length
+		: index.ordered.length;
+	return Math.max(1, Math.ceil(total / pageSize));
+}
+
+/* ============================================================================
+ * 5. listCategoryCounts() —— 分类切换器的计数条
+ * ========================================================================== */
+
+export interface CategoryCounts {
+	/** slug → 已发布文章数;计数为 0 的分类不会出现在这里 */
+	byCategory: Record<string, number>;
+	/** 已发布文章总数 */
+	total: number;
+}
+
+export async function listCategoryCounts(): Promise<CategoryCounts> {
+	const index = await getIndex();
+	const byCategory: Record<string, number> = {};
+
+	for (const slug of index.ordered) {
+		const category = index.zh.get(slug)?.data.category;
+		if (!category) continue;
+		byCategory[category] = (byCategory[category] ?? 0) + 1;
+	}
+
+	return { byCategory, total: index.ordered.length };
+}
+
+/* ============================================================================
+ * 6. listCategories(lang) —— 分类切换器的可选项
+ * ----------------------------------------------------------------------------
+ * 只返回「至少有一篇已发布文章」的分类:空分类点进去是空页,不值得占位置。
+ * ========================================================================== */
+
+export interface CategoryVM {
+	slug: string;
+	name: string;
+}
+
+export async function listCategories(
+	lang: Lang,
+): Promise<readonly CategoryVM[]> {
+	const [{ byCategory }, categories] = await Promise.all([
+		listCategoryCounts(),
+		loadCategoryMap(),
+	]);
+
+	return [...categories.values()]
+		.filter((c) => (byCategory[c.slug] ?? 0) > 0)
+		.map((c) => ({ slug: c.slug, name: pickLang(c.name, lang) }));
+}
+
+/** 有文章的分类 slug 列表 —— 供 getStaticPaths 枚举分类路由 */
+export async function listCategorySlugsWithPosts(): Promise<readonly string[]> {
+	return Object.keys((await listCategoryCounts()).byCategory);
+}
+
+/* ============================================================================
+ * 7. listPostsForFeed() —— RSS(双语一次取齐)
  * ========================================================================== */
 
 /**
  * Feed 消费需要的最小字段集。
  *
  * 字段命名刻意扁平化(titleZh / titleEn 而非 { title: { zh, en } }):
- *   - RSS 构造代码按语言分支写,扁平结构更贴近消费点
- *   - 避免把 Bilingual 类型向 queries 层外暴露(该类型是 fallback-data 的内部约定)
+ * RSS 构造代码按语言分支写,扁平结构更贴近消费点。
  */
 export interface FeedPost {
 	slug: string;
-	/** ISO 8601;已经过 Date 合法性校验,调用方可以直接 new Date() */
+	/** ISO 8601 */
 	date: string;
 	titleZh: string;
 	titleEn: string;
@@ -522,510 +458,34 @@ export interface FeedPost {
 	categoryNameZh: string | null;
 	categoryNameEn: string | null;
 	authorName: string | null;
-	/** 作者 email;用于 RSS <author> 字段(按 RFC 要求拼成 "email (name)") */
+	/** 用于 RSS <author>,按 RFC 拼成 "email (name)" */
 	authorEmail: string | null;
 }
 
-/**
- * 把 Directus 返回的 posts 行转成 FeedPost。
- *
- * 与 directusRowToVM 不同的是:translations 一次挑两种语言,
- * 不依赖调用方传入 lang。
- */
-function directusRowToFeed(row: any): FeedPost | null {
-	if (!row || typeof row !== "object" || !row.slug) return null;
-
-	const trZh = pickTranslation(row.translations, "zh-CN");
-	const trEn = pickTranslation(row.translations, "en-US");
-	const catTrZh = pickTranslation(row.category?.translations, "zh-CN");
-	const catTrEn = pickTranslation(row.category?.translations, "en-US");
-
-	return {
-		slug: String(row.slug),
-		date: row.date_published ?? "",
-		titleZh: trZh?.title ?? row.slug,
-		titleEn: trEn?.title ?? row.slug,
-		excerptZh: trZh?.excerpt ?? "",
-		excerptEn: trEn?.excerpt ?? "",
-		categoryNameZh: catTrZh?.name ?? null,
-		categoryNameEn: catTrEn?.name ?? null,
-		authorName: row.author?.name ?? null,
-		authorEmail: row.author?.email ?? null,
-	};
-}
-
-/** fallback 条目 → FeedPost */
-function fallbackToFeed(post: FallbackPost): FeedPost {
-	const author = findAuthor(post.authorSlug);
-	const category = findCategory(post.categorySlug);
-	return {
-		slug: post.slug,
-		date: post.date,
-		titleZh: pickLang(post.title, "zh"),
-		titleEn: pickLang(post.title, "en"),
-		excerptZh: pickLang(post.excerpt, "zh"),
-		excerptEn: pickLang(post.excerpt, "en"),
-		categoryNameZh: category ? pickLang(category.name, "zh") : null,
-		categoryNameEn: category ? pickLang(category.name, "en") : null,
-		authorName: author?.name ?? null,
-		authorEmail: author?.email ?? null,
-	};
-}
-
-/* ============================================================================
- * 5. listPostsPaged({ lang, page, pageSize, q }) — 博客列表页分页 + 搜索
- * ----------------------------------------------------------------------------
- * 为什么独立函数而不是扩展 loadPosts:
- *   - 博客列表页(SSR)每次请求都会调用,性能是最敏感的
- *   - 需要 Directus 侧原生分页(limit + offset + meta.filter_count),不是内存切片
- *   - 搜索条件要按当前 lang 过滤 translations 的 title/excerpt/content,逻辑更重
- *
- * 返回:
- *   {
- *     items:     当前页命中的 PostVM 列表(已按 -date_published 排序)
- *     total:     命中文章总数(分页前;搜索时为搜索结果总数)
- *     page:      实际用的页码(1-indexed;可能与传入 page 不同 —— 超出会 clamp)
- *     pageSize:  每页条数
- *     totalPages:总页数(Math.ceil(total/pageSize),至少 1)
- *     query:     归一化后的搜索词(去空白 + 全小写前的原文),无搜索时为空串
- *   }
- *
- * 搜索语义:
- *   - q 为空 / 全空白 → 返回全部已发布文章(按日期倒序)分页
- *   - q 非空 → 用 Directus `_icontains`(不区分大小写,SQL 侧 ILIKE %q%)
- *     同时匹配当前 lang 翻译行的 title / excerpt / content 三个字段(OR 关系)
- *     通过 translations 的关系过滤器实现:translations.{title|excerpt|content}._icontains
- *
- * 性能提醒:
- *   - content 字段可能上百 KB;Directus 端的 ILIKE 在没有 GIN/trigram 索引时
- *     对 50+ 篇内容是全表扫 + 逐行字符串匹配,实测 5 篇 < 100ms
- *   - 数量上升后可以在 Directus/Postgres 层加 pg_trgm 索引,或切换全文搜索引擎
- *   - middleware 对 /blog 下发 s-maxage=60 的边缘缓存,搜索查询 99% 不会打到源站
- *
- * 降级:
- *   Directus 出错 → fallback-data 内存过滤(支持同样的 q 语义),
- *   fallback 再失败(不会发生)→ 空列表 + total=0。
- * ========================================================================== */
-
-export interface PostsPageResult {
-	items: readonly PostVM[];
-	total: number;
-	page: number;
-	pageSize: number;
-	totalPages: number;
-	/** 归一化后的搜索词(trim),未搜索时为空串 */
-	query: string;
-}
-
-export interface PostsPageParams {
-	lang: Lang;
-	/** 1-indexed,非法值会被 clamp 到 [1, totalPages] */
-	page: number;
-	/** 每页条数,默认 10 */
-	pageSize?: number;
-	/** 搜索关键词,未传或全空白视为"不搜索" */
-	q?: string;
-	/**
-	 * 分类 slug 过滤。空串 / undefined / "all" 视为"不过滤"。
-	 * 未知 slug 会导致返回空列表(页面层据此展示"无结果")。
-	 */
-	categorySlug?: string;
-}
-
-/** clamp 到 [min, max] 闭区间;NaN → min */
-function clampPage(n: unknown, min: number, max: number): number {
-	const v = Math.floor(Number(n));
-	if (!Number.isFinite(v)) return min;
-	if (v < min) return min;
-	if (v > max) return max;
-	return v;
-}
-
-/**
- * 对 Directus 的关系过滤器构造搜索条件。
- *
- * Directus 的 translations 是 O2M,filter 里用 `translations: { field: { _op: val } }`
- * 会被翻译成:"存在一条 translations 行同时满足 field OP val 且 languages_code = langCode"。
- * 多个字段 OR:外层 _or,内层同层 translations。
- *
- * 这里额外用 _and 把"必须是当前语言 + 必须命中任一字段"两个条件显式绑定,
- * 避免 Directus 在同一 relation 内部把跨行条件合并(例如 zh 行命中 title,
- * en 行命中 content 也被视为 match,会出现语言错位的搜索结果)。
- */
-function buildSearchFilter(q: string, langCode: "zh-CN" | "en-US"): any {
-	return {
-		translations: {
-			_and: [
-				{ languages_code: { _eq: langCode } },
-				{
-					_or: [
-						{ title: { _icontains: q } },
-						{ excerpt: { _icontains: q } },
-						{ content: { _icontains: q } },
-					],
-				},
-			],
-		},
-	};
-}
-
-/**
- * fallback-data 内存搜索:大小写不敏感的 includes 匹配 title/excerpt/content。
- * 仅在 Directus 完全不可用时兜底,实际线上几乎不会走到。
- */
-function fallbackSearch(
-	posts: readonly FallbackPost[],
-	q: string,
-	lang: Lang,
-): readonly FallbackPost[] {
-	if (!q) return posts;
-	const needle = q.toLowerCase();
-	return posts.filter((p) => {
-		const title = pickLang(p.title, lang).toLowerCase();
-		const excerpt = pickLang(p.excerpt, lang).toLowerCase();
-		const content = pickLang(p.content, lang).toLowerCase();
-		return (
-			title.includes(needle) ||
-			excerpt.includes(needle) ||
-			content.includes(needle)
-		);
-	});
-}
-
-/**
- * 归一化分类参数:空串 / "all" / 全空白 → 空串("不过滤")。
- * 其它值原样返回(调用方自己保证合法性,未知 slug 自然会查不到结果)。
- */
-function normalizeCategorySlug(v: string | undefined | null): string {
-	const s = (v ?? "").trim().toLowerCase();
-	if (s === "" || s === "all") return "";
-	return s;
-}
-
-export async function listPostsPaged(
-	params: PostsPageParams,
-): Promise<PostsPageResult> {
-	const { lang } = params;
-	const pageSize = Math.max(1, Math.floor(params.pageSize ?? 10));
-	const q = (params.q ?? "").trim();
-	const categorySlug = normalizeCategorySlug(params.categorySlug);
-	const langCode = langToDirectusCode(lang);
-
-	// 1. Directus(首选)
-	try {
-		const client = directus();
-
-		// 组合 filter:status = published [+ 搜索条件] [+ 分类条件]
-		// 三个条件均可选,按需 push 到 _and 列表。任一条件存在就走 _and 包装,
-		// 三者都没有则退化为单条 status 过滤,保持 Directus query 精简。
-		const andClauses: any[] = [{ status: { _eq: "published" } }];
-		if (q.length > 0) {
-			andClauses.push(buildSearchFilter(q, langCode));
-		}
-		if (categorySlug) {
-			andClauses.push({ category: { slug: { _eq: categorySlug } } });
-		}
-		const filter: any =
-			andClauses.length === 1 ? andClauses[0] : { _and: andClauses };
-
-		const requestedPage = Math.max(1, Math.floor(Number(params.page) || 1));
-
-		// 并行请求:当前页数据 + 总数(aggregate)
-		// 注意:Directus JS SDK 的 readItems 始终返回纯数组,meta:"filter_count"
-		// 在运行时不生效(SDK 忽略该参数)。必须用独立的 aggregate 请求获取总数。
-		const [rows, aggResult] = await Promise.all([
-			client.request(
-				readItems("posts", {
-					filter,
-					sort: ["-date_published"],
-					fields: POST_FIELDS_FULL as any,
-					limit: pageSize,
-					offset: (requestedPage - 1) * pageSize,
-				}),
-			) as Promise<any[]>,
-			client.request(
-				aggregate("posts", {
-					aggregate: { count: "*" },
-					query: { filter },
-				}),
-			) as Promise<Array<{ count: string | number }>>,
-		]);
-
-		const total: number = Number(aggResult?.[0]?.count ?? rows.length);
-
-		const totalPages = Math.max(1, Math.ceil(total / pageSize));
-		const actualPage = clampPage(requestedPage, 1, totalPages);
-
-		// 如果 clamp 后的 page 与请求页不同(用户请求 page=999),
-		// 说明返回的 rows 不是用户想要的页。为了正确,重新请求一次。
-		let finalRows: any[] = Array.isArray(rows) ? rows : [];
-		if (actualPage !== requestedPage && total > 0) {
-			const refetch = (await client.request(
-				readItems("posts", {
-					filter,
-					sort: ["-date_published"],
-					fields: POST_FIELDS_FULL as any,
-					limit: pageSize,
-					offset: (actualPage - 1) * pageSize,
-				}),
-			)) as any[];
-			finalRows = Array.isArray(refetch) ? refetch : [];
-		}
-
-		const items = finalRows
-			.map((row) => directusRowToVM(row, lang))
-			.filter((vm): vm is PostVM => vm !== null);
-
-		return {
-			items,
-			total,
-			page: actualPage,
-			pageSize,
-			totalPages,
-			query: q,
-		};
-	} catch (err) {
-		console.warn(
-			"[posts] listPostsPaged Directus 读取失败,降级到 fallback:",
-			(err as Error)?.message ?? err,
-		);
-	}
-
-	// 2. Fallback(内存分页 + 内存搜索 + 内存分类过滤)
-	const allFb = listFallbackPosts();
-	const byCat = categorySlug
-		? allFb.filter((p) => p.categorySlug === categorySlug)
-		: allFb;
-	const filteredFb = fallbackSearch(byCat, q, lang);
-	// fallback 也保持按 date 倒序(FALLBACK_POSTS 已经是此顺序,但保险再排)
-	const sortedFb = [...filteredFb].sort(
-		(a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-	);
-	const total = sortedFb.length;
-	const totalPages = Math.max(1, Math.ceil(total / pageSize));
-	const actualPage = clampPage(params.page, 1, totalPages);
-	const start = (actualPage - 1) * pageSize;
-	const items = sortedFb
-		.slice(start, start + pageSize)
-		.map((p) => fallbackToVM(p, lang));
-
-	return {
-		items,
-		total,
-		page: actualPage,
-		pageSize,
-		totalPages,
-		query: q,
-	};
-}
-
-/* ============================================================================
- * 5. listCategoryCounts() — 分类切换器用
- * ----------------------------------------------------------------------------
- * 返回 { [categorySlug]: 已发布文章数 } + 全部已发布总数。
- *
- * 实现:
- *   Directus 路径用 aggregate: readItems("posts", { groupBy: ["category.slug"],
- *   aggregate: { count: "id" }, filter: status=published })。
- *   失败时退回 fallback-data 内存聚合。
- *
- * 语义:
- *   - 计数只看 status = published,不受当前语言 / 搜索词影响
- *   - 返回对象里没有的 slug 视为"该分类 0 篇"
- *   - total 是"全部文章数",用于 "ALL" 标签的计数
- * ============================================================================ */
-
-export interface CategoryCounts {
-	/** 每个分类的文章数,key 是 category.slug */
-	readonly byCategory: Readonly<Record<string, number>>;
-	/** 全部已发布文章数(等同于 "ALL" 的计数) */
-	readonly total: number;
-}
-
-export async function listCategoryCounts(): Promise<CategoryCounts> {
-	// 1. Directus(首选)
-	//
-	// 实测发现:Directus 对 `groupBy: ["category.slug"]` 这种 dotted 关联路径
-	// 直接返回 500 INTERNAL_SERVER_ERROR,只有 `groupBy: ["category"]`(外键 id)
-	// 能正常聚合。所以这里拆成两次请求:
-	//   (a) posts 按 category 外键 id 聚合 → { categoryId: count }
-	//   (b) categories [id, slug] 做 id → slug 映射
-	// 两次请求并行,再在内存里合并。
-	//
-	// category = null 的行(文章未选分类)不归入任何具体分类的 byCategory,
-	// 但要计入 total(代表"全部已发布文章数")。
-	try {
-		const client = directus();
-		const [aggRows, catRows] = await Promise.all([
-			client.request(
-				readItems("posts", {
-					filter: { status: { _eq: "published" } },
-					groupBy: ["category"] as any,
-					aggregate: { count: "id" } as any,
-					limit: -1,
-				} as any),
-			) as Promise<any[]>,
-			client.request(
-				readItems("categories", {
-					fields: ["id", "slug"] as any,
-					limit: -1,
-				}),
-			) as Promise<any[]>,
-		]);
-
-		// id → slug 映射(兼容 id 为数字或字符串两种形态)
-		const idToSlug = new Map<string, string>();
-		for (const c of catRows ?? []) {
-			if (c?.id != null && typeof c?.slug === "string" && c.slug) {
-				idToSlug.set(String(c.id), c.slug);
-			}
-		}
-
-		const byCategory: Record<string, number> = {};
-		let total = 0;
-		for (const row of aggRows ?? []) {
-			// 聚合返回:{ category: <id|null>, count: { id: "<n>" } }
-			const catId = row?.category;
-			const raw = row?.count?.id ?? row?.count ?? 0;
-			const n = Number(raw) || 0;
-			total += n;
-			if (catId == null) continue; // 未分类:只累加 total,不进 byCategory
-			const slug = idToSlug.get(String(catId));
-			if (slug) {
-				byCategory[slug] = (byCategory[slug] ?? 0) + n;
-			}
-		}
-		return { byCategory, total };
-	} catch (err) {
-		console.warn(
-			"[posts] listCategoryCounts Directus 读取失败,降级到 fallback:",
-			(err as Error)?.message ?? err,
-		);
-	}
-
-	// 2. Fallback(内存聚合)
-	const allFb = listFallbackPosts();
-	const byCategory: Record<string, number> = {};
-	for (const p of allFb) {
-		byCategory[p.categorySlug] = (byCategory[p.categorySlug] ?? 0) + 1;
-	}
-	return { byCategory, total: allFb.length };
-}
-
-/* ============================================================================
- * 6. listCategories(lang) — 分类切换器用
- * ----------------------------------------------------------------------------
- * 返回当前语言下的分类列表(slug + 本地化 name),按 sort 升序。
- *
- * 为什么独立出来、而不是复用 FALLBACK_CATEGORIES:
- *   Directus 里的分类可通过 Data Studio / AI Writer 动态新增
- *   (例如 "资讯" / "daily-news" 在 bootstrap 之后被创建),
- *   FALLBACK_CATEGORIES 只是应急兜底,线上必须以 Directus 为准。
- *
- * 实现:
- *   Directus → readItems("categories", {
- *     fields: ["slug", "sort", { translations: ["languages_code", "name"] }],
- *     sort: ["sort"],
- *   })
- *   按 langCode 解包 translations.name;缺失时回落 slug。
- *   Directus 失败时退回 FALLBACK_CATEGORIES。
- * ============================================================================ */
-
-export interface CategoryVM {
-	readonly slug: string;
-	readonly name: string;
-}
-
-export async function listCategories(
-	lang: Lang,
-): Promise<readonly CategoryVM[]> {
-	const langCode = langToDirectusCode(lang);
-
-	// 1. Directus(首选)
-	try {
-		const client = directus();
-		const rows = (await client.request(
-			readItems("categories", {
-				fields: [
-					"slug",
-					"sort",
-					{
-						translations: ["languages_code", "name"],
-					},
-				] as any,
-				sort: ["sort"] as any,
-				limit: -1,
-			}),
-		)) as any[];
-
-		const items: CategoryVM[] = [];
-		for (const row of rows ?? []) {
-			const slug = typeof row?.slug === "string" ? row.slug : null;
-			if (!slug) continue;
-			const tr = pickTranslation(row.translations, langCode);
-			const name = (typeof tr?.name === "string" && tr.name.trim()) || slug;
-			items.push({ slug, name });
-		}
-		if (items.length > 0) return items;
-	} catch (err) {
-		console.warn(
-			"[posts] listCategories Directus 读取失败,降级到 fallback:",
-			(err as Error)?.message ?? err,
-		);
-	}
-
-	// 2. Fallback(静态类目)
-	return FALLBACK_CATEGORIES.map((c) => ({
-		slug: c.slug,
-		name: pickLang(c.name, lang),
-	}));
-}
-
 export async function listPostsForFeed(): Promise<readonly FeedPost[]> {
-	// 1. Directus
-	try {
-		const client = directus();
-		const rows = (await client.request(
-			readItems("posts", {
-				filter: { status: { _eq: "published" } },
-				sort: ["-date_published"],
-				fields: [
-					"slug",
-					"date_published",
-					{
-						author: ["name", "email"],
-					},
-					{
-						category: ["slug", { translations: ["languages_code", "name"] }],
-					},
-					{
-						translations: ["languages_code", "title", "excerpt"],
-					},
-				] as any,
-				limit: -1,
-			}),
-		)) as any[];
+	const [index, rel] = await Promise.all([getIndex(), getRelations()]);
 
-		const items: FeedPost[] = [];
-		for (const row of rows) {
-			const item = directusRowToFeed(row);
-			if (!item) continue;
-			// 日期无效直接丢,避免 RSS 阶段再过滤
-			if (Number.isNaN(new Date(item.date).getTime())) continue;
-			items.push(item);
-		}
+	return index.ordered.flatMap((slug) => {
+		const zh = index.zh.get(slug);
+		if (!zh) return [];
+		const en = index.en.get(slug) ?? zh;
 
-		if (items.length > 0) return items;
-		// Directus 返回了 0 条 → 可能是权限问题或真的没文章,继续走 fallback
-	} catch (err) {
-		console.warn(
-			"[posts] listPostsForFeed 从 Directus 读取失败,使用 fallback:",
-			(err as Error)?.message ?? err,
-		);
-	}
+		const author = rel.authors.get(zh.data.author);
+		const category = rel.categories.get(zh.data.category);
 
-	// 2. Fallback
-	return listFallbackPosts()
-		.map(fallbackToFeed)
-		.filter((p) => !Number.isNaN(new Date(p.date).getTime()));
+		return [
+			{
+				slug,
+				date: zh.data.date.toISOString(),
+				titleZh: zh.data.title,
+				titleEn: en.data.title,
+				excerptZh: zh.data.excerpt,
+				excerptEn: en.data.excerpt,
+				categoryNameZh: category?.name.zh ?? null,
+				categoryNameEn: category?.name.en ?? null,
+				authorName: author?.name ?? null,
+				authorEmail: author?.email ?? null,
+			},
+		];
+	});
 }
