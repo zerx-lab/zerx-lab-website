@@ -333,40 +333,18 @@ jobs:
           ref: ${{ needs.generate.outputs.sha }}
           fetch-depth: 1
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # scripts/build-mail.mjs 把 zh.md 渲染成带内联样式的邮件 HTML。
+      # 不能直接把 Markdown 原文塞 <pre> —— 收件人只会看到满屏 ## 和 - 。
       - name: Compose mail body
         env:
           SLUG: ${{ needs.generate.outputs.slug }}
-          TARGET_DATE: ${{ needs.generate.outputs.target_date }}
-        run: |
-          set -euo pipefail
-
-          ZH_FILE="src/content/posts/${SLUG}/zh.md"
-
-          # 正文原样拼进 HTML,& < > 必须转义,否则含尖括号的 Markdown
-          # (比较符号、伪代码)会把邮件排版搞乱
-          html_escape() {
-            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
-          }
-
-          TITLE_HTML=$(sed -n 's/^title: *"\(.*\)"$/\1/p' "$ZH_FILE" | head -n1 | html_escape)
-          EXCERPT_HTML=$(sed -n 's/^excerpt: *"\(.*\)"$/\1/p' "$ZH_FILE" | head -n1 | html_escape)
-
-          # frontmatter 的第二个 --- 之后才是正文
-          FM_END=$(awk 'NR>1 && /^---$/ {print NR; exit}' "$ZH_FILE")
-
-          {
-            printf '<h2>%s</h2>\n' "$TITLE_HTML"
-            printf '<p>%s</p>\n' "$EXCERPT_HTML"
-            printf '<p>发布时间: %s</p>\n' "$TARGET_DATE"
-            printf '<p>中文: <a href="https://zerx.dev/blog/%s/">https://zerx.dev/blog/%s/</a><br />\n' "$SLUG" "$SLUG"
-            printf 'English: <a href="https://zerx.dev/en/blog/%s/">https://zerx.dev/en/blog/%s/</a></p>\n' "$SLUG" "$SLUG"
-            printf '<hr />\n'
-            printf '<pre style="white-space: pre-wrap; font-family: inherit;">\n'
-            tail -n "+$((FM_END + 1))" "$ZH_FILE" | html_escape
-            printf '</pre>\n'
-          } > mail.html
-
-          echo "✓ 邮件正文已生成 ($(wc -c < mail.html) 字节)"
+        run: bun scripts/build-mail.mjs --slug "$SLUG" --out mail.html
 
       # 收件人 / 服务器 / 发件人都放仓库 Variables(Settings → Secrets and
       # variables → Actions → Variables):值可见可改,加订阅者只要编辑
