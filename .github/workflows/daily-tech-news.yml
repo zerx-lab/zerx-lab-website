@@ -346,9 +346,9 @@ jobs:
           SLUG: ${{ needs.generate.outputs.slug }}
         run: bun scripts/build-mail.mjs --slug "$SLUG" --out mail.html
 
-      # 收件人 / 服务器 / 发件人都放仓库 Variables(Settings → Secrets and
+      # 服务器 / 发件人 / 订阅者名单都放仓库 Variables(Settings → Secrets and
       # variables → Actions → Variables):值可见可改,加订阅者只要编辑
-      # MAIL_TO 这一个变量(逗号分隔,支持任意多个)。只有账号密码是 Secrets。
+      # MAIL_TO 这一个变量(英文逗号分隔,支持任意多个)。只有账号密码是 Secrets。
       - name: Send notification mail
         # 钉死 commit SHA:第三方 action 能读到 SMTP 凭据,而 `@v4` 是可移动
         # tag,被改写就等于凭据泄露。升级时用
@@ -364,7 +364,11 @@ jobs:
           # 写死 true 会让 587 直接连不上,所以按端口判定。
           secure: ${{ vars.SMTP_PORT == '465' }}
           from: ZerxLab <${{ vars.MAIL_FROM }}>
-          # 多收件人:逗号分隔。163 单封信收件人上限较低,人多了改用邮件列表别名。
-          to: ${{ vars.MAIL_TO }}
+          # To 只写发件人自己,订阅者一律走 bcc ——
+          # 否则每个人都能在收件人栏看到整份名单,转发一次就全泄了。
+          to: ZerxLab <${{ vars.MAIL_FROM }}>
+          # 订阅者名单,英文逗号分隔。163 单封信收件人数有上限且群发易触发
+          # 反垃圾,名单上到几十人就该换邮件列表别名或逐封发送。
+          bcc: ${{ vars.MAIL_TO }}
           subject: "[ZerxLab] 新资讯已发布: ${{ needs.generate.outputs.title }}"
           html_body: file://mail.html
