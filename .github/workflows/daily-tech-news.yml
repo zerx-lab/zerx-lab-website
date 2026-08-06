@@ -283,11 +283,15 @@ jobs:
 
           git commit -m "feat(news): daily tech news ${TARGET_DATE}"
 
-          # 显式带 token 推送,不用环境里那份 git 凭据 ——
+          # 显式带 token 推送 ——
           # claude-code-action 会用 OIDC 换一个 Claude GitHub App token 覆盖
-          # checkout 写入的 http.extraheader,那个 token 对本仓库没有
-          # contents:write,直接 `git push` 必然 401。
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          # checkout 写入的 http.https://github.com/.extraheader,那个 token 对
+          # 本仓库没有 contents:write。
+          # extraheader 发出的 Authorization 头会压过 URL 里的 basic 凭据,
+          # 所以必须先用空值把它重置掉(git 约定:空字符串 = 清空该头列表),
+          # 否则即使 URL 带了 token 也照样 401。
+          git -c http.https://github.com/.extraheader= \
+            push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
 
           echo "committed=true" >> "$GITHUB_OUTPUT"
           # deploy job 要构建的是这个新 commit,而不是 workflow 启动时的旧 SHA
