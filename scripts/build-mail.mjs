@@ -83,8 +83,10 @@ const datePublished = (field("date") || "").slice(0, 10);
  * Markdown → HTML,再把样式内联
  * -------------------------------------------------------------------------- */
 
+// 字体名里必须用单引号:整串会被插进 style="..." 属性,双引号会把属性
+// 在第一个字体名处截断,后面的声明全部失效。
 const FONT =
-	'-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+	"-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif";
 const INK = "#1f2328";
 const MUTED = "#59636e";
 const LINE = "#d1d9e0";
