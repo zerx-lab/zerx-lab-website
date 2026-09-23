@@ -45,6 +45,7 @@ interface NavItem {
 	labelKey:
 		| "nav.home"
 		| "nav.projects"
+		| "nav.benchmarks"
 		| "nav.aur"
 		| "nav.blog"
 		| "nav.about";
@@ -57,6 +58,7 @@ interface NavItem {
 const NAV_ITEMS: readonly NavItem[] = [
 	{ labelKey: "nav.home", path: "/", matchPrefix: "/" },
 	{ labelKey: "nav.projects", path: "/projects", matchPrefix: "/projects" },
+	{ labelKey: "nav.benchmarks", path: "/benchmarks", matchPrefix: "/benchmarks" },
 	{ labelKey: "nav.aur", path: "/aur", matchPrefix: "/aur" },
 	{ labelKey: "nav.blog", path: "/blog", matchPrefix: "/blog" },
 	{ labelKey: "nav.about", path: "/about", matchPrefix: "/about" },

@@ -1,0 +1,77 @@
+name: Sync LiveBench
+
+on:
+  schedule:
+    # GitHub Actions 的最短周期为 5 分钟；避免整点，不承诺准点执行。
+    - cron: "2-59/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-livebench
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      committed: ${{ steps.commit.outputs.committed }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      # Cache 仅保存条件请求/退避状态，榜单快照始终以仓库文件为准。
+      - name: Restore sync state
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/livebench-state.json
+          key: livebench-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: livebench-state-v1-
+      - name: Sync upstream data
+        id: sync
+        run: node scripts/sync-livebench.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 限流失败也保存 notBefore，下一次调度不能提前请求。
+      - name: Save sync state
+        if: always() && hashFiles('.cache/livebench-state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/livebench-state.json
+          key: livebench-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Commit changed snapshot
+        id: commit
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git add src/content/data/livebench.json
+          if git diff --cached --quiet; then
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore(benchmarks): 同步 LiveBench 榜单数据'
+          # 新闻或人工提交可能在抓取期间更新 main；冲突时失败，禁止强推。
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: sync
+    if: needs.sync.outputs.committed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      ref: ${{ needs.sync.outputs.sha }}
+    secrets: inherit

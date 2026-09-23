@@ -134,7 +134,7 @@ export function listLanguageLinks(url: URL): LanguageLink[] {
 		([code, label]) => ({
 			code,
 			label,
-			href: getAlternateLanguageUrl(url, code),
+			href: getAlternateLanguageUrl(url, code) + url.search + url.hash,
 			isActive: code === currentLang,
 		}),
 	);

@@ -181,6 +181,23 @@ push 到 `main` 触发 `.github/workflows/deploy.yml`：`bun install` → `bun b
 
 ---
 
+## LiveBench 双语榜单
+
+`/benchmarks` 与 `/en/benchmarks` 共用 `src/content/data/livebench.json`。支持名称/ID 搜索、开放权重、微调模式（隐藏/包含/仅微调及相关基座）、组织筛选与组织列显示、模型多选对比、显示列选择及重置、类别多选和成绩排序。单选类别展开子任务，多选类别按所选类别等权计算总分；筛选和排序写入 URL，分享、前进后退及语言切换保留状态。仅展示最新评测版本；快照保留所有有效模型，默认在展示层过滤微调并折叠变体。
+
+分类按钮以反色背景和加粗文字表示选中，不添加底部横线；切换分类恢复该范围的默认排序。表头点击依次切换降序（↓）、升序（↑）、默认（↕），默认按当前范围首个可见成绩列降序排列；恢复默认保留其他筛选，并移除 URL 中显式排序参数。
+
+成绩单元格按官方规则突出当前可见结果中每列的前五名：蓝色由深到浅，缺失成绩不着色；筛选、类别范围和子任务切换后重新计算。
+
+- 同步：`node scripts/sync-livebench.mjs`，可设置 `GITHUB_TOKEN`；同步回归：`node --test scripts/sync-livebench.test.mjs`；筛选回归：`bun test src/components/benchmarks/filters.test.ts`。
+- `sync-livebench.yml` 每 5 分钟检查。无变化通常 1 次请求，初次最多 6 次；每小时 12 轮，即使全量也仅 72 次同步请求（另加本站其他调用），低于 Actions 普通令牌每仓库每小时 1,000 次主额度。认证 304 不计主额度。
+- 串行请求，遵守 x-poll-interval、Retry-After 和重置时间，连续限流指数退避；Actions cache 保存 `.cache/livebench-state.json`，不入库。失败不覆盖旧榜单。
+- 数据变化才提交并复用 deploy.yml；需要机器人写入 main 的权限，不强推。部署失败重跑失败的 deploy job 或手动运行 Deploy。
+- 调度可能延迟，公开仓库 60 天无活动可能停用；站点缓存也影响更新速度，5 分钟不是时延承诺。
+- 上游无明确许可证，公开再分发前应确认授权；页面为有来源链接的非官方展示，双语界面不代表独立中英文评测。
+
+规则：[API 配额](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)、[条件请求与退避](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)。
+
 ## 每日技术资讯自动发布
 
 仓库内置一条 GitHub Actions 工作流 `.github/workflows/daily-tech-news.yml`，每天北京时间 07:00（UTC 23:00）自动运行：
