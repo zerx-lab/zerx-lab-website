@@ -1,12 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-    <rect x="0" y="0" width="10" height="10" class="main" />
-    <rect x="6" y="6" width="10" height="10" class="accent" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect x="1" y="4" width="27" height="27" rx="7" class="base" />
+    <path d="M9 12h11l-11 11h11" class="z" fill="none" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="26" cy="6" r="4.6" class="signal" />
     <style>
-        .main { fill: #000; }
-        .accent { fill: #000; fill-opacity: 0.35; }
+        .base { fill: #0c0c0e; }
+        .z { stroke: #f5f5f2; }
+        .signal { fill: #4f46e5; stroke: #f5f5f2; stroke-width: 2; }
         @media (prefers-color-scheme: dark) {
-            .main { fill: #FFF; }
-            .accent { fill: #FFF; fill-opacity: 0.35; }
+            .base { fill: #f3f3f4; }
+            .z { stroke: #08080a; }
+            .signal { fill: #8b85ff; stroke: #08080a; }
         }
     </style>
 </svg>

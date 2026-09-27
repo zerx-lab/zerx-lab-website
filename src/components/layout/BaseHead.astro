@@ -8,7 +8,7 @@
  *   2. SEO meta(title / description / canonical)
  *   3. Open Graph + Twitter Card
  *   4. hreflang 多语言声明
- *   5. 字体预加载(Geist Sans / Geist Mono / Noto Sans SC)
+ *   5. 自托管字体(@fontsource:Geist / Geist Mono / Instrument Serif 斜体)+ 拉丁子集预加载
  *   6. favicon / 主题色
  *   7. 主题防闪烁脚本(在 body 渲染前同步执行,决定是否加 .dark 类)
  *   8. RSS / sitemap 自动发现
@@ -23,7 +23,7 @@
  * 设计约束:
  *   - 不引入任何客户端框架,纯 Astro + 内联脚本
  *   - 防闪烁脚本不超过 1KB,必须同步执行
- *   - 字体自托管,不外链 Google Fonts(合规 + 国内访问)
+ *   - 字体经 @fontsource 打包自托管,不外链 Google Fonts(合规 + 国内访问)
  * ============================================================================
  */
 
@@ -33,6 +33,13 @@ import {
 	getHreflangLinks,
 } from "@i18n/utils";
 import { languageTags } from "@i18n/ui";
+
+// 自托管字体:@font-face 带 unicode-range,中文字符不会触发下载,回落系统字体
+import "@fontsource-variable/geist/wght.css";
+import "@fontsource-variable/geist-mono/wght.css";
+import "@fontsource/instrument-serif/latin-400-italic.css";
+import geistLatinUrl from "@fontsource-variable/geist/files/geist-latin-wght-normal.woff2?url";
+import geistMonoLatinUrl from "@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2?url";
 
 interface Props {
 	/** 页面标题(不含站点后缀,由本组件自动拼接) */
@@ -75,7 +82,7 @@ const lang = getLangFromUrl(Astro.url);
 const t = useTranslations(lang);
 const htmlLang = languageTags[lang];
 
-// 站点级配置(从环境/i18n 字典读取,保持与左栏 brand 一致)
+// 站点级配置(与 Logo 字标保持一致)
 const SITE_NAME = "ZerxLab";
 // 静态构建下没有请求头可用,siteUrl 必须来自 astro.config 的 `site` 字段
 // (对应构建期环境变量 SITE_URL),而不是 import.meta.env.SITE —— 后者在
@@ -120,8 +127,8 @@ const generator = Astro.generator;
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="color-scheme" content="light dark" />
-<meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)" />
-<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f5f5f2" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#08080a" media="(prefers-color-scheme: dark)" />
 <meta name="generator" content={generator} />
 
 {/* ---------- 标题 / 描述 ---------- */}
@@ -182,9 +189,7 @@ const generator = Astro.generator;
 
 {/* ---------- Favicon / 图标 ---------- */}
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-<link rel="alternate icon" type="image/png" href="/favicon.png" />
-<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-<link rel="manifest" href="/site.webmanifest" />
+<link rel="alternate icon" href="/favicon.ico" sizes="any" />
 
 {/* ---------- Sitemap / RSS 自动发现 ----------
  * RSS feed 按语言拆分成两个端点:
@@ -236,31 +241,12 @@ const generator = Astro.generator;
 	</>
 )}
 
-{/* ---------- 字体预连接 / 预加载 ----------
- * 字体自托管在 /public/fonts 下,使用 woff2 格式。
- * 关键字重 preload,其余字重按需异步加载(由 @font-face 的 font-display: swap 兜底)。
+{/* ---------- 字体预加载 ----------
+ * 首屏必用的拉丁子集(正文 Sans + 元信息 Mono)提前拉取,避免 FOUT 跳动;
+ * 其余子集按 unicode-range 惰性加载。
  * -------------------------------------------------------------------------- */}
-<link
-	rel="preload"
-	href="/fonts/geist-sans-regular.woff2"
-	as="font"
-	type="font/woff2"
-	crossorigin="anonymous"
-/>
-<link
-	rel="preload"
-	href="/fonts/geist-sans-medium.woff2"
-	as="font"
-	type="font/woff2"
-	crossorigin="anonymous"
-/>
-<link
-	rel="preload"
-	href="/fonts/geist-mono-regular.woff2"
-	as="font"
-	type="font/woff2"
-	crossorigin="anonymous"
-/>
+<link rel="preload" href={geistLatinUrl} as="font" type="font/woff2" crossorigin="anonymous" />
+<link rel="preload" href={geistMonoLatinUrl} as="font" type="font/woff2" crossorigin="anonymous" />
 
 {/* ---------- 原样透传的额外标签 ---------- */}
 {extraTags && <Fragment set:html={extraTags} />}

@@ -1,0 +1,150 @@
+---
+/**
+ * ============================================================================
+ * PageHero - 全宽页头
+ * ----------------------------------------------------------------------------
+ *   ~/zerx-lab/projects▍                                   REV · 2026.09.27
+ *
+ *   ■ EYEBROW
+ *   超大标题,可跨满版心                                    ┌ aside ┐
+ *   描述(最多 ~56ch)                                      │(lg 右侧│
+ *   [CTA] [CTA]                                           └───────┘
+ *
+ *   ┌ SpecStrip ─────┬──────────┬──────────┬──────────┐
+ *
+ * slots:
+ *   title       富文本标题(覆盖 title prop,如含 .serif-accent / .text-signal)
+ *   actions     按钮组
+ *   aside       右侧栏(lg 起占 4/12;移动端在正文下方)
+ *   background  绝对定位的全幅背景层(如首页激活场)
+ *   default     标题区下方、规格条上方的附加内容
+ *
+ * 标题带 view-transition-name(vt-page-title),跨页时形变。
+ * ============================================================================
+ */
+
+import SpecStrip, { type SpecItem } from "@components/layout/SpecStrip.astro";
+import { formatDateCompact, stripLangFromPath } from "@i18n/utils";
+
+interface Props {
+	/** 眉标 */
+	eyebrow?: string;
+	/** 标题(纯文本;富文本用 title slot) */
+	title?: string;
+	/** 描述 */
+	description?: string;
+	/** 尺寸:xl 首页 / lg 常规页 / md 长标题(文章页) */
+	size?: "md" | "lg" | "xl";
+	/** 规格条 */
+	spec?: readonly SpecItem[];
+	/** 终端路径;缺省由 URL 推断 */
+	path?: string;
+	/** 额外类名 */
+	class?: string;
+}
+
+const {
+	eyebrow,
+	title,
+	description,
+	size = "lg",
+	spec,
+	path,
+	class: className = "",
+} = Astro.props;
+
+const neutral = stripLangFromPath(Astro.url.pathname).replace(/\/$/, "");
+const terminalPath = path ?? `~/zerx-lab${neutral}`;
+const revision = formatDateCompact(new Date()).replaceAll("-", ".");
+
+const hasTitleSlot = Astro.slots.has("title");
+const hasActions = Astro.slots.has("actions");
+const hasAside = Astro.slots.has("aside");
+const hasBackground = Astro.slots.has("background");
+const hasDefault = Astro.slots.has("default");
+---
+
+<section
+	class:list={[
+		"page-hero relative isolate",
+		size === "xl" ? "pt-32 lg:pt-44 pb-14 lg:pb-20" : "pt-32 lg:pt-40 pb-12 lg:pb-16",
+		className,
+	]}
+>
+	{hasBackground && (
+		<div class="absolute inset-0 -z-[1] overflow-hidden" aria-hidden="true">
+			<slot name="background" />
+		</div>
+	)}
+
+	<div class="wrap relative">
+		{/* 终端路径 / 修订号 */}
+		<div class="flex items-center justify-between gap-4 font-[var(--font-mono)] text-[11px] leading-none text-[color:var(--color-ink-tertiary)] reveal" style="--i: 0">
+			<span class="inline-flex items-center min-w-0 truncate">
+				<span class="text-[color:var(--color-signal)]">{terminalPath.slice(0, 1)}</span>
+				<span class="truncate">{terminalPath.slice(1)}</span>
+				<span aria-hidden="true" class="ml-1 inline-block h-[12px] w-[6px] bg-[color:var(--color-ink-primary)] opacity-70 animate-[var(--animate-blink)]"></span>
+			</span>
+			<span class="hidden sm:inline shrink-0 uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">
+				Rev · {revision}
+			</span>
+		</div>
+
+		<div class:list={["mt-10 lg:mt-14 grid gap-10 lg:gap-12", hasAside && "lg:grid-cols-12 lg:items-end"]}>
+			<div class:list={[hasAside && "lg:col-span-8"]}>
+				{eyebrow && <span class="eyebrow reveal" style="--i: 1">{eyebrow}</span>}
+
+				<h1
+					class:list={[
+						"page-hero__title display reveal",
+						eyebrow && "mt-5",
+						size === "xl"
+							? "text-[clamp(2.9rem,7.8vw,7.25rem)] leading-[0.95] tracking-[-0.05em]"
+							: size === "md"
+								? "text-[clamp(2.25rem,4.8vw,4.25rem)] leading-[1.02] tracking-[-0.04em]"
+								: "text-[clamp(2.6rem,6.6vw,6rem)] leading-[0.98] tracking-[-0.045em]",
+					]}
+					style="--i: 2"
+				>
+					{hasTitleSlot ? <slot name="title" /> : title}
+				</h1>
+
+				{description && (
+					<p class="mt-6 lg:mt-8 max-w-[56ch] text-[16px] lg:text-[18px] leading-[1.65] text-[color:var(--color-ink-secondary)] reveal" style="--i: 3">
+						{description}
+					</p>
+				)}
+
+				{hasActions && (
+					<div class="mt-8 flex flex-wrap items-center gap-3 reveal" style="--i: 4">
+						<slot name="actions" />
+					</div>
+				)}
+			</div>
+
+			{hasAside && (
+				<div class="lg:col-span-4 reveal" style="--i: 4">
+					<slot name="aside" />
+				</div>
+			)}
+		</div>
+
+		{hasDefault && (
+			<div class="mt-12 lg:mt-14 reveal" style="--i: 5">
+				<slot />
+			</div>
+		)}
+
+		{spec && spec.length > 0 && (
+			<div class="mt-14 lg:mt-20 reveal" style="--i: 6">
+				<SpecStrip items={spec} />
+			</div>
+		)}
+	</div>
+</section>
+
+<style>
+	.page-hero__title {
+		view-transition-name: vt-page-title;
+	}
+</style>

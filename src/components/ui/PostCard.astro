@@ -1,114 +1,81 @@
 ---
 /**
  * ============================================================================
- * PostCard - 博客文章列表卡片
+ * PostCard - 博客文章卡片(两种形态)
  * ----------------------------------------------------------------------------
- * 视觉参考: better-auth.com 的 /blog 列表页
- *   - 每行一个"横向卡片":左侧封面占位块 + 右侧文字内容
- *   - 封面若无图,用深色占位块渲染文章"coverLabel"大字(如 v1.6 Release)
- *   - 标题 + 简介 + 底部 meta(作者 · 日期 · 标签)
- *   - 整行 hover 时背景变浅,右侧显示浮动箭头
- *   - 不使用圆角、不使用阴影;靠虚线分割与留白形成节奏
+ * variant="row"(默认):写作履历时间线的一行。月份由外层分组栏给出,
+ * 本行只负责"日"与正文:
  *
- * 典型呈现:
- *   ┌─────────────────────────────────────────────────────────────┐
- *   │ ┌──────────┐                                                │
- *   │ │          │  文章标题                                      │
- *   │ │  v1.6    │  一句话简介,控制在两行内,超出省略号...        │
- *   │ │ Release  │                                                │
- *   │ │          │  Taesu Kim · Apr 7, 2026                       │
- *   │ └──────────┘  #v1.6  #OpenTelemetry  #passkey       →       │
- *   └─────────────────────────────────────────────────────────────┘
+ *   ┌──────┬──────────────────────────────────────────┬──────────┐
+ *   │  22  │ ENGINEERING                              │   6 MIN  │
+ *   │  TUE │ 文章标题(hover 下划线生长)               │      ↗   │
+ *   │      │ 一句话摘要,两行截断…                      │          │
+ *   │      │ #astro #bun                              │          │
+ *   └──────┴──────────────────────────────────────────┴──────────┘
  *
- * 用法:
- *   <PostCard
- *     href="/blog/zerxlab-launch"
- *     title="ZerxLab 正式上线"
- *     excerpt="一个属于实验室的公开橱窗..."
- *     coverLabel="v0.1 上线"
- *     authorName="zerx"
- *     date="2026-04-17T00:00:00.000Z"
- *     tags={[{ slug: "astro", name: "Astro" }, { slug: "bun", name: "Bun" }]}
- *     featured
- *   />
+ * variant="feature":封面式大卡(精选 / 最新),用于第 1 页顶部 Bento。
+ *   - layout="stack":封面在上、文字在下,封面在 lg 起吃掉剩余高度(Bento 等高)
+ *   - layout="split":lg 起左 7/12 封面 + 右 5/12 文字(单张全宽时使用)
+ *   - 无图时用 coverLabel 做排版化封面:点阵 + Signal 光晕 + 超大标签
  *
- *   传入真实封面图(优先级高于 coverLabel):
- *   <PostCard ... cover="/images/post-1.jpg" coverAlt="..." />
- *
- * 设计约束:
- *   - 卡片本身是一个 <a>,整行可点击(不要在内部再嵌套链接)
- *   - 所有文字支持响应式截断,避免在窄屏下换行炸开
- *   - 深色占位块仅在 cover 为空时使用,颜色固定为墨色(不随主题反相),
- *     因为大字标签本身靠"黑底 + 白色弱对比"文本保证可读性
+ * 约束:整个卡片是一个 <a>,内部不嵌套链接;动效只动 transform / opacity。
  * ============================================================================
  */
 
-import { getLangFromUrl, useTranslations, formatDate } from "@i18n/utils";
+import { getLangFromUrl, useTranslations, formatDateCompact } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 
 /** 标签数据结构(与 PostVM.tags 的单项一致) */
 export interface PostCardTag {
-	/** URL slug,用于生成跳转链接或作为 key */
+	/** URL slug */
 	slug: string;
 	/** 展示名(调用方负责 pickLang 解包) */
 	name: string;
 }
 
 interface Props {
-	/** 文章详情页 URL(通常 `${tp}/blog/${slug}`) */
+	/** 文章详情页 URL */
 	href: string;
-	/** 文章标题 */
+	/** 文章标题(纯文本,也用于 aria-label / 封面 alt) */
 	title: string;
-	/**
-	 * 可选:带高亮标记的标题 HTML 片段(由调用方用 @lib/highlight 生成)。
-	 *
-	 * 为什么同时保留 title 与 titleHtml:
-	 *   - title 永远是纯文本,用于 aria-label / 封面 alt,保证可访问性不泄漏 <mark>
-	 *   - titleHtml 只在搜索场景注入,内部用 set:html 渲染
-	 *   - 不传则按纯文本渲染 title,交互完全向后兼容
-	 *
-	 * 安全约定:
-	 *   titleHtml 必须是经 @lib/highlight 处理过的"HTML 安全"字符串
-	 *   (原文已转义 + 仅 <mark> 标签)。调用方如果自行拼 HTML 必须先 escapeHtml。
-	 */
-	titleHtml?: string;
-	/** 简介(控制在 2 行内) */
+	/** 简介 */
 	excerpt?: string;
-	/**
-	 * 可选:带高亮标记的简介 HTML 片段(语义同 titleHtml)。
-	 * 不传则按纯文本渲染 excerpt。
-	 */
-	excerptHtml?: string;
-	/** 封面图 URL(优先级高于 coverLabel) */
+	/** 封面图 URL(仅 feature 形态展示;优先级高于 coverLabel) */
 	cover?: string | null;
-	/** 封面图 alt 文本(a11y) */
+	/** 封面图 alt 文本 */
 	coverAlt?: string;
-	/** 封面占位块上的大字标签(如 "v1.6 Release" / "Benchmark") */
+	/** 排版化封面上的大字标签 */
 	coverLabel?: string;
-	/** 作者姓名(不翻译,保持原名) */
+	/** 作者姓名(feature 形态展示) */
 	authorName?: string;
-	/** 发布日期(ISO 8601 字符串或 Date),用 formatDate 本地化 */
+	/** 发布日期(ISO 8601 字符串或 Date) */
 	date: string | Date;
 	/** 标签列表 */
 	tags?: readonly PostCardTag[];
-	/** 分类名(可选,显示在 date 之前) */
+	/** 分类名 */
 	categoryName?: string;
 	/** 阅读时长(分钟) */
 	readingTime?: number;
-	/** 是否精选(精选卡片背景略有区别) */
-	featured?: boolean;
+	/** 形态 */
+	variant?: "row" | "feature";
+	/** feature 形态的版式 */
+	layout?: "stack" | "split";
+	/** feature 形态左上角徽标(如"精选" / "最新") */
+	badge?: string;
+	/** 徽标是否用 Signal 强调(精选) */
+	badgeSignal?: boolean;
 	/** 额外类名 */
 	class?: string;
-	/** 最多显示多少个标签,超出省略(默认 3) */
+	/** 额外内联样式(如 reveal 的 --i) */
+	style?: string;
+	/** 最多显示多少个标签,超出以 +N 表示(默认 3) */
 	maxTags?: number;
 }
 
 const {
 	href,
 	title,
-	titleHtml,
 	excerpt,
-	excerptHtml,
 	cover,
 	coverAlt,
 	coverLabel,
@@ -117,480 +84,410 @@ const {
 	tags = [],
 	categoryName,
 	readingTime,
-	featured = false,
+	variant = "row",
+	layout = "stack",
+	badge,
+	badgeSignal = false,
 	class: className = "",
+	style,
 	maxTags = 3,
 } = Astro.props;
 
-// ---------- i18n ----------
 const lang = getLangFromUrl(Astro.url) as Lang;
 const t = useTranslations(lang);
 
-// ---------- 格式化 ----------
-const formattedDate = formatDate(date, lang);
+const compact = formatDateCompact(date); // YYYY-MM-DD(与全站日期同一时区口径)
+const dottedDate = compact.replaceAll("-", ".");
+const day = compact.slice(8, 10);
+const isoDate = new Date(date).toISOString();
 
-// 标签截断(超出 maxTags 的部分用 "+N" 标注)
+const WEEKDAYS = {
+	zh: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
+	en: ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"],
+} as const;
+const weekday = WEEKDAYS[lang][new Date(date).getDay()] ?? "";
+
 const visibleTags = tags.slice(0, maxTags);
 const hiddenTagCount = Math.max(0, tags.length - maxTags);
+const moreTagsLabel =
+	lang === "zh" ? `另有 ${hiddenTagCount} 个标签` : `${hiddenTagCount} more tags`;
 
-// 封面模式判定:
-//   - 有 cover URL → 渲染真实图片
-//   - 无 cover 但有 coverLabel → 渲染墨色占位块 + 大字
-//   - 都没有 → 渲染极简占位(仅一个方块 + 斜杠,纯装饰)
-const hasImageCover = Boolean(cover);
-const hasLabelCover = !hasImageCover && Boolean(coverLabel);
+const hasReadingTime = typeof readingTime === "number" && readingTime > 0;
+const readLabel = lang === "zh" ? "阅读全文" : "Read";
+
+const isSplit = layout === "split";
+const placeholderLabel = coverLabel || title;
 ---
 
-<a
-	href={href}
-	aria-label={title}
-	data-featured={featured ? "true" : undefined}
-	class:list={[
-		"post-card",
-		"group relative",
-		"flex flex-col sm:flex-row items-stretch",
-		"gap-4 sm:gap-5 lg:gap-6",
-		"px-4 sm:px-5 lg:px-6 py-5 lg:py-6",
-		// 整行 hover 背景反馈(精选卡片略亮)
-		featured
-			? "bg-[color:var(--color-paper-muted)]/30"
-			: "bg-transparent",
-		"hover:bg-[color:var(--color-paper-muted)]/60",
-		"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-		// 编辑派:无圆角无阴影
-		"rounded-none",
-		"no-underline",
-		"cursor-pointer",
-		className,
-	]}
->
-	{/* ================================================================
-	 *                              封面区
-	 * ================================================================ */}
-	<div
-		class:list={[
-			"post-card__cover",
-			"shrink-0",
-			"relative",
-			// 移动端占满宽度 + 固定比例,桌面端左侧固定尺寸
-			"w-full sm:w-[180px] lg:w-[200px]",
-			"aspect-[16/10] sm:aspect-[16/10] lg:aspect-[16/10]",
-			"overflow-hidden",
-			// 统一边框,无论图片还是占位都有一根发丝
-			"border border-[color:var(--color-hairline)]",
-			"bg-[color:var(--color-paper-subtle)]",
-		]}
-	>
-		{/* ----------------------------------------------------------------
-		 *   精选徽标 —— 封面左上角浮层
-		 * ----------------------------------------------------------------
-		 *   形态贴合编辑派:
-		 *     - 虚线边框(系统主语言,与 BlogIndexPage 列表框、AboutPage 卡片一致)
-		 *     - 纸色半透明底 + 墨色 ink-tertiary 文字
-		 *     - font-mono + uppercase + tracking-wider(与 .mono-label 同规范)
-		 *   位置:
-		 *     - absolute top-2 left-2,永远在封面图/占位/斜线之上
-		 *     - z-20 保证压过占位块里的噪点与索引条(z 为 10)
-		 *   暗色模式:
-		 *     - 颜色全走 CSS 变量,自动反相,无需额外处理
-		 * -------------------------------------------------------------- */}
-		{featured && (
-			<span
-				aria-label={t("blog.featured")}
-				class:list={[
-					"absolute top-2 left-2 z-20",
-					"inline-flex items-center",
-					"px-1.5 py-[2px]",
-					"font-[var(--font-mono)]",
-					"text-[10px] sm:text-[10.5px]",
-					"leading-none",
-					"uppercase tracking-[var(--tracking-wider)]",
-					"text-[color:var(--color-ink-secondary)]",
-					"bg-[color:var(--color-paper)]/85",
-					"border border-dashed border-[color:var(--color-hairline-strong)]",
-					"backdrop-blur-[2px]",
-					"select-none pointer-events-none",
-				]}
-			>
-				{t("blog.featured")}
-			</span>
-		)}
-		{hasImageCover ? (
-			<img
-				src={cover!}
-				alt={coverAlt ?? title}
-				loading="lazy"
-				decoding="async"
-				class:list={[
-					"h-full w-full object-cover",
-					"transition-transform duration-[var(--duration-slow)] ease-[var(--ease-standard)]",
-					"group-hover:scale-[1.02]",
-				]}
-			/>
-		) : hasLabelCover ? (
-			<div
-				class:list={[
-					// 墨色占位块,不随主题反相 —— 让列表整体有"卡带/胶片"式识别度
-					"relative h-full w-full",
-					"bg-[#0a0a0a]",
-					"overflow-hidden",
-					"flex flex-col justify-end",
-					"p-3 sm:p-4",
-				]}
-			>
-				{/* 背景装饰:微弱的点阵,模拟噪点纸感,不喧宾夺主 */}
-				<span
-					aria-hidden="true"
-					class:list={[
-						"pointer-events-none absolute inset-0",
-						"opacity-[0.06]",
-					]}
-					style="background-image: radial-gradient(circle, #fff 0.5px, transparent 0.5px); background-size: 6px 6px;"
-				/>
-
-				{/* 大字标签 */}
-				<div
-					class:list={[
-						"relative z-10",
-						"font-[var(--font-sans)]",
-						"font-semibold tracking-[-0.01em]",
-						"text-white",
-						"text-[18px] sm:text-[19px] lg:text-[20px]",
-						"leading-[1.1]",
-						"line-clamp-2",
-					]}
-				>
-					{coverLabel}
-				</div>
-
-				{/* 底部装饰:一条细线 + 小点,仿磁带索引标签 */}
-				<div
-					aria-hidden="true"
-					class:list={[
-						"relative z-10",
-						"flex items-center gap-2",
-						"mt-3",
-					]}
-				>
-					<span class="inline-block h-px flex-1 bg-white/15" />
-					<span class="inline-block h-1.5 w-1.5 rounded-full bg-white/30" />
-				</div>
-			</div>
-		) : (
-			/* 极简占位:仅一条对角斜线,编辑派装饰 */
-			<div
-				aria-hidden="true"
-				class:list={[
-					"h-full w-full relative",
-					"bg-[color:var(--color-paper-subtle)]",
-				]}
-			>
-				<svg
-					class="absolute inset-0 h-full w-full text-[color:var(--color-hairline-strong)]"
-					viewBox="0 0 100 100"
-					preserveAspectRatio="none"
-					aria-hidden="true"
-				>
-					<line
-						x1="0"
-						y1="100"
-						x2="100"
-						y2="0"
-						stroke="currentColor"
-						stroke-width="0.5"
-						stroke-dasharray="2 2"
-						vector-effect="non-scaling-stroke"
-					/>
-				</svg>
-			</div>
-		)}
-	</div>
-
-	{/* ================================================================
-	 *                              文字区
-	 * ================================================================ */}
-	<div class="flex-1 min-w-0 flex flex-col justify-between gap-3">
-		{/* ---------- 顶部:标题 + 简介 ---------- */}
-		<div class="flex flex-col gap-2">
-			{/*
-			 * 标题渲染策略:
-			 *   - 有 titleHtml(搜索高亮场景)→ set:html 注入已转义 + <mark> 包裹的 HTML
-			 *   - 否则 → 按纯文本渲染 title(Astro 会自动 escape,安全)
-			 * titleHtml 的来源必须是 @lib/highlight 的 highlight() 返回值,
-			 * 否则存在 XSS 风险(见 PostCard Props 注释)。
-			 */}
-			<h3
-				class:list={[
-					"font-medium",
-					"text-[color:var(--color-ink-primary)]",
-					"tracking-[-0.015em]",
-					"leading-[1.35]",
-					"text-[17px] sm:text-[18px] lg:text-[19px]",
-					"line-clamp-2",
-					// hover 时标题微妙加深(暗色模式下刚好相反,自动跟随 var)
-					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-				]}
-			>
-				{titleHtml ? <Fragment set:html={titleHtml} /> : title}
-			</h3>
-
-			{(excerptHtml || excerpt) && (
-				<p
-					class:list={[
-						"text-[color:var(--color-ink-secondary)]",
-						"text-[13.5px] sm:text-[14px]",
-						"leading-[1.6]",
-						"line-clamp-2",
-						"max-w-[72ch]",
-					]}
-				>
-					{excerptHtml ? (
-						<Fragment set:html={excerptHtml} />
-					) : (
-						excerpt
-					)}
-				</p>
-			)}
-		</div>
-
-		{/* ---------- 底部:meta 行 ---------- */}
-		<div
+{
+	variant === "feature" ? (
+		<a
+			href={href}
+			aria-label={title}
+			data-spotlight
+			style={style}
 			class:list={[
-				"flex items-center justify-between gap-3",
-				"flex-wrap",
+				"post-card post-card--feature",
+				"surface-card spotlight",
+				"group flex h-full flex-col overflow-hidden no-underline",
+				isSplit && "lg:grid lg:grid-cols-12",
+				className,
 			]}
 		>
-			{/* 左:作者 · 分类 · 日期 · 阅读时长 */}
+			{/* ---------------- 封面 ---------------- */}
 			<div
 				class:list={[
-					"flex items-center gap-2",
-					"flex-wrap",
-					"font-[var(--font-mono)]",
-					"text-[10.5px] sm:text-[11px]",
-					"leading-none",
-					"tracking-[var(--tracking-wide)]",
-					"text-[color:var(--color-ink-tertiary)]",
-					"tabular-nums",
+					"post-card__cover relative overflow-hidden",
+					"bg-[color:var(--color-paper-muted)]",
+					"border-b border-[color:var(--color-hairline)]",
+					isSplit
+						? "aspect-[16/10] lg:col-span-7 lg:aspect-auto lg:min-h-[380px] lg:border-b-0 lg:border-r"
+						: "aspect-[16/10] lg:aspect-auto lg:min-h-[220px] lg:flex-1",
 				]}
 			>
-				{authorName && (
-					<>
-						<span class="truncate max-w-[12ch] sm:max-w-[18ch]">
-							{authorName}
-						</span>
-						<span
-							aria-hidden="true"
-							class="text-[color:var(--color-ink-muted)]"
-						>
-							·
-						</span>
-					</>
+				{cover ? (
+					<img
+						src={cover}
+						alt={coverAlt ?? title}
+						loading="lazy"
+						decoding="async"
+						class="post-card__img absolute inset-0 h-full w-full object-cover"
+					/>
+				) : (
+					<div aria-hidden="true" class="absolute inset-0">
+						<span class="dot-grid absolute inset-0 opacity-70" />
+						<span class="post-card__glow absolute" />
+						<div class="relative flex h-full flex-col justify-end gap-4 p-6 lg:p-8">
+							<span
+								class:list={[
+									"post-card__label display line-clamp-3 max-w-[18ch]",
+									isSplit
+										? "text-[34px] sm:text-[44px] lg:text-[56px]"
+										: "text-[28px] sm:text-[36px] lg:text-[44px]",
+								]}
+							>
+								{placeholderLabel}
+							</span>
+							<span class="block h-[2px] w-12 rounded-full bg-[image:var(--gradient-signal)]" />
+						</div>
+					</div>
 				)}
 
-				{categoryName && (
-					<>
+				{/* 左上:徽标;右上:mono 刻度 */}
+				<div class="absolute inset-x-4 top-4 z-10 flex items-center justify-between gap-3">
+					{badge ? (
 						<span
 							class:list={[
-								"uppercase",
-								"text-[color:var(--color-ink-secondary)]",
-							]}
-						>
-							{categoryName}
-						</span>
-						<span
-							aria-hidden="true"
-							class="text-[color:var(--color-ink-muted)]"
-						>
-							·
-						</span>
-					</>
-				)}
-
-				<time datetime={new Date(date).toISOString()}>
-					{formattedDate}
-				</time>
-
-				{typeof readingTime === "number" && readingTime > 0 && (
-					<>
-						<span
-							aria-hidden="true"
-							class="text-[color:var(--color-ink-muted)]"
-						>
-							·
-						</span>
-						<span class="uppercase">
-							{readingTime} {t("blog.minutes")}
-						</span>
-					</>
-				)}
-			</div>
-
-			{/* 右:标签 */}
-			{tags.length > 0 && (
-				<ul
-					class:list={[
-						"flex items-center gap-2",
-						"flex-wrap",
-						"list-none m-0 p-0",
-					]}
-				>
-					{visibleTags.map((tag) => (
-						<li
-							class:list={[
-								"inline-flex items-center",
-								"font-[var(--font-mono)]",
-								"text-[10.5px] sm:text-[11px]",
-								"leading-none",
-								"tracking-[var(--tracking-wide)]",
-								"text-[color:var(--color-ink-tertiary)]",
-								"group-hover:text-[color:var(--color-ink-secondary)]",
-								"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-								"select-none",
+								"chip uppercase tracking-[var(--tracking-wide)]",
+								badgeSignal && "chip-signal",
 							]}
 						>
 							<span
 								aria-hidden="true"
-								class="text-[color:var(--color-ink-muted)] mr-[2px]"
-							>
-								#
-							</span>
-							<span>{tag.name}</span>
-						</li>
-					))}
-					{hiddenTagCount > 0 && (
-						<li
-							aria-label={
-								lang === "zh"
-									? `另有 ${hiddenTagCount} 个标签`
-									: `${hiddenTagCount} more tags`
-							}
-							class:list={[
-								"inline-flex items-center",
-								"font-[var(--font-mono)]",
-								"text-[10.5px] sm:text-[11px]",
-								"leading-none",
-								"tracking-[var(--tracking-wide)]",
-								"text-[color:var(--color-ink-muted)]",
-								"tabular-nums",
-							]}
-						>
-							+{hiddenTagCount}
-						</li>
+								class:list={[
+									"h-[5px] w-[5px] rounded-[1px]",
+									badgeSignal
+										? "bg-[color:var(--color-signal)]"
+										: "bg-[color:var(--color-ink-muted)]",
+								]}
+							/>
+							{badge}
+						</span>
+					) : (
+						<span />
 					)}
-				</ul>
-			)}
-		</div>
-	</div>
+					<span aria-hidden="true" class="mono-num text-[10.5px] text-[color:var(--color-ink-muted)]">
+						ZX / {dottedDate}
+					</span>
+				</div>
+			</div>
 
-	{/* ================================================================
-	 *                    右侧悬浮箭头(hover 时显现)
-	 * ================================================================ */}
-	<span
-		aria-hidden="true"
-		class:list={[
-			"post-card__arrow",
-			"hidden sm:flex items-center justify-center",
-			"shrink-0 self-center",
-			"h-7 w-7",
-			"text-[color:var(--color-ink-tertiary)]",
-			"opacity-0 -translate-x-2",
-			"group-hover:opacity-100 group-hover:translate-x-0",
-			"group-hover:text-[color:var(--color-ink-primary)]",
-			"transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-		]}
-	>
-		<svg
-			width="16"
-			height="16"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="2"
-			stroke-linecap="round"
-			stroke-linejoin="round"
+			{/* ---------------- 文字 ---------------- */}
+			<div
+				class:list={[
+					"flex min-w-0 flex-col gap-3 p-6 lg:p-7",
+					isSplit && "lg:col-span-5 lg:justify-end lg:p-9",
+				]}
+			>
+				<div
+					class:list={[
+						"flex flex-wrap items-center gap-x-2 gap-y-1",
+						"font-[var(--font-mono)] text-[11px] uppercase leading-none",
+						"tracking-[var(--tracking-wide)] tabular-nums",
+						"text-[color:var(--color-ink-tertiary)]",
+					]}
+				>
+					<time datetime={isoDate} class="text-[color:var(--color-ink-secondary)]">
+						{dottedDate}
+					</time>
+					{categoryName && (
+						<>
+							<span aria-hidden="true" class="text-[color:var(--color-ink-faint)]">/</span>
+							<span>{categoryName}</span>
+						</>
+					)}
+					{hasReadingTime && (
+						<>
+							<span aria-hidden="true" class="text-[color:var(--color-ink-faint)]">/</span>
+							<span>
+								{readingTime} {t("blog.minutes")}
+							</span>
+						</>
+					)}
+				</div>
+
+				<h3
+					class:list={[
+						"post-card__heading clamp-3 font-semibold",
+						"text-[color:var(--color-ink-primary)]",
+						isSplit
+							? "text-[26px] sm:text-[30px] lg:text-[34px] leading-[1.1] tracking-[-0.035em]"
+							: "text-[22px] sm:text-[24px] lg:text-[26px] leading-[1.16] tracking-[-0.03em]",
+					]}
+				>
+					<span class="post-card__title">{title}</span>
+				</h3>
+
+				{excerpt && (
+					<p class="clamp-3 max-w-[60ch] text-[14.5px] leading-[1.65] text-[color:var(--color-ink-secondary)]">
+						{excerpt}
+					</p>
+				)}
+
+				<div class="mt-auto flex flex-wrap items-center gap-2 pt-4">
+					{authorName && (
+						<span class="mr-1 font-[var(--font-mono)] text-[11px] tracking-[var(--tracking-wide)] text-[color:var(--color-ink-tertiary)]">
+							@{authorName}
+						</span>
+					)}
+					{visibleTags.length > 0 && (
+						<ul class="m-0 flex list-none flex-wrap items-center gap-1.5 p-0">
+							{visibleTags.map((tag) => (
+								<li class="chip">
+									<span aria-hidden="true" class="text-[color:var(--color-ink-muted)]">#</span>
+									{tag.name}
+								</li>
+							))}
+							{hiddenTagCount > 0 && (
+								<li class="chip tabular-nums" aria-label={moreTagsLabel}>
+									+{hiddenTagCount}
+								</li>
+							)}
+						</ul>
+					)}
+					<span
+						aria-hidden="true"
+						class="ml-auto inline-flex items-center gap-1.5 font-[var(--font-mono)] text-[11px] uppercase leading-none tracking-[var(--tracking-wider)] text-[color:var(--color-ink-primary)]"
+					>
+						{readLabel}
+						<svg class="post-card__arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M5 12h14" />
+							<path d="m12 5 7 7-7 7" />
+						</svg>
+					</span>
+				</div>
+			</div>
+		</a>
+	) : (
+		<a
+			href={href}
+			aria-label={title}
+			style={style}
+			class:list={[
+				"post-card post-card--row",
+				"group relative isolate grid no-underline",
+				"grid-cols-[3.25rem_minmax(0,1fr)] sm:grid-cols-[4rem_minmax(0,1fr)_6.5rem]",
+				"gap-x-5 sm:gap-x-8 gap-y-2",
+				"py-6 lg:py-7",
+				className,
+			]}
 		>
-			<path d="M5 12h14" />
-			<path d="m12 5 7 7-7 7" />
-		</svg>
-	</span>
-</a>
+			{/* ---------------- 日 ---------------- */}
+			<div class="flex flex-col items-start gap-1.5 pt-[2px]">
+				<time
+					datetime={isoDate}
+					class="post-card__day text-[28px] font-semibold leading-none tracking-[-0.04em] tabular-nums lg:text-[32px]"
+				>
+					<span class="sr-only">{dottedDate}</span>
+					<span aria-hidden="true">{day}</span>
+				</time>
+				<span aria-hidden="true" class="mono-label text-[10px] leading-none text-[color:var(--color-ink-muted)]">
+					{weekday}
+				</span>
+			</div>
+
+			{/* ---------------- 正文 ---------------- */}
+			<div class="flex min-w-0 flex-col gap-2">
+				{categoryName && (
+					<span class="mono-label text-[10.5px] leading-none text-[color:var(--color-ink-tertiary)]">
+						{categoryName}
+					</span>
+				)}
+				<h3 class="post-card__heading clamp-2 pr-8 text-[18px] font-semibold leading-[1.3] tracking-[-0.022em] text-[color:var(--color-ink-primary)] sm:pr-0 lg:text-[20px]">
+					<span class="post-card__title">{title}</span>
+				</h3>
+				{excerpt && (
+					<p class="clamp-2 max-w-[68ch] text-[14px] leading-[1.6] text-[color:var(--color-ink-tertiary)]">
+						{excerpt}
+					</p>
+				)}
+				{visibleTags.length > 0 && (
+					<ul class="m-0 mt-1.5 flex list-none flex-wrap items-center gap-1.5 p-0">
+						{visibleTags.map((tag) => (
+							<li class="chip">
+								<span aria-hidden="true" class="text-[color:var(--color-ink-muted)]">#</span>
+								{tag.name}
+							</li>
+						))}
+						{hiddenTagCount > 0 && (
+							<li class="chip tabular-nums" aria-label={moreTagsLabel}>
+								+{hiddenTagCount}
+							</li>
+						)}
+					</ul>
+				)}
+				{hasReadingTime && (
+					<span class="mt-1 font-[var(--font-mono)] text-[10.5px] uppercase leading-none tracking-[var(--tracking-wide)] tabular-nums text-[color:var(--color-ink-tertiary)] sm:hidden">
+						{readingTime} {t("blog.minutes")}
+					</span>
+				)}
+			</div>
+
+			{/* ---------------- 右列:时长 + 箭头 ---------------- */}
+			<div class="hidden flex-col items-end justify-between gap-4 pt-[3px] sm:flex">
+				{hasReadingTime && (
+					<span class="font-[var(--font-mono)] text-[10.5px] uppercase leading-none tracking-[var(--tracking-wide)] tabular-nums text-[color:var(--color-ink-tertiary)]">
+						{readingTime} {t("blog.minutes")}
+					</span>
+				)}
+				<span aria-hidden="true" class="post-card__go inline-flex h-7 w-7 items-center justify-center text-[color:var(--color-ink-primary)]">
+					<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M7 17 17 7" />
+						<path d="M8 7h9v9" />
+					</svg>
+				</span>
+			</div>
+		</a>
+	)
+}
 
 <style>
-	/* ----------------------------------------------------------------------------
-	 * line-clamp 兜底
-	 * --------------------------------------------------------------------------
-	 * Tailwind v4 的 line-clamp-2 默认基于 @apply 提供,这里再保一次,
-	 * 避免在极少数 PostCSS 配置下失效。
-	 * -------------------------------------------------------------------------- */
-
-	.post-card h3 {
+	/* ---------------- 截断 ---------------- */
+	.clamp-2,
+	.clamp-3 {
 		display: -webkit-box;
-		-webkit-line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}
-
-	.post-card p {
-		display: -webkit-box;
+	.clamp-2 {
 		-webkit-line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
+	}
+	.clamp-3 {
+		-webkit-line-clamp: 3;
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 精选卡片
-	 * --------------------------------------------------------------------------
-	 * 视觉标识由封面左上角的 "FEATURED / 精选" 徽标承担(见上方模板),
-	 * 外加整张卡片的 bg-[color:var(--color-paper-muted)]/30 底色区分;
-	 * 此处保留 data-featured 选择器作为未来扩展钩子(如加侧边强调条),
-	 * 当前不追加任何规则,避免与模板里的 Tailwind 工具类重复或冲突。
-	 * -------------------------------------------------------------------------- */
-
-	.post-card[data-featured="true"] {
-		/* reserved */
+	/* ---------------- 标题下划线生长(整卡 hover / 聚焦时触发) ---------------- */
+	.post-card__title {
+		background-image: linear-gradient(currentColor, currentColor);
+		background-size: 0% 1px;
+		background-position: 0 100%;
+		background-repeat: no-repeat;
+		transition: background-size var(--duration-slow) var(--ease-out-expo);
+	}
+	.post-card:hover .post-card__title,
+	.post-card:focus-visible .post-card__title {
+		background-size: 100% 1px;
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 暗色模式下的封面占位:
-	 * 即使主题切换为暗色,墨色占位块(.bg-[#0a0a0a])保持不变,
-	 * 大字标签依然白色 —— 编辑派的"固定标签"不反相,保持一致的视觉识别度。
-	 * -------------------------------------------------------------------------- */
-	:global(:root.dark) .post-card {
-		/* 暗色模式下 hover 背景的不透明度需要微调,防止纸色太亮 */
+	/* ================= 时间线行 ================= */
+
+	/* hover 底色:伪元素 opacity 淡入,略微外扩,不影响排版 */
+	.post-card--row::before {
+		content: "";
+		position: absolute;
+		inset: 0.375rem -0.875rem;
+		z-index: -1;
+		border-radius: var(--radius-md);
+		background-color: var(--color-surface);
+		box-shadow: 0 0 0 1px var(--color-hairline);
+		opacity: 0;
+		transform: scale(0.985);
+		transition:
+			opacity var(--duration-base) var(--ease-standard),
+			transform var(--duration-slow) var(--ease-out-expo);
+	}
+	.post-card--row:hover::before,
+	.post-card--row:focus-visible::before {
+		opacity: 1;
+		transform: none;
+	}
+	.post-card--row:focus-visible {
+		outline-offset: 4px;
+		border-radius: var(--radius-md);
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 聚焦态:整张卡片可键盘访问
-	 * --------------------------------------------------------------------------
-	 * :focus-visible 沿用全局样式(2px 实线描边),这里仅确保 outline-offset
-	 * 不会被周围的 padding 吃掉导致视觉错乱。
-	 * -------------------------------------------------------------------------- */
-
-	.post-card:focus-visible {
-		outline-offset: -2px;
+	.post-card__day {
+		color: var(--color-ink-secondary);
+		transition: color var(--duration-fast) var(--ease-standard);
+	}
+	.post-card--row:hover .post-card__day,
+	.post-card--row:focus-visible .post-card__day {
+		color: var(--color-signal);
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 搜索高亮 <mark class="search-hit">
-	 * --------------------------------------------------------------------------
-	 * 由 @lib/highlight 的 highlight() 产出的命中片段。
-	 * 视觉:
-	 *   - 浅黄半透明背景(不喧宾夺主,不破坏卡片整体编辑派调性)
-	 *   - 墨色文本保持不变,仅做"荧光笔"效果
-	 *   - 暗色模式下用降低饱和度的琥珀色,避免刺眼
-	 *   - 去除 <mark> 默认的 color:inherit 之外的浏览器默认样式
-	 * -------------------------------------------------------------------------- */
-	.post-card :global(mark.search-hit) {
-		background-color: rgba(250, 204, 21, 0.32); /* amber-400 / ~32% */
-		color: inherit;
-		padding: 0 1px;
-		border-radius: 1px;
-		/* 轻微下划线强调,即使背景在暗色模式下对比度不够也能识别 */
-		box-shadow: inset 0 -1px 0 rgba(202, 138, 4, 0.45);
+	.post-card__go {
+		opacity: 0;
+		transform: translate3d(-6px, 6px, 0);
+		transition:
+			opacity var(--duration-base) var(--ease-standard),
+			transform var(--duration-slow) var(--ease-out-expo);
+	}
+	.post-card--row:hover .post-card__go,
+	.post-card--row:focus-visible .post-card__go {
+		opacity: 1;
+		transform: none;
 	}
 
-	:global(:root.dark) .post-card :global(mark.search-hit) {
-		background-color: rgba(250, 204, 21, 0.22);
-		box-shadow: inset 0 -1px 0 rgba(250, 204, 21, 0.35);
+	/* ================= 封面大卡 ================= */
+
+	.post-card__img,
+	.post-card__label {
+		transition: transform var(--duration-reveal) var(--ease-out-expo);
+	}
+	.post-card--feature:hover .post-card__img {
+		transform: scale(1.03);
+	}
+	.post-card--feature:hover .post-card__label {
+		transform: translate3d(0, -4px, 0);
+	}
+
+	/* 排版化封面右上角的 Signal 光晕:静态渐变,hover 只动 transform / opacity */
+	.post-card__glow {
+		top: -40%;
+		right: -20%;
+		width: 80%;
+		aspect-ratio: 1;
+		border-radius: 999px;
+		background: radial-gradient(
+			closest-side,
+			color-mix(in oklab, var(--color-signal) 22%, transparent),
+			color-mix(in oklab, var(--color-signal-2) 8%, transparent) 55%,
+			transparent
+		);
+		opacity: 0.8;
+		transition:
+			opacity var(--duration-slow) var(--ease-standard),
+			transform var(--duration-reveal) var(--ease-out-expo);
+	}
+	.post-card--feature:hover .post-card__glow {
+		opacity: 1;
+		transform: translate3d(-4%, 4%, 0) scale(1.08);
+	}
+
+	.post-card__arrow {
+		transition: transform var(--duration-base) var(--ease-out-expo);
+	}
+	.post-card--feature:hover .post-card__arrow {
+		transform: translate3d(3px, 0, 0);
 	}
 </style>

@@ -1,0 +1,152 @@
+---
+/**
+ * ============================================================================
+ * SiteFooter - 大页脚("档案末页")
+ * ----------------------------------------------------------------------------
+ *   ■ 联系                                         站点          其它
+ *   有想法?                                        首页          GitHub ↗
+ *   一起构建。                                     项目          RSS
+ *   说明文字                                       …             Email
+ *   [发送邮件 →] [GitHub]   1603852@qq.com
+ *   ───────────────────────────────────────────────────────────────────
+ *   © 2020–2026 ZerxLab · MIT        ● BUILD 2026-09-27 · Astro · 全静态
+ *   Z E R X — L A B   (粒子字标:进入视口时聚合成形,指针靠近时粒子被推开)
+ *
+ * 全站唯一的"联系"入口,页面不再各自重复联系区块。
+ * ============================================================================
+ */
+
+import ParticleWordmark from "@components/ui/ParticleWordmark.astro";
+import { loadSite } from "@lib/content";
+import { formatDateCompact, getLangFromUrl, useTranslatedPath, useTranslations } from "@i18n/utils";
+
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+const tp = useTranslatedPath(lang);
+const site = await loadSite();
+
+const now = new Date();
+const year = now.getFullYear();
+const buildStamp = formatDateCompact(now);
+
+const C =
+	lang === "zh"
+		? {
+				eyebrow: "联系",
+				title: ["有想法?", "一起构建。"],
+				body: "开源协作、项目交流,或者只是打个招呼 —— 邮件与 GitHub 都会回复。",
+				mail: "发送邮件",
+				site: "站点",
+				elsewhere: "其它",
+				build: "构建",
+				stack: "Astro · 全静态 · 零运行时依赖",
+				top: "回到顶部",
+			}
+		: {
+				eyebrow: "Contact",
+				title: ["Have an idea?", "Let's build it."],
+				body: "Open-source collaboration, project questions, or just saying hi — email and GitHub both get a reply.",
+				mail: "Send an email",
+				site: "Site",
+				elsewhere: "Elsewhere",
+				build: "Build",
+				stack: "Astro · fully static · zero runtime deps",
+				top: "Back to top",
+			};
+
+const siteLinks = [
+	{ label: t("nav.home"), href: tp("/") },
+	{ label: t("nav.projects"), href: tp("/projects") },
+	{ label: t("nav.benchmarks"), href: tp("/benchmarks") },
+	{ label: t("nav.aur"), href: tp("/aur") },
+	{ label: t("nav.blog"), href: tp("/blog") },
+	{ label: t("nav.about"), href: tp("/about") },
+];
+
+const elsewhere = [
+	{ label: "GitHub", href: site.socialGithub, external: true },
+	...(site.socialX ? [{ label: "X", href: site.socialX, external: true }] : []),
+	{ label: "RSS", href: tp("/rss.xml"), external: false },
+	...(site.socialEmail ? [{ label: "Email", href: `mailto:${site.socialEmail}`, external: false }] : []),
+];
+---
+
+<footer class="site-footer relative z-[1] mt-32 lg:mt-44 border-t border-[color:var(--color-hairline-strong)] overflow-hidden">
+	<div class="wrap pt-16 lg:pt-24">
+		<div class="grid gap-14 lg:grid-cols-12">
+			{/* 联系 CTA */}
+			<div class="lg:col-span-7 reveal-scroll">
+				<span class="eyebrow">{C.eyebrow}</span>
+				<h2 class="display mt-6 text-[clamp(2.6rem,6vw,5.25rem)] leading-[0.98] tracking-[-0.045em]">
+					<span class="block text-[color:var(--color-ink-muted)]">{C.title[0]}</span>
+					<span class="block">{C.title[1]}</span>
+				</h2>
+				<p class="mt-6 max-w-[46ch] text-[15px] leading-[1.7] text-[color:var(--color-ink-secondary)]">{C.body}</p>
+				<div class="mt-8 flex flex-wrap items-center gap-3">
+					{site.socialEmail && (
+						<a href={`mailto:${site.socialEmail}`} class="btn btn-primary">
+							{C.mail}
+							<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M5 12h14" />
+								<path d="m12 5 7 7-7 7" />
+							</svg>
+						</a>
+					)}
+					<a href={site.socialGithub} target="_blank" rel="noopener noreferrer" class="btn btn-ghost">GitHub</a>
+					{site.socialEmail && (
+						<span class="font-[var(--font-mono)] text-[11.5px] text-[color:var(--color-ink-tertiary)] select-all">{site.socialEmail}</span>
+					)}
+				</div>
+			</div>
+
+			{/* 站点地图 */}
+			<nav class="lg:col-span-4 lg:col-start-9 grid grid-cols-2 gap-8 content-start" aria-label={lang === "zh" ? "页脚导航" : "Footer navigation"}>
+				<div>
+					<p class="mono-label text-[10.5px]">{C.site}</p>
+					<ul class="mt-4 list-none m-0 p-0 space-y-2.5 text-[14px]">
+						{siteLinks.map((l) => (
+							<li><a href={l.href} class="link-underline text-[color:var(--color-ink-secondary)] hover:text-[color:var(--color-ink-primary)]">{l.label}</a></li>
+						))}
+					</ul>
+				</div>
+				<div>
+					<p class="mono-label text-[10.5px]">{C.elsewhere}</p>
+					<ul class="mt-4 list-none m-0 p-0 space-y-2.5 text-[14px]">
+						{elsewhere.map((l) => (
+							<li>
+								<a
+									href={l.href}
+									target={l.external ? "_blank" : undefined}
+									rel={l.external ? "noopener noreferrer" : undefined}
+									class="link-underline text-[color:var(--color-ink-secondary)] hover:text-[color:var(--color-ink-primary)]"
+								>
+									{l.label}{l.external && <span aria-hidden="true" class="ml-1 text-[color:var(--color-ink-muted)]">↗</span>}
+								</a>
+							</li>
+						))}
+					</ul>
+				</div>
+			</nav>
+		</div>
+
+		<div class="mt-16 lg:mt-24 pt-6 border-t border-[color:var(--color-hairline)] flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between font-[var(--font-mono)] text-[11px] uppercase tracking-[var(--tracking-wide)] text-[color:var(--color-ink-tertiary)]">
+			<span>© {site.establishedYear}–{year} {site.siteName} · MIT · {t("footer.rights")}</span>
+			<span class="inline-flex flex-wrap items-center gap-x-3 gap-y-2">
+				<span class="inline-flex items-center gap-2">
+					<span class="dot-live" aria-hidden="true"></span>
+					{C.build}
+					<time datetime={now.toISOString()} class="tabular-nums text-[color:var(--color-ink-secondary)]">{buildStamp}</time>
+				</span>
+				<span aria-hidden="true">·</span>
+				<span>{C.stack}</span>
+				<span aria-hidden="true">·</span>
+				<a href="#main-content" class="hover:text-[color:var(--color-ink-primary)]">{C.top} ↑</a>
+			</span>
+		</div>
+	</div>
+
+	{/* 粒子字标 */}
+	<div class="wrap mt-10 lg:mt-14 pb-6">
+		<ParticleWordmark text="ZERX—LAB" class="mx-auto max-w-[1040px]" />
+	</div>
+</footer>

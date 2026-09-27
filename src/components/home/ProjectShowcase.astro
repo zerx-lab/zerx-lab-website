@@ -1,111 +1,165 @@
 ---
 /**
  * ============================================================================
- * ProjectShowcase - 首页「开源项目」动态九宫格
+ * ProjectShowcase - 首页「精选作品」Bento 网格
  * ----------------------------------------------------------------------------
- * 取代原先手写死的 FEATURES 六宫格:卡片内容改为构建期从 GitHub 实时拉取,
- * 按 star 降序排列,中英文页面共用本组件(只差一个 lang prop)。
+ *   ┌──────────────────────────┬────────────┐
+ *   │ 01 · Go                  │ 02         │
+ *   │                          │ PenBridge  │
+ *   │ ★ 670      (超大数字)     ├────────────┤
+ *   │ wordZero                 │ 03         │
+ *   │ 描述 / 亮点 / chips       │ …          │
+ *   ├────────────┬─────────────┼────────────┤
+ *   │ 04         │ 05          │ 06         │
+ *   └────────────┴─────────────┴────────────┘
  *
- * 数据来源:@lib/queries/projects 的 loadLiveProjects({ includeUnlisted: true })
- *   —— 账号下全部公开仓库(含 fork 与归档,不做收录过滤),按 stars 降序,
- *   projects.json 只用于补双语描述与 techStack。首页取前 N 个,口径就是
- *   "star 最多的前 N 个仓库":不因为缺描述、是 fork 就跳过,否则会漏掉账号里
- *   star 最高的仓库,和"动态排名"的语义冲突。fork 在 eyebrow 上标注。
- *
- *   与 /projects 共用同一个查询层,保证同一次构建里两页的数字与顺序一致。
- *
- * 降级:GitHub 拉取失败时查询层回落到 projects.json 快照,页面照常渲染。
+ * 数据:@lib/queries/projects 的 loadLiveProjects({ includeUnlisted: true }),
+ *   账号全部公开仓库按 stars 降序取前 N(与 /projects 同一查询层),GitHub 不可达
+ *   时回落 projects.json 快照;fork / archived 如实标注。
+ * 语言色:language-stats.json 的 linguist 配色,未知语言用中性灰。
  * ============================================================================
  */
 
-import SectionHeader from "@components/ui/SectionHeader.astro";
-import FeatureCard from "@components/ui/FeatureCard.astro";
-import { pickLang } from "@lib/content";
+import { loadLanguageStats, pickLang } from "@lib/content";
 import { loadLiveProjects } from "@lib/queries/projects";
-import { useTranslations, useTranslatedPath } from "@i18n/utils";
+import { useTranslations } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 
 interface Props {
 	lang: Lang;
-	/** 展示几张卡片,默认 6(3 列 × 2 行) */
+	/** 展示条数(Bento 版式按 6 设计) */
 	limit?: number;
 }
 
 const { lang, limit = 6 } = Astro.props;
 const t = useTranslations(lang);
-const tp = useTranslatedPath(lang);
 
-/* ----------------------------------------------------------------------------
- * 数据获取
- * -------------------------------------------------------------------------- */
+const [{ items }, languageStats] = await Promise.all([
+	loadLiveProjects({ includeUnlisted: true }),
+	loadLanguageStats(),
+]);
+const entries = items.slice(0, limit);
+const languageColor = new Map(languageStats.map((s) => [s.name, s.color]));
 
-const { items } = await loadLiveProjects({ includeUnlisted: true });
-const cards = items.slice(0, limit);
-
-/** 1527 → "1.5k";首页卡片徽标空间有限,四位数以上折算 */
-function formatStars(n: number): string {
-	return n >= 1000 ? `${(n / 100 / 10).toFixed(1)}k` : String(n);
+function formatCount(n: number): string {
+	return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-/** eyebrow:主语言 + fork 标记(fork 来的仓库不冒充自研) */
-function eyebrowOf(card: (typeof cards)[number]): string {
-	const base = card.language !== "Unknown" ? card.language : t("nav.projects");
-	return card.fork ? `${base} · Fork` : base;
-}
+const C = lang === "zh" ? { archived: "已归档", forks: "派生" } : { archived: "Archived", forks: "forks" };
 ---
 
-<SectionHeader
-	eyebrow={t("section.projects")}
-	count={cards.length}
-	linkText={lang === "zh" ? "全部项目 →" : "All projects →"}
-	linkHref={tp("/projects")}
-	spacious
-/>
-
-<div
-	class:list={[
-		"mt-6 lg:mt-8",
-		"grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
-		"border border-dashed border-[color:var(--color-hairline)]",
-		"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
-		"[&>*]:border-[color:var(--color-hairline)]",
-	]}
->
+<ol class="bento list-none m-0 p-0 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
 	{
-		cards.map((card, i) => (
-			<FeatureCard
-				number={i + 1}
-				eyebrow={eyebrowOf(card)}
-				badge={`★ ${formatStars(card.stars)}`}
-				title={card.name}
-				description={pickLang(card.description, lang)}
-				href={card.githubUrl}
-			>
-				{card.techStack.length > 0 && (
-					<Fragment slot="visual">
-						<div class="flex flex-wrap gap-1.5">
-							{card.techStack.slice(0, 4).map((tag) => (
-								<span
-									class:list={[
-										"inline-flex items-center",
-										"px-2 py-[3px]",
-										"font-[var(--font-mono)]",
-										"text-[10px]",
-										"leading-none",
-										"tracking-[var(--tracking-wide)]",
-										"text-[color:var(--color-ink-secondary)]",
-										"bg-[color:var(--color-paper-muted)]/60",
-										"border border-[color:var(--color-hairline)]",
-										"rounded-[var(--radius-sm)]",
-									]}
-								>
-									{tag}
-								</span>
-							))}
+		entries.map((p, i) => {
+			const lead = i === 0;
+			const description = pickLang(p.description, lang);
+			const highlights = pickLang(p.highlights, lang);
+			const color = languageColor.get(p.language) ?? "var(--color-ink-muted)";
+			return (
+				<li
+					class:list={[
+						"reveal-scroll",
+						lead ? "sm:col-span-2 lg:col-span-4 lg:row-span-2" : "lg:col-span-2",
+					]}
+				>
+					<a
+						href={p.githubUrl}
+						target="_blank"
+						rel="noopener noreferrer"
+						data-spotlight
+						class:list={[
+							"bento__tile surface-card spotlight group flex h-full flex-col overflow-hidden",
+							lead ? "p-7 lg:p-9 min-h-[22rem]" : "p-6 min-h-[13rem]",
+						]}
+					>
+						{lead && <span aria-hidden="true" class="bento__grid dot-grid absolute inset-0 pointer-events-none" />}
+
+						<div class="relative flex items-center justify-between gap-3 font-[var(--font-mono)] text-[11px]">
+							<span class="inline-flex items-center gap-2 text-[color:var(--color-ink-tertiary)]">
+								<span class="tabular-nums text-[color:var(--color-signal)]">{String(i + 1).padStart(2, "0")}</span>
+								{p.language !== "Unknown" && (
+									<>
+										<span aria-hidden="true" class="h-px w-3 bg-[color:var(--color-hairline-strong)]" />
+										<span aria-hidden="true" class="h-2 w-2 rounded-full" style={`background-color: ${color}`} />
+										{p.language}
+									</>
+								)}
+							</span>
+							<svg
+								aria-hidden="true"
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class="text-[color:var(--color-ink-muted)] transition-transform duration-[var(--duration-slow)] ease-[var(--ease-out-expo)] group-hover:translate-x-[2px] group-hover:-translate-y-[2px] group-hover:text-[color:var(--color-signal)]"
+							>
+								<path d="M7 17L17 7" />
+								<path d="M8 7h9v9" />
+							</svg>
 						</div>
-					</Fragment>
-				)}
-			</FeatureCard>
-		))
+
+						{lead && (
+							<p class="relative mt-auto pt-10 font-semibold leading-none tracking-[-0.06em] text-[clamp(4.5rem,9vw,8rem)] tabular-nums">
+								<span class="text-signal">★</span>
+								{formatCount(p.stars)}
+							</p>
+						)}
+
+						<div class:list={["relative", lead ? "mt-6" : "mt-auto pt-8"]}>
+							<div class="flex flex-wrap items-center gap-2">
+								<h3 class:list={["font-semibold tracking-[-0.03em] leading-tight", lead ? "text-[28px] lg:text-[34px]" : "text-[19px]"]}>
+									{p.name}
+								</h3>
+								{p.fork && <span class="chip">Fork</span>}
+								{p.archived && <span class="chip">{C.archived}</span>}
+							</div>
+							{description && (
+								<p class:list={["mt-2 text-[color:var(--color-ink-secondary)]", lead ? "text-[15px] leading-[1.65] max-w-[52ch]" : "text-[13px] leading-[1.6] line-clamp-2"]}>
+									{description}
+								</p>
+							)}
+							{lead && highlights && (
+								<p class="mt-3 font-[var(--font-mono)] text-[11.5px] text-[color:var(--color-ink-tertiary)]">
+									<span aria-hidden="true" class="text-[color:var(--color-signal)]">›</span> {highlights}
+								</p>
+							)}
+							<div class="mt-4 flex flex-wrap items-center gap-1.5">
+								{!lead && (
+									<span class="chip">
+										<span aria-hidden="true" class="text-[color:var(--color-signal)]">★</span>
+										{formatCount(p.stars)}
+									</span>
+								)}
+								{lead && (
+									<span class="chip">
+										{formatCount(p.forks)} {C.forks}
+									</span>
+								)}
+								{p.techStack.slice(0, lead ? 5 : 2).map((tag) => (
+									<span class="chip">{tag}</span>
+								))}
+							</div>
+						</div>
+						<span class="sr-only">{t("action.viewOnGithub")}</span>
+					</a>
+				</li>
+			);
+		})
 	}
-</div>
+</ol>
+
+<style>
+	.bento__tile {
+		position: relative;
+	}
+
+	.bento__grid {
+		opacity: 0.7;
+		mask-image: radial-gradient(ellipse 70% 70% at 100% 0%, #000, transparent 70%);
+		-webkit-mask-image: radial-gradient(ellipse 70% 70% at 100% 0%, #000, transparent 70%);
+	}
+</style>

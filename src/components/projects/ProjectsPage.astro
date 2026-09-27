@@ -11,32 +11,26 @@
  *        projects.json 提供双语文案、techStack、kind 与各类链接
  *     2. 把 Bilingual 字段按当前 lang 解包
  *     3. 分类展示:Featured(精选) + All(全部),两段都按 star 降序
- *     4. 组合左栏(项目统计 meta)与右栏(分区 + 列表)
+ *     4. 组合 PageHero(项目统计规格条)与分节(精选 Bento + 按语言分组的全部项目)
  *
  *   收录规则与降级行为见 @lib/queries/projects 的模块注释;首页九宫格用的是
  *   同一个查询层,所以两页的数字与顺序在同一次构建里必然一致。
  *
- * 视觉策略(参考 better-auth.com 的"编辑派 + 数据点"组合):
- *   - Featured 分区:每个项目一张大卡,带编号、stars/forks、语言徽标、外链按钮
- *   - All 分区:紧凑列表,一行一个项目,只含核心字段
- *   - 不使用圆角、不使用阴影;靠虚线分割 + Monospace 元素 + 留白拉层级
- *
- * 左栏 meta 字段说明:
- *   - REPOSITORIES  仓库总数
- *   - TOTAL STARS   汇总 star 数
- *   - LANGUAGES     占比前 3 的语言
- *   - LICENSE       统一为 MIT
+ * 版式(PageHero + CvSection):
+ *   - PageHero:超大标题 + GitHub CTA;aside 为语言占比卡;
+ *     spec 规格条 = 仓库数 / 总 stars / forks / 前 3 语言 / 许可证
+ *   - 01 精选(layout=full):12 列 Bento —— 首格跨 7 列 × 2 行,
+ *     超大 star 数字 + highlights;其余格按数量自适应跨列
+ *   - 02 全部(split):按语言分组的履历条目(编号 | 名称 + 描述 | stars),
+ *     组按首次出现顺序(即组内最高 star 降序),hover 时 Signal 刻度线生长
  * ============================================================================
  */
 
 import AppShell from "@layouts/AppShell.astro";
-import SectionHeader from "@components/ui/SectionHeader.astro";
-import MetaRow from "@components/ui/MetaRow.astro";
-import {
-	getLangFromUrl,
-	useTranslations,
-	useTranslatedPath,
-} from "@i18n/utils";
+import PageHero from "@components/layout/PageHero.astro";
+import CvSection from "@components/layout/CvSection.astro";
+import type { SpecItem } from "@components/layout/SpecStrip.astro";
+import { getLangFromUrl, useTranslations } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 import { loadLanguageStats, pickLang } from "@lib/content";
 import { loadLiveProjects, type LiveProject } from "@lib/queries/projects";
@@ -47,7 +41,6 @@ import { loadLiveProjects, type LiveProject } from "@lib/queries/projects";
 
 const lang = getLangFromUrl(Astro.url) as Lang;
 const t = useTranslations(lang);
-const tp = useTranslatedPath(lang);
 
 /* ----------------------------------------------------------------------------
  * 数据适配器
@@ -73,6 +66,7 @@ interface ProjectVM {
 	forks: number;
 	featured: boolean;
 	fork: boolean;
+	archived: boolean;
 }
 
 /** 把 LiveProject 转成 ViewModel(按当前 lang 解包 Bilingual) */
@@ -93,6 +87,7 @@ function toVM(project: LiveProject, currentLang: Lang): ProjectVM {
 		forks: project.forks,
 		featured: project.featured,
 		fork: project.fork,
+		archived: project.archived,
 	};
 }
 
@@ -100,20 +95,45 @@ const { items } = await loadLiveProjects();
 const projects = items.map((p) => toVM(p, lang));
 
 /* ----------------------------------------------------------------------------
- * 左栏 meta 数据计算
+ * 汇总数据(页头规格条 + 语言占比卡)
  * -------------------------------------------------------------------------- */
 
 const totalStars = projects.reduce((sum, p) => sum + (p.stars ?? 0), 0);
 const totalForks = projects.reduce((sum, p) => sum + (p.forks ?? 0), 0);
 
+const languageStats = await loadLanguageStats();
+const asideLanguages = languageStats.slice(0, 5);
+
 // 前 3 语言(按占比排序),紧凑显示
-const topLanguages = (await loadLanguageStats())
+const topLanguages = languageStats
 	.slice(0, 3)
 	.map((l) => l.name)
 	.join(" / ");
 
 const featuredProjects = projects.filter((p) => p.featured);
 const regularProjects = projects.filter((p) => !p.featured);
+
+/**
+ * 全部项目按语言分组。
+ * regularProjects 已按 star 降序,Map 保持首次出现顺序,
+ * 因此组顺序 = 组内最高 star 降序,组内顺序不变。
+ * 编号沿用全局序号(接在精选之后),分组不打乱编号。
+ */
+interface ProjectGroup {
+	language: string;
+	items: { project: ProjectVM; no: number }[];
+}
+const groupMap = new Map<string, ProjectGroup>();
+regularProjects.forEach((project, idx) => {
+	const key = project.language || "";
+	let group = groupMap.get(key);
+	if (!group) {
+		group = { language: key, items: [] };
+		groupMap.set(key, group);
+	}
+	group.items.push({ project, no: idx + 1 + featuredProjects.length });
+});
+const projectGroups = [...groupMap.values()];
 
 /* ----------------------------------------------------------------------------
  * 页面级文案
@@ -125,9 +145,21 @@ const COPY = {
 		title: "开源项目",
 		description:
 			"从系统工具到全栈应用,ZerxLab 维护与贡献的开源项目都列在这里。全部 MIT 许可,代码即文档。",
+		titleLead: "开源",
+		titleAccent: "项目",
 		empty: "暂无项目。",
-		sectionFeatured: "FEATURED",
-		sectionAll: "ALL PROJECTS",
+		sectionFeatured: "精选项目",
+		sectionFeaturedSub: "Featured",
+		sectionFeaturedNote: "长期维护、投入最多的几个项目。",
+		sectionAll: "全部项目",
+		sectionAllSub: "All projects",
+		sectionAllNote: "其余公开仓库,按语言分组,组内按 star 降序。",
+		ctaGithub: "GitHub 主页",
+		ctaAll: "浏览全部",
+		asideTitle: "语言占比",
+		asideNote: "按组织全部仓库代码量统计",
+		otherLang: "其他",
+		projectCol: "项目",
 		viewSource: "源码",
 		viewWebsite: "官网",
 		viewDemo: "在线体验",
@@ -136,6 +168,9 @@ const COPY = {
 		starsLabel: "Stars",
 		forksLabel: "Forks",
 		kindLabel: "类型",
+		forkTag: "Fork",
+		archivedTag: "已归档",
+		langUnknown: "—",
 		kinds: {
 			library: "库",
 			tool: "工具",
@@ -149,9 +184,21 @@ const COPY = {
 		title: "Open-source projects",
 		description:
 			"From system tools to full-stack apps — every project ZerxLab maintains or actively contributes to. All MIT licensed, code as docs.",
+		titleLead: "Open-source",
+		titleAccent: "projects",
 		empty: "No projects yet.",
-		sectionFeatured: "FEATURED",
-		sectionAll: "ALL PROJECTS",
+		sectionFeatured: "Featured",
+		sectionFeaturedSub: "Selected work",
+		sectionFeaturedNote: "The projects we invest in most and maintain long-term.",
+		sectionAll: "All projects",
+		sectionAllSub: "Index",
+		sectionAllNote: "Every other public repository, grouped by language, sorted by stars.",
+		ctaGithub: "GitHub profile",
+		ctaAll: "Browse all",
+		asideTitle: "Languages",
+		asideNote: "By code volume across all repositories",
+		otherLang: "Other",
+		projectCol: "Project",
 		viewSource: "Source",
 		viewWebsite: "Website",
 		viewDemo: "Demo",
@@ -160,6 +207,9 @@ const COPY = {
 		starsLabel: "Stars",
 		forksLabel: "Forks",
 		kindLabel: "Kind",
+		forkTag: "Fork",
+		archivedTag: "Archived",
+		langUnknown: "—",
 		kinds: {
 			library: "Library",
 			tool: "Tool",
@@ -183,6 +233,45 @@ function formatCount(n: number): string {
 }
 
 /**
+ * 语言色点:沿用 GitHub linguist 的配色,只作为 6px 小圆点出现,
+ * 不参与大面积着色;未收录的语言回落为墨色弱化点。
+ */
+const LANGUAGE_COLORS: Record<string, string> = {
+	TypeScript: "#3178c6",
+	JavaScript: "#f1e05a",
+	Rust: "#dea584",
+	Go: "#00add8",
+	Python: "#3572a5",
+	Vue: "#41b883",
+	Svelte: "#ff3e00",
+	Astro: "#ff5a03",
+	Shell: "#89e051",
+	Lua: "#000080",
+	C: "#555555",
+	"C++": "#f34b7d",
+	"C#": "#178600",
+	Java: "#b07219",
+	Kotlin: "#a97bff",
+	Swift: "#f05138",
+	Dart: "#00b4ab",
+	Zig: "#ec915c",
+	Nix: "#7e7eff",
+	HTML: "#e34c26",
+	CSS: "#663399",
+	MDX: "#fcb32c",
+	Dockerfile: "#384d54",
+};
+
+function languageColor(language: string): string {
+	return LANGUAGE_COLORS[language] ?? "var(--color-ink-muted)";
+}
+
+/** 两位编号:01 02 … */
+function pad2(n: number): string {
+	return String(n).padStart(2, "0");
+}
+
+/**
  * 类型徽标文案。
  * projects.json 登记过的走 kinds 字典;未登记的仓库没有人工分类,
  * 按 fork 与否退化成 FORK / REPO,不假装它有类型。
@@ -191,561 +280,346 @@ function kindLabelOf(project: ProjectVM): string {
 	if (project.kind) return C.kinds[project.kind] ?? project.kind;
 	return project.fork ? "Fork" : "Repo";
 }
+
+/**
+ * Bento 格子跨度:
+ *   1 个:整行;2 个:7 + 5;≥3 个:首格 7 列 × 2 行,第 2、3 格各 5 列叠在右侧,
+ *   其余每行三格(4 列),尾行不足三格时平分剩余宽度。
+ */
+function bentoSpan(idx: number, total: number): string {
+	if (total === 1) return "lg:col-span-12";
+	if (total === 2) return idx === 0 ? "lg:col-span-7" : "lg:col-span-5";
+	if (idx === 0) return "lg:col-span-7 lg:row-span-2";
+	if (idx <= 2) return "lg:col-span-5";
+	const restIdx = idx - 3;
+	const restTotal = total - 3;
+	const tail = restTotal % 3;
+	const inTail = tail > 0 && restIdx >= restTotal - tail;
+	if (inTail) return tail === 1 ? "lg:col-span-12" : "lg:col-span-6";
+	return "lg:col-span-4";
+}
+
+const spec: SpecItem[] = [
+	{ label: t("meta.repositories"), count: projects.length },
+	{ label: t("meta.totalStars"), count: totalStars },
+	{ label: "Forks", count: totalForks },
+	{ label: t("meta.languages"), value: topLanguages || C.langUnknown },
+	{ label: t("meta.license"), value: "MIT" },
+];
+
+const STAR_PATH =
+	"M12 .587l3.668 7.568 8.332 1.151-6.064 5.828 1.48 8.279L12 19.446l-7.416 3.967 1.48-8.279L0 9.306l8.332-1.151z";
+
+/** 精选卡底栏外链 */
+interface ProjectLink {
+	href: string;
+	label: string;
+	primary: boolean;
+}
 ---
 
-<AppShell
-	title={C.title}
-	description={C.description}
-	eyebrow={C.eyebrow}
-	leftTitle={C.title}
-	leftDescription={C.description}
-	maxContentWidth="none"
->
-	{/* ---------- 左栏:社交图标 ---------- */}
-	<Fragment slot="left-social">
-		<a
-			href="https://github.com/zerx-lab"
-			target="_blank"
-			rel="noopener noreferrer"
-			aria-label="GitHub"
-			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
-		>
-			<svg
-				width="16"
-				height="16"
-				viewBox="0 0 24 24"
-				fill="currentColor"
-				aria-hidden="true"
+<AppShell title={C.title} description={C.description}>
+	<PageHero eyebrow={C.eyebrow} description={C.description} spec={spec}>
+		<Fragment slot="title">
+			{C.titleLead}{" "}<span class="serif-accent">{C.titleAccent}</span>
+		</Fragment>
+
+		<Fragment slot="actions">
+			<a
+				href="https://github.com/zerx-lab"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="btn btn-primary ext-link"
 			>
-				<path
-					d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
-				></path>
-			</svg>
-		</a>
-	</Fragment>
+				<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+					<path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"></path>
+				</svg>
+				<span>{C.ctaGithub}</span>
+				<svg aria-hidden="true" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="ext-link__arrow"><path d="M7 17L17 7" /><path d="M8 7h9v9" /></svg>
+			</a>
+			{regularProjects.length > 0 && (
+				<a href="#all-projects" class="btn btn-ghost">
+					<span>{C.ctaAll}</span>
+					<span aria-hidden="true" class="mono-num text-[color:var(--color-ink-muted)]">{regularProjects.length}</span>
+				</a>
+			)}
+		</Fragment>
 
-	{/* ---------- 左栏:Meta ---------- */}
-	<Fragment slot="left-meta">
-		<MetaRow
-			label={t("meta.repositories")}
-			value={String(projects.length)}
-		/>
-		<MetaRow
-			label={t("meta.totalStars")}
-			value={formatCount(totalStars)}
-		/>
-		<MetaRow label="FORKS" value={formatCount(totalForks)} />
-		<MetaRow label={t("meta.languages")} value={topLanguages} />
-		<MetaRow label={t("meta.license")} value="MIT" />
-	</Fragment>
-
-	{/* ==========================================================================
-	 *                            右栏主内容
-	 * ========================================================================== */}
+		{/* aside:语言占比卡 */}
+		{asideLanguages.length > 0 && (
+			<aside slot="aside" class="surface-card crop-marks p-5 lg:p-6" aria-label={C.asideTitle}>
+				<div class="flex items-baseline justify-between gap-3">
+					<span class="mono-label text-[10.5px] text-[color:var(--color-ink-secondary)]">{C.asideTitle}</span>
+					<span class="mono-num text-[10.5px] text-[color:var(--color-ink-muted)]">TOP {asideLanguages.length}</span>
+				</div>
+				<ul class="mt-5 flex flex-col gap-4 list-none m-0 p-0">
+					{asideLanguages.map((l) => (
+						<li>
+							<div class="flex items-center gap-2 font-[var(--font-mono)] text-[12px] leading-none">
+								<span aria-hidden="true" class="lang-dot" style={`--lang: ${l.color || languageColor(l.name)}`}></span>
+								<span class="text-[color:var(--color-ink-primary)]">{l.name}</span>
+								<span class="ml-auto tabular-nums text-[color:var(--color-ink-tertiary)]">{l.percent.toFixed(1)}%</span>
+							</div>
+							<div class="meter mt-2" aria-hidden="true">
+								<span data-animate style={`width: ${Math.max(0, Math.min(100, l.percent))}%`}></span>
+							</div>
+						</li>
+					))}
+				</ul>
+				<p class="mt-5 pt-4 border-t border-[color:var(--color-hairline)] font-[var(--font-mono)] text-[10.5px] leading-[1.5] text-[color:var(--color-ink-muted)]">
+					// {C.asideNote}
+				</p>
+			</aside>
+		)}
+	</PageHero>
 
 	{
 		projects.length === 0 ? (
-			/* 空状态 */
-			<>
-				<SectionHeader eyebrow={C.sectionAll} />
-				<div
-					class:list={[
-						"mt-12 lg:mt-16 mb-16",
-						"flex flex-col items-center justify-center",
-						"py-16 lg:py-20",
-						"border border-dashed border-[color:var(--color-hairline)]",
-						"text-center",
-					]}
-				>
-					<span
-						aria-hidden="true"
-						class:list={[
-							"mono-label",
-							"text-[11px]",
-							"text-[color:var(--color-ink-muted)]",
-							"mb-3",
-						]}
-					>
-						— EMPTY —
-					</span>
-					<p
-						class:list={[
-							"text-[color:var(--color-ink-secondary)]",
-							"text-[14px]",
-							"leading-[1.6]",
-						]}
-					>
-						{C.empty}
-					</p>
+			<CvSection index="01" label={C.sectionAll} sublabel={C.sectionAllSub} class="mb-24 lg:mb-32">
+				{/* 空状态:虚线仅用于"占位"语义 */}
+				<div class="flex flex-col items-center justify-center gap-3 py-16 lg:py-20 rounded-[var(--radius-lg)] border border-dashed border-[color:var(--color-hairline-strong)] text-center">
+					<span aria-hidden="true" class="mono-label text-[11px] text-[color:var(--color-ink-muted)]">— EMPTY —</span>
+					<p class="text-[color:var(--color-ink-secondary)] text-[14px] leading-[1.6]">{C.empty}</p>
 				</div>
-			</>
+			</CvSection>
 		) : (
 			<>
-				{/* ---------- FEATURED 分区 ---------- */}
+				{/* ---------- 01 · 精选:Bento ---------- */}
 				{featuredProjects.length > 0 && (
-					<>
-						<SectionHeader
-							eyebrow={C.sectionFeatured}
-							count={featuredProjects.length}
-						/>
-
-						<div
-							class:list={[
-								"mt-6 lg:mt-8",
-								"grid grid-cols-1 md:grid-cols-2",
-								"border border-dashed border-[color:var(--color-hairline)]",
-								"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
-							]}
-						>
-							{featuredProjects.map((project, idx) => (
-								<article
-									class:list={[
-										"group relative flex flex-col",
-										"p-5 sm:p-6 lg:p-7",
-										"min-h-[260px]",
-										"bg-[color:var(--color-paper-muted)]/20",
-										"hover:bg-[color:var(--color-paper-muted)]/50",
-										"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-									]}
-								>
-									{/* 顶栏:编号 + 类型徽标 + 主语言 */}
-									<div class="flex items-center gap-2 mb-4">
-										<span
-											aria-hidden="true"
+					<CvSection
+						index="01"
+						label={C.sectionFeatured}
+						sublabel={`${C.sectionFeaturedSub} · ${pad2(featuredProjects.length)}`}
+						note={C.sectionFeaturedNote}
+						layout="full"
+						id="featured"
+						class={regularProjects.length === 0 ? "mb-24 lg:mb-32" : ""}
+					>
+						<ul class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-4 lg:gap-5 list-none m-0 p-0">
+							{featuredProjects.map((project, idx) => {
+								const hero = idx === 0;
+								const total = featuredProjects.length;
+								const sourceLabel = project.githubUrl.includes("github.com") ? C.viewSource : C.viewWebsite;
+								const links: ProjectLink[] = [{ href: project.githubUrl, label: sourceLabel, primary: false }];
+								if (project.docsUrl) links.push({ href: project.docsUrl, label: C.viewDocs, primary: false });
+								if (project.npmUrl) links.push({ href: project.npmUrl, label: C.viewNpm, primary: false });
+								if (project.demoUrl) links.push({ href: project.demoUrl, label: C.viewDemo, primary: true });
+								// reveal-scroll 放在外层 li:动画的 transform 填充不会覆盖卡片的 hover 上浮
+								return (
+									<li class:list={["reveal-scroll flex", (hero || total === 1) && "md:col-span-2", bentoSpan(idx, total)]}>
+										<article
 											class:list={[
-												"mono-num",
-												"text-[10.5px] leading-none",
-												"text-[color:var(--color-ink-muted)]",
-												"tabular-nums",
+												"surface-card spotlight group relative isolate flex flex-col w-full overflow-hidden",
+												hero ? "p-6 sm:p-8 lg:p-10 min-h-[420px]" : "p-5 sm:p-6 min-h-[260px]",
 											]}
+											data-spotlight
+											data-interactive
 										>
-											{String(idx + 1).padStart(2, "0")}
-										</span>
+											{hero && <div aria-hidden="true" class="dot-grid bento__grid absolute inset-0 -z-[1] opacity-50"></div>}
 
-										<span
-											class:list={[
-												"mono-label",
-												"text-[10px] leading-none",
-												"tracking-[var(--tracking-wider)]",
-												"text-[color:var(--color-ink-tertiary)]",
-												"uppercase",
-											]}
-										>
-											{kindLabelOf(project)}
-										</span>
-
-										{/* 主语言徽标 */}
-										<span
-											class:list={[
-												"inline-flex items-center gap-1",
-												"ml-auto",
-												"font-[var(--font-mono)]",
-												"text-[10px] leading-none",
-												"tracking-[var(--tracking-wide)]",
-												"text-[color:var(--color-ink-secondary)]",
-												"border border-[color:var(--color-hairline)]",
-												"rounded-[var(--radius-sm)]",
-												"px-1.5 py-[3px]",
-											]}
-										>
-											<span
-												aria-hidden="true"
-												class="inline-block h-[6px] w-[6px] rounded-full bg-[color:var(--color-ink-secondary)]"
-											></span>
-											{project.language}
-										</span>
-									</div>
-
-									{/* 项目名(大字标题) */}
-									<h3
-										class:list={[
-											"font-medium",
-											"text-[color:var(--color-ink-primary)]",
-											"tracking-[-0.015em]",
-											"leading-[1.25]",
-											"text-[20px] sm:text-[22px] lg:text-[24px]",
-											"font-[var(--font-mono)]",
-											"mb-2",
-										]}
-									>
-										{project.name}
-									</h3>
-
-									{/* 高亮一句话 */}
-									{project.highlights && (
-										<p
-											class:list={[
-												"mono-label",
-												"text-[10.5px] leading-[1.5]",
-												"tracking-[var(--tracking-wide)]",
-												"text-[color:var(--color-ink-tertiary)]",
-												"uppercase",
-												"mb-4",
-											]}
-										>
-											{project.highlights}
-										</p>
-									)}
-
-									{/* 描述 */}
-									<p
-										class:list={[
-											"text-[color:var(--color-ink-secondary)]",
-											"text-[13.5px] sm:text-[14px]",
-											"leading-[1.6]",
-											"mb-5",
-											"flex-1",
-										]}
-									>
-										{project.description}
-									</p>
-
-									{/* 技术栈标签 */}
-									{project.techStack.length > 0 && (
-										<div class="flex flex-wrap gap-1.5 mb-5">
-											{project.techStack.map((tech) => (
-												<span
-													class:list={[
-														"inline-flex items-center",
-														"px-2 py-[3px]",
-														"font-[var(--font-mono)]",
-														"text-[10px]",
-														"leading-none",
-														"tracking-[var(--tracking-wide)]",
-														"text-[color:var(--color-ink-secondary)]",
-														"bg-[color:var(--color-paper-muted)]/60",
-														"border border-[color:var(--color-hairline)]",
-														"rounded-[var(--radius-sm)]",
-													]}
-												>
-													{tech}
+											{/* 顶栏:编号 · 类型 · 标注 ······ 语言 */}
+											<div class="flex items-center gap-2 flex-wrap">
+												<span aria-hidden="true" class="mono-num text-[11px] leading-none text-[color:var(--color-ink-muted)] transition-colors duration-[var(--duration-base)] group-hover:text-[color:var(--color-signal)]">
+													№ {pad2(idx + 1)}
 												</span>
-											))}
-										</div>
-									)}
-
-									{/* 底栏:stars / forks + 操作按钮
-									 * 移动端允许换行,避免 stars + forks + 源码 + Demo 四个元素
-									 * 在 320~375px 窄屏下横向挤爆 */}
-									<div
-										class:list={[
-											"flex items-center gap-x-3 gap-y-2 flex-wrap",
-											"pt-4",
-											"border-t border-dashed border-[color:var(--color-hairline)]",
-										]}
-									>
-										{/* stars */}
-										<span
-											class:list={[
-												"inline-flex items-center gap-1.5",
-												"font-[var(--font-mono)]",
-												"text-[11px] leading-none",
-												"text-[color:var(--color-ink-tertiary)]",
-												"tabular-nums",
-											]}
-											title={`${project.stars} ${C.starsLabel}`}
-										>
-											<svg
-												aria-hidden="true"
-												width="11"
-												height="11"
-												viewBox="0 0 24 24"
-												fill="currentColor"
-											>
-												<path d="M12 .587l3.668 7.568 8.332 1.151-6.064 5.828 1.48 8.279L12 19.446l-7.416 3.967 1.48-8.279L0 9.306l8.332-1.151z" />
-											</svg>
-											<span>{formatCount(project.stars)}</span>
-										</span>
-
-										{/* forks */}
-										<span
-											class:list={[
-												"inline-flex items-center gap-1.5",
-												"font-[var(--font-mono)]",
-												"text-[11px] leading-none",
-												"text-[color:var(--color-ink-tertiary)]",
-												"tabular-nums",
-											]}
-											title={`${project.forks} ${C.forksLabel}`}
-										>
-											<svg
-												aria-hidden="true"
-												width="11"
-												height="11"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												stroke-width="2"
-												stroke-linecap="round"
-												stroke-linejoin="round"
-											>
-												<circle cx="6" cy="5" r="2.5" />
-												<circle cx="18" cy="5" r="2.5" />
-												<circle cx="12" cy="19" r="2.5" />
-												<path d="M6 7.5v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3v-3" />
-												<path d="M12 13.5v3" />
-											</svg>
-											<span>{formatCount(project.forks)}</span>
-										</span>
-
-										{/* 外链按钮组 */}
-										<div
-											class:list={[
-												"flex items-center gap-1",
-												"ml-auto",
-											]}
-										>
-											<a
-												href={project.githubUrl}
-												target="_blank"
-												rel="noopener noreferrer"
-												aria-label={`${project.name} — ${project.githubUrl.includes("github.com") ? C.viewSource : C.viewWebsite}`}
-												class:list={[
-													"inline-flex items-center gap-1.5",
-													"px-2.5 py-1.5",
-													"mono-label",
-													"text-[10px] leading-none",
-													"tracking-[var(--tracking-wider)]",
-													"text-[color:var(--color-ink-secondary)]",
-													"hover:text-[color:var(--color-ink-primary)]",
-													"hover:bg-[color:var(--color-paper-muted)]",
-													"border border-[color:var(--color-hairline)]",
-													"rounded-[var(--radius-sm)]",
-													"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-												]}
-											>
-												<span>{project.githubUrl.includes("github.com") ? C.viewSource : C.viewWebsite}</span>
-												<svg
-													aria-hidden="true"
-													width="9"
-													height="9"
-													viewBox="0 0 24 24"
-													fill="none"
-													stroke="currentColor"
-													stroke-width="2.5"
-													stroke-linecap="round"
-													stroke-linejoin="round"
-												>
-													<path d="M7 17L17 7" />
-													<path d="M8 7h9v9" />
-												</svg>
-											</a>
-
-											{project.demoUrl && (
-												<a
-													href={project.demoUrl}
-													target="_blank"
-													rel="noopener noreferrer"
-													aria-label={`${project.name} — ${C.viewDemo}`}
-													class:list={[
-														"inline-flex items-center gap-1.5",
-														"px-2.5 py-1.5",
-														"mono-label",
-														"text-[10px] leading-none",
-														"tracking-[var(--tracking-wider)]",
-														"text-[color:var(--color-paper)]",
-														"bg-[color:var(--color-ink-primary)]",
-														"hover:bg-[color:var(--color-ink-secondary)]",
-														"rounded-[var(--radius-sm)]",
-														"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-													]}
-												>
-													<span>{C.viewDemo}</span>
-												</a>
-											)}
-										</div>
-									</div>
-								</article>
-							))}
-						</div>
-					</>
-				)}
-
-				{/* ---------- ALL 分区(紧凑列表,不含已在 featured 展示的项目) ---------- */}
-				{regularProjects.length > 0 && (
-					<>
-						<SectionHeader
-							eyebrow={C.sectionAll}
-							count={regularProjects.length}
-							spacious
-						/>
-
-						<ul
-							class:list={[
-								"mt-6 lg:mt-8 mb-16",
-								"list-none m-0 p-0",
-								"border border-dashed border-[color:var(--color-hairline)]",
-								"divide-y divide-dashed divide-[color:var(--color-hairline)]",
-							]}
-						>
-							{regularProjects.map((project, idx) => (
-								<li>
-									<a
-										href={project.githubUrl}
-										target="_blank"
-										rel="noopener noreferrer"
-										class:list={[
-											"group",
-											"flex flex-col sm:flex-row sm:items-center",
-											"gap-3 sm:gap-5",
-											"px-4 sm:px-5 lg:px-6 py-4 lg:py-5",
-											"hover:bg-[color:var(--color-paper-muted)]/60",
-											"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-										]}
-									>
-										{/* 左:编号 + 名字 + 描述 */}
-										<div class="flex-1 min-w-0 flex items-baseline gap-3">
-											<span
-												aria-hidden="true"
-												class:list={[
-													"mono-num",
-													"text-[10.5px] leading-none",
-													"text-[color:var(--color-ink-muted)]",
-													"tabular-nums",
-													"shrink-0",
-												]}
-											>
-												{String(
-													idx + 1 + featuredProjects.length,
-												).padStart(2, "0")}
-											</span>
-
-											<div class="flex-1 min-w-0">
-												<div class="flex items-baseline gap-2 flex-wrap">
-													<h4
-														class:list={[
-															"font-[var(--font-mono)]",
-															"text-[14px] sm:text-[15px]",
-															"leading-none",
-															"font-semibold",
-															"text-[color:var(--color-ink-primary)]",
-															"tracking-[-0.005em]",
-															"truncate",
-														]}
-													>
-														{project.name}
-													</h4>
-
-													<span
-														class:list={[
-															"mono-label",
-															"text-[9.5px] leading-none",
-															"text-[color:var(--color-ink-muted)]",
-															"uppercase",
-														]}
-													>
-														{kindLabelOf(project)}
+												<span aria-hidden="true" class="h-px w-4 bg-[color:var(--color-hairline-strong)]"></span>
+												<span class="chip uppercase">{kindLabelOf(project)}</span>
+												{project.fork && project.kind && <span class="chip uppercase">{C.forkTag}</span>}
+												{project.archived && <span class="chip uppercase text-[color:var(--color-ink-muted)]">{C.archivedTag}</span>}
+												{project.language && (
+													<span class="ml-auto inline-flex items-center gap-1.5 font-[var(--font-mono)] text-[11px] leading-none text-[color:var(--color-ink-secondary)]">
+														<span aria-hidden="true" class="lang-dot" style={`--lang: ${languageColor(project.language)}`}></span>
+														{project.language}
 													</span>
-												</div>
+												)}
+											</div>
 
+											{hero ? (
+												/* 首格:名称 + 超大 star 数字并置 */
+												<div class="mt-8 lg:mt-12 grid gap-6 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+													<h3 class="display text-[34px] sm:text-[44px] lg:text-[56px] leading-[0.98] break-words">
+														{project.name}
+													</h3>
+													<p class="m-0 flex flex-col sm:items-end gap-2">
+														<span class="inline-flex items-center gap-1.5 mono-label text-[10px] leading-none text-[color:var(--color-ink-muted)]">
+															<svg aria-hidden="true" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" class="text-[color:var(--color-signal)]"><path d={STAR_PATH} /></svg>
+															{C.starsLabel}
+														</span>
+														<span class="sr-only">{project.stars}</span>
+														<span aria-hidden="true" class="bento__stars display tabular-nums leading-[0.85] text-[clamp(4rem,9vw,7.5rem)]">
+															{project.stars < 1000 ? (
+																<span class="count-up" style={`--to: ${project.stars}; --i: 1`}></span>
+															) : (
+																formatCount(project.stars)
+															)}
+														</span>
+													</p>
+												</div>
+											) : (
+												<h3 class="display mt-6 text-[24px] sm:text-[26px] lg:text-[28px] break-words">{project.name}</h3>
+											)}
+
+											{/* highlights:一句话卖点 */}
+											{project.highlights && (
 												<p
 													class:list={[
-														"text-[color:var(--color-ink-secondary)]",
-														"text-[13px]",
-														"leading-[1.55]",
-														"mt-1.5",
-														"line-clamp-2 sm:line-clamp-1",
-														"max-w-[72ch]",
+														"flex items-start gap-2 font-[var(--font-mono)] leading-[1.55] tracking-[var(--tracking-wide)] uppercase text-[color:var(--color-ink-tertiary)]",
+														hero ? "mt-6 text-[12px] pl-3 border-l-2 border-[color:var(--signal-line)]" : "mt-2.5 text-[11px]",
 													]}
 												>
-													{project.description}
+													{!hero && <span aria-hidden="true" class="text-[color:var(--color-signal)] select-none">›</span>}
+													<span>{project.highlights}</span>
 												</p>
+											)}
+
+											{/* 描述 */}
+											<p
+												class:list={[
+													"text-[color:var(--color-ink-secondary)] flex-1",
+													hero ? "mt-5 text-[15px] lg:text-[16px] leading-[1.7] max-w-[60ch]" : "mt-3.5 text-[13.5px] leading-[1.65] line-clamp-4",
+												]}
+											>
+												{project.description}
+											</p>
+
+											{/* 技术栈 */}
+											{project.techStack.length > 0 && (
+												<ul class="mt-5 flex flex-wrap gap-1.5 list-none m-0 p-0" aria-label={lang === "zh" ? "技术栈" : "Tech stack"}>
+													{(hero ? project.techStack : project.techStack.slice(0, 5)).map((tech) => (
+														<li class="chip">{tech}</li>
+													))}
+												</ul>
+											)}
+
+											{/* 底栏:stars / forks + 外链 */}
+											<div class="mt-6 pt-4 border-t border-[color:var(--color-hairline)] flex items-center gap-x-5 gap-y-3 flex-wrap">
+												<dl class="flex items-center gap-4 m-0 font-[var(--font-mono)] text-[12px] leading-none tabular-nums">
+													{!hero && (
+														<div class="inline-flex items-center gap-1.5 text-[color:var(--color-ink-primary)]">
+															<dt class="sr-only">{C.starsLabel}</dt>
+															<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" class="text-[color:var(--color-signal)]"><path d={STAR_PATH} /></svg>
+															<dd class="m-0" title={String(project.stars)}>{formatCount(project.stars)}</dd>
+														</div>
+													)}
+													<div class="inline-flex items-center gap-1.5 text-[color:var(--color-ink-tertiary)]">
+														<dt class="mono-label text-[10px]">{C.forksLabel}</dt>
+														<dd class="m-0 text-[color:var(--color-ink-secondary)]" title={String(project.forks)}>{formatCount(project.forks)}</dd>
+													</div>
+												</dl>
+
+												<div class="ml-auto flex items-center gap-1.5 flex-wrap">
+													{links.map((l) => (
+														<a
+															href={l.href}
+															target="_blank"
+															rel="noopener noreferrer"
+															aria-label={`${project.name} — ${l.label}`}
+															class:list={["btn btn-sm ext-link", l.primary ? "btn-primary" : "btn-ghost"]}
+														>
+															<span>{l.label}</span>
+															<svg aria-hidden="true" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="ext-link__arrow"><path d="M7 17L17 7" /><path d="M8 7h9v9" /></svg>
+														</a>
+													))}
+												</div>
 											</div>
-										</div>
-
-										{/*
-										 * 右:stars + 语言 + 箭头
-										 * --------------------------------------------------------
-										 * 为了让不同项目之间 stars 数字与语言标签竖向对齐(避免
-										 * ★ 65 / ★ 15 / ★ 0 宽度不一推着语言左右漂),
-										 * 三个槽位各给一个固定宽度:
-						                 *   - stars  列:固定 56px,右对齐
-						                 *   - lang   列:固定 96px,左对齐(大写 Mono 文字)
-						                 *   - arrow  列:固定 14px
-						                 * 移动端 sm 以下仍然只显示 stars(其他隐藏),宽度约束 fit-content
-										 */}
-										<div
-											class:list={[
-												"flex items-center",
-												"gap-3 sm:gap-4",
-												"shrink-0",
-												"pl-8 sm:pl-0",
-											]}
-										>
-											{/* stars 列:右对齐的固定宽度单元格 */}
-											<span
-												class:list={[
-													"inline-flex items-center justify-end gap-1",
-													"font-[var(--font-mono)]",
-													"text-[11px] leading-none",
-													"text-[color:var(--color-ink-tertiary)]",
-													"tabular-nums",
-													"sm:w-[56px]",
-												]}
-												aria-label={`${project.stars} ${C.starsLabel}`}
-											>
-												<svg
-													aria-hidden="true"
-													width="10"
-													height="10"
-													viewBox="0 0 24 24"
-													fill="currentColor"
-													class="shrink-0"
-												>
-													<path d="M12 .587l3.668 7.568 8.332 1.151-6.064 5.828 1.48 8.279L12 19.446l-7.416 3.967 1.48-8.279L0 9.306l8.332-1.151z" />
-												</svg>
-												<span class="tabular-nums">{formatCount(project.stars)}</span>
-											</span>
-
-											{/* 语言 列:左对齐的固定宽度单元格,移动端隐藏 */}
-											<span
-												class:list={[
-													"mono-label",
-													"text-[10px] leading-none",
-													"text-[color:var(--color-ink-secondary)]",
-													"uppercase",
-													"hidden sm:inline-block",
-													"sm:w-[96px]",
-													"truncate",
-												]}
-											>
-												{project.language}
-											</span>
-
-											{/* 箭头 列:固定宽度,hover 时浮现 */}
-											<span
-												aria-hidden="true"
-												class:list={[
-													"hidden sm:inline-flex items-center justify-center",
-													"w-[14px] h-[14px]",
-													"text-[color:var(--color-ink-muted)]",
-												]}
-											>
-												<svg
-													width="12"
-													height="12"
-													viewBox="0 0 24 24"
-													fill="none"
-													stroke="currentColor"
-													stroke-width="2"
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													class:list={[
-														"opacity-0 group-hover:opacity-100",
-														"group-hover:translate-x-[1px] group-hover:-translate-y-[1px]",
-														"transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-													]}
-												>
-													<path d="M7 17L17 7" />
-													<path d="M8 7h9v9" />
-												</svg>
-											</span>
-										</div>
-									</a>
-								</li>
-							))}
+										</article>
+									</li>
+								);
+							})}
 						</ul>
-					</>
+					</CvSection>
+				)}
+
+				{/* ---------- 02 · 全部:按语言分组的履历条目 ---------- */}
+				{regularProjects.length > 0 && (
+					<CvSection
+						index={featuredProjects.length > 0 ? "02" : "01"}
+						label={C.sectionAll}
+						sublabel={`${C.sectionAllSub} · ${pad2(regularProjects.length)}`}
+						note={C.sectionAllNote}
+						id="all-projects"
+						class="mb-24 lg:mb-32"
+					>
+						{/* 语言索引:锚点跳转到各组 */}
+						{projectGroups.length > 1 && (
+							<nav aria-label={t("meta.languages")} class="mb-8 flex flex-wrap gap-1.5">
+								{projectGroups.map((g, gi) => (
+									<a href={`#lang-${gi}`} class="chip transition-colors hover:border-[color:var(--signal-line)]">
+										{g.language && <span aria-hidden="true" class="lang-dot" style={`--lang: ${languageColor(g.language)}`}></span>}
+										{g.language || C.otherLang}
+										<span class="mono-num text-[color:var(--color-ink-muted)]">{g.items.length}</span>
+									</a>
+								))}
+							</nav>
+						)}
+
+						<div class="flex flex-col gap-10 lg:gap-12">
+							{projectGroups.map((group, gi) => (
+								<section id={`lang-${gi}`} aria-labelledby={`lang-${gi}-title`} class="scroll-mt-[calc(var(--layout-top-nav-height)+1rem)]">
+									{/* 组头:语言 · 数量 · star 小计 */}
+									<header class="flex items-end gap-3 pb-3 border-b border-[color:var(--color-hairline-strong)]">
+										{group.language && <span aria-hidden="true" class="lang-dot mb-[7px]" style={`--lang: ${languageColor(group.language)}`}></span>}
+										<h3 id={`lang-${gi}-title`} class="text-[20px] lg:text-[22px] font-semibold tracking-[-0.03em] leading-none">
+											{group.language || C.otherLang}
+										</h3>
+										<span class="mono-num text-[11px] leading-none text-[color:var(--color-ink-muted)] mb-[2px]">
+											{pad2(group.items.length)}
+										</span>
+										<span class="ml-auto inline-flex items-center gap-1 font-[var(--font-mono)] text-[11px] leading-none tabular-nums text-[color:var(--color-ink-tertiary)] mb-[2px]">
+											<svg aria-hidden="true" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d={STAR_PATH} /></svg>
+											<span class="sr-only">{C.starsLabel}</span>
+											{formatCount(group.items.reduce((s, it) => s + it.project.stars, 0))}
+										</span>
+									</header>
+
+									<ol class="list-none m-0 p-0">
+										{group.items.map(({ project, no }) => (
+											<li class="reveal-scroll border-b border-[color:var(--color-hairline)]">
+												<a
+													href={project.githubUrl}
+													target="_blank"
+													rel="noopener noreferrer"
+													class="entry group grid entry-grid items-baseline px-3 lg:px-4 py-4 lg:py-5"
+												>
+													<span aria-hidden="true" class="entry__num mono-num text-[11px] leading-none">{pad2(no)}</span>
+
+													<div class="min-w-0">
+														<div class="flex items-center gap-2 flex-wrap">
+															<h4 class="entry__name font-[var(--font-mono)] text-[15px] sm:text-[16px] leading-[1.2] font-semibold tracking-[-0.01em] text-[color:var(--color-ink-primary)] truncate">
+																{project.name}
+															</h4>
+															<span class="mono-label text-[9.5px] leading-none text-[color:var(--color-ink-muted)]">{kindLabelOf(project)}</span>
+															{project.fork && project.kind && (
+																<span class="mono-label text-[9.5px] leading-none text-[color:var(--color-ink-muted)]">· {C.forkTag}</span>
+															)}
+															{project.archived && (
+																<span class="chip h-[18px] px-1.5 text-[9.5px] uppercase text-[color:var(--color-ink-muted)]">{C.archivedTag}</span>
+															)}
+														</div>
+														{project.description && (
+															<p class="mt-1.5 text-[color:var(--color-ink-secondary)] text-[13.5px] leading-[1.6] line-clamp-2 max-w-[68ch]">
+																{project.description}
+															</p>
+														)}
+													</div>
+
+													<span class="inline-flex items-center justify-end gap-1 font-[var(--font-mono)] text-[12px] leading-none tabular-nums text-[color:var(--color-ink-tertiary)]">
+														<svg aria-hidden="true" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" class="shrink-0"><path d={STAR_PATH} /></svg>
+														<span class="sr-only">{project.stars} {C.starsLabel}</span>
+														<span aria-hidden="true">{formatCount(project.stars)}</span>
+													</span>
+
+													<span aria-hidden="true" class="hidden sm:inline-flex items-center justify-end text-[color:var(--color-ink-tertiary)]">
+														<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="entry__arrow"><path d="M7 17L17 7" /><path d="M8 7h9v9" /></svg>
+													</span>
+												</a>
+											</li>
+										))}
+									</ol>
+								</section>
+							))}
+						</div>
+					</CvSection>
 				)}
 			</>
 		)
@@ -753,21 +627,118 @@ function kindLabelOf(project: ProjectVM): string {
 </AppShell>
 
 <style>
-	/* ----------------------------------------------------------------------------
-	 * line-clamp 兜底
-	 * -------------------------------------------------------------------------- */
-
-	.line-clamp-1 {
-		display: -webkit-box;
-		-webkit-line-clamp: 1;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
+	/* 语言色点:颜色由内联 --lang 注入 */
+	.lang-dot {
+		display: inline-block;
+		width: 7px;
+		height: 7px;
+		border-radius: 999px;
+		background-color: var(--lang, var(--color-ink-muted));
+		box-shadow: 0 0 0 2px color-mix(in oklab, var(--lang, transparent) 18%, transparent);
+		flex-shrink: 0;
 	}
 
-	.line-clamp-2 {
-		display: -webkit-box;
-		-webkit-line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
+	/* 外链按钮:箭头沿对角线轻推 */
+	.ext-link__arrow {
+		transition: transform var(--duration-base) var(--ease-out-expo);
+	}
+	.ext-link:hover .ext-link__arrow {
+		transform: translate(1.5px, -1.5px);
+	}
+
+	/* ------------------------------------------------------------------------
+	 * Bento 首格:点阵只铺右下角;超大 star 数字用 Signal 渐变填字
+	 * ---------------------------------------------------------------------- */
+	.bento__grid {
+		mask-image: radial-gradient(circle at 100% 100%, #000, transparent 60%);
+	}
+	.bento__stars {
+		background: var(--gradient-signal);
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+	}
+
+	/* ------------------------------------------------------------------------
+	 * 履历条目:编号 | 名称 + 描述 | stars | 箭头
+	 * ---------------------------------------------------------------------- */
+	.entry-grid {
+		grid-template-columns: 2rem minmax(0, 1fr) auto;
+		column-gap: 0.75rem;
+	}
+	@media (min-width: 640px) {
+		.entry-grid {
+			grid-template-columns: 2.75rem minmax(0, 1fr) 4.5rem 1rem;
+			column-gap: 1.25rem;
+		}
+	}
+
+	.entry {
+		position: relative;
+		isolation: isolate;
+	}
+	/* hover 底色:用独立层淡入,只动 opacity */
+	.entry::before {
+		content: "";
+		position: absolute;
+		inset: 0;
+		z-index: -1;
+		background: linear-gradient(90deg, var(--signal-soft), transparent 70%);
+		opacity: 0;
+		transition: opacity var(--duration-base) var(--ease-standard);
+	}
+	/* 左侧 Signal 刻度线:从中心纵向生长 */
+	.entry::after {
+		content: "";
+		position: absolute;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: 2px;
+		background: var(--gradient-signal);
+		transform: scaleY(0);
+		transition: transform var(--duration-slow) var(--ease-out-expo);
+	}
+	.entry:hover::before,
+	.entry:focus-visible::before {
+		opacity: 1;
+	}
+	.entry:hover::after,
+	.entry:focus-visible::after {
+		transform: scaleY(1);
+	}
+
+	.entry__num {
+		color: var(--color-ink-muted);
+		transition: color var(--duration-base) var(--ease-standard);
+	}
+	.entry:hover .entry__num,
+	.entry:focus-visible .entry__num {
+		color: var(--color-signal);
+	}
+
+	.entry__name {
+		transition: transform var(--duration-slow) var(--ease-out-expo);
+	}
+	.entry:hover .entry__name,
+	.entry:focus-visible .entry__name {
+		transform: translateX(3px);
+	}
+
+	.entry__arrow {
+		opacity: 0;
+		transform: translate(-3px, 3px);
+		transition:
+			opacity var(--duration-base) var(--ease-standard),
+			transform var(--duration-slow) var(--ease-out-expo);
+	}
+	.entry:hover .entry__arrow,
+	.entry:focus-visible .entry__arrow {
+		opacity: 1;
+		transform: none;
+	}
+
+	.entry:focus-visible {
+		outline-offset: -2px;
 	}
 </style>

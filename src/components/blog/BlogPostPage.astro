@@ -1,60 +1,39 @@
 ---
 /**
  * ============================================================================
- * BlogPostPage - 博客详情页共享组件
+ * BlogPostPage - 博客详情页共享组件(/blog/[slug] 与 /en/blog/[slug] 共用)
  * ----------------------------------------------------------------------------
- * 为什么抽成独立组件:
- *   中文 /blog/[slug] 与英文 /en/blog/[slug] 两个动态路由入口复用完全相同
- *   的渲染逻辑。本组件负责:
- *     1. 消费页面层已经查好的 PostVM(不再自己查一次 loadPostBySlug)
- *     2. 用 astro:content 的 render() 渲染 Markdown 正文,拿到 <Content />
- *        与 TOC 用的 headings 列表
- *     3. 组合左栏(文章 meta)与右栏(正文 + TOC + 上一篇/下一篇 + 评论)
+ * 消费页面层已查好的 PostVM,render() 出正文与 TOC headings。
  *
- * 左栏信息布局:
- *   - 覆盖默认 LabMark,改为展示文章 meta 卡片
- *   - AUTHOR / PUBLISHED / UPDATED / CATEGORY / READING TIME / TAGS
- *   - 底部额外一行"回到博客列表"导航
+ * 布局("长文阅读"):
  *
- * 右栏信息布局:
- *   - BLOG · slug 面包屑
- *   - 文章标题 + excerpt
- *   - TOC(仅当文章有 H2/H3 时显示)
- *   - Markdown 正文(prose 样式,<Content /> 渲染)
- *   - 分割线 + 上一篇 / 下一篇导航
- *   - giscus 评论区(未配置时静默跳过)
+ *   PageHero  分类眉标 / 超大标题 / 摘要        ┌ aside:作者卡 + 标签 ┐
+ *             SpecStrip:发布 / 更新 / 阅读时长 / 字数 / 分类
+ *   ───────────────────────────────────────────────────────────────────
+ *   正文网格(.wrap,12 列)
+ *     xl:  左轨 2/12(吸顶:返回 / 档案日期 / 章节数 / 回到顶部)
+ *          正文 7/12(版心 68ch)
+ *          TOC 3/12(吸顶)
+ *     lg:  左轨横排在上;正文 8/12 + TOC 4/12
+ *     <lg: 单列:左轨横排 → 折叠 TOC → 正文
+ *   ───────────────────────────────────────────────────────────────────
+ *   01 继续阅读(CvSection full):上一篇 / 下一篇 大卡片
+ *   02 评论(Comments → CvSection;未配置 giscus 时静默跳过)
  *
- * 使用方式(页面文件,静态构建,getStaticPaths 枚举 slug):
- *   ---
- *   import BlogPostPage from "@components/blog/BlogPostPage.astro";
- *   import { loadPostBySlug } from "@lib/queries/posts";
- *   const post = await loadPostBySlug(slug, lang);
- *   if (!post) throw new Error(...); // 静态构建下不可达,宁可构建失败
- *   ---
- *   <BlogPostPage post={post} />
- *
- * 为什么不在组件内部再查一次文章:
- *   页面文件已经需要 loadPostBySlug 来产出运行时数据,把查好的 PostVM
- *   直接当 prop 传进来,避免同一篇文章在页面 + 组件里各查一次
- *   Content Collection。
+ * 客户端脚本:正文图片灯箱 + 标题 "#" 锚点(纯增强,幂等)。
  * ============================================================================
  */
 
 import { render } from "astro:content";
 import AppShell from "@layouts/AppShell.astro";
-import SectionHeader from "@components/ui/SectionHeader.astro";
-import MetaRow from "@components/ui/MetaRow.astro";
+import PageHero from "@components/layout/PageHero.astro";
+import CvSection from "@components/layout/CvSection.astro";
+import type { SpecItem } from "@components/layout/SpecStrip.astro";
 import TableOfContents from "@components/blog/TableOfContents.astro";
 import Comments from "@components/blog/Comments.astro";
-import Logo from "@components/ui/Logo.astro";
-import {
-	getLangFromUrl,
-	useTranslations,
-	useTranslatedPath,
-	formatDate,
-	formatDateCompact,
-} from "@i18n/utils";
+import { getLangFromUrl, useTranslatedPath, formatDateCompact } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
+import type { MarkdownHeading } from "astro";
 import { loadAdjacentPosts, type PostVM } from "@lib/queries/posts";
 import { readingStats } from "@lib/reading-time";
 import "@styles/prose.css";
@@ -66,18 +45,10 @@ interface Props {
 
 const { post } = Astro.props;
 
-/* ----------------------------------------------------------------------------
- * 当前语言 / 翻译工具
- * -------------------------------------------------------------------------- */
-
 const lang = getLangFromUrl(Astro.url) as Lang;
-const t = useTranslations(lang);
 const tp = useTranslatedPath(lang);
 
-/* ----------------------------------------------------------------------------
- * 相邻文章(上一篇/下一篇)
- * -------------------------------------------------------------------------- */
-
+/* 相邻文章(上一篇 / 下一篇) */
 const { previous: prevVM, next: nextVM } = await loadAdjacentPosts(
 	post.slug,
 	lang,
@@ -86,13 +57,9 @@ const { previous: prevVM, next: nextVM } = await loadAdjacentPosts(
 /* ----------------------------------------------------------------------------
  * 正文渲染(Astro 6 Content Layer)
  * ----------------------------------------------------------------------------
- * render() 内部跑 remark/rehype 管线(含 Shiki 双主题高亮,见
- * astro.config.mjs 的 markdown.shikiConfig),渲染失败会在构建期直接
- * 让 `bun build` 报错 —— 比运行时兜底降级为 <pre> 更早暴露问题,
- * 静态站也没有"运行时"可以兜底,因此不再需要 try/catch 降级。
- *
- * 阅读时长直接用查询层已经算好的 post.readingTime(与列表页/搜索索引
- * 同一份口径);字数额外算一次仅用于"字数"这一行展示。
+ * render() 跑 remark/rehype 管线(含 Shiki 双主题高亮),渲染失败会在构建期
+ * 直接报错。阅读时长沿用查询层的 post.readingTime(与列表页同口径),
+ * 字数额外算一次仅用于规格条展示。
  * -------------------------------------------------------------------------- */
 
 const { Content, headings } = await render(post.entry);
@@ -106,42 +73,96 @@ const readingTimeMin = post.readingTime;
 const COPY = {
 	zh: {
 		blogBreadcrumb: "博客",
-		backToList: "返回博客列表",
+		backToList: "返回博客",
+		postInfo: "文章信息",
+		entry: "档案",
+		sections: "章节",
+		backToTop: "回到顶部",
+		continueReading: "继续阅读",
+		continueSub: "Continue reading",
+		postNav: "文章导航",
 		prev: "上一篇",
 		next: "下一篇",
-		words: "字",
+		wordCount: "字数",
 		author: "作者",
-		published: "发布于",
-		updated: "更新于",
+		published: "发布",
+		updated: "更新",
 		category: "分类",
 		readingTime: "阅读时长",
 		tags: "标签",
-		minutes: "分钟",
+		minutes: " 分钟",
 		viewAuthor: "查看作者主页",
+		anchor: "链接到此标题",
+		imageViewer: "图片查看器",
+		close: "关闭",
 	},
 	en: {
 		blogBreadcrumb: "Blog",
-		backToList: "Back to all posts",
+		backToList: "All posts",
+		postInfo: "Post info",
+		entry: "Entry",
+		sections: "Sections",
+		backToTop: "Back to top",
+		continueReading: "Continue reading",
+		continueSub: "Prev · Next",
+		postNav: "Post navigation",
 		prev: "Previous",
 		next: "Next",
-		words: "words",
+		wordCount: "Words",
 		author: "Author",
 		published: "Published",
 		updated: "Updated",
 		category: "Category",
 		readingTime: "Reading time",
 		tags: "Tags",
-		minutes: "min",
+		minutes: " min",
 		viewAuthor: "View author",
+		anchor: "Link to this heading",
+		imageViewer: "Image viewer",
+		close: "Close",
 	},
 } as const;
 
 const C = COPY[lang] ?? COPY.zh;
 
+const postDateCompact = formatDateCompact(post.date);
+/* 左轨大日期:年份小字 + 月.日大字 */
+const [dateYear, dateMonth, dateDay] = postDateCompact.split("-");
+
+/* 页头规格条 */
+const spec: SpecItem[] = [
+	{ label: C.published, value: postDateCompact },
+	...(post.updatedDate
+		? [{ label: C.updated, value: formatDateCompact(post.updatedDate) }]
+		: []),
+	{ label: C.readingTime, count: readingTimeMin, suffix: C.minutes },
+	{ label: C.wordCount, count: wordCount },
+	...(post.categoryName
+		? [
+				{
+					label: C.category,
+					value: post.categoryName,
+					href: post.categorySlug
+						? tp(`/blog/cat/${post.categorySlug}/`)
+						: undefined,
+				},
+			]
+		: []),
+];
+
+/* 章节数(H2),左轨展示 */
+const sectionCount = headings.filter((h: MarkdownHeading) => h.depth === 2 && h.slug).length;
+
+/* 作者卡:有 GitHub 时整卡可点 */
+const AuthorTag = post.authorGithub ? "a" : "div";
+const hasAside = Boolean(post.authorName) || post.tags.length > 0;
+
+/* 章节编号:有上/下一篇时评论为 02,否则顺延为 01 */
+const hasAdjacent = Boolean(prevVM || nextVM);
+const commentsIndex = hasAdjacent ? "02" : "01";
+
 /* ----------------------------------------------------------------------------
  * 结构化数据(JSON-LD)—— BlogPosting
- * ----------------------------------------------------------------------------
- * 提升搜索引擎对博客内容的理解。仅在文章有作者与日期时生成。
  * -------------------------------------------------------------------------- */
 
 const siteUrl = (Astro.site?.toString() ?? "https://zerx.dev").replace(
@@ -186,9 +207,7 @@ const jsonLd = JSON.stringify({
 	articlePublishedTime={post.date}
 	articleModifiedTime={post.updatedDate ?? undefined}
 	articleAuthor={post.authorName ?? undefined}
-	maxContentWidth="none"
 >
-	{/* ---------- 在 head 注入 BlogPosting JSON-LD ---------- */}
 	<Fragment slot="head">
 		<script
 			type="application/ld+json"
@@ -197,47 +216,190 @@ const jsonLd = JSON.stringify({
 		/>
 	</Fragment>
 
-	{/* ---------- 左栏:完全自定义(覆盖默认 LabMark) ---------- */}
-	<Fragment slot="left">
-		<aside
-			class:list={[
-				"relative flex flex-col",
-				"bg-[color:var(--color-paper)]",
-				"lg:border-r lg:border-dashed lg:border-[color:var(--color-hairline)]",
-				// 移动端紧凑 padding,桌面端留白
-				"px-5 sm:px-8 lg:px-10 xl:px-14",
-				"pt-5 sm:pt-6 lg:pt-8",
-				"pb-6 sm:pb-8 lg:pb-10",
-				"lg:min-h-screen",
-			]}
-			aria-label={lang === "zh" ? "文章信息栏" : "Post sidebar"}
-		>
-			{/* ---- Logo ---- */}
-			<div class="flex items-center">
-				<Logo size="md" />
+	{/* ======================= 文章头 ======================= */}
+	<PageHero
+		size="md"
+		eyebrow={post.categoryName ?? C.blogBreadcrumb}
+		title={post.title}
+		description={post.excerpt || undefined}
+		spec={spec}
+	>
+		{hasAside && (
+			<div slot="aside" class="flex flex-col gap-6">
+				{post.authorName && (
+					<AuthorTag
+						href={post.authorGithub ?? undefined}
+						target={post.authorGithub ? "_blank" : undefined}
+						rel={post.authorGithub ? "noopener noreferrer" : undefined}
+						aria-label={
+							post.authorGithub
+								? `${C.viewAuthor}: ${post.authorName}`
+								: undefined
+						}
+						class="post-author surface-card group flex items-center gap-4 p-4 pr-5"
+					>
+						{post.authorAvatar ? (
+							<img
+								src={post.authorAvatar}
+								alt=""
+								loading="lazy"
+								decoding="async"
+								width="48"
+								height="48"
+								class:list={[
+									"shrink-0 h-12 w-12 rounded-full",
+									"ring-1 ring-[color:var(--color-hairline-strong)]",
+									"bg-[color:var(--color-paper-subtle)]",
+								]}
+							/>
+						) : (
+							<span
+								aria-hidden="true"
+								class:list={[
+									"shrink-0 inline-flex items-center justify-center",
+									"h-12 w-12 rounded-full",
+									"bg-[color:var(--color-ink-primary)] text-[color:var(--color-paper)]",
+									"font-[var(--font-mono)] text-[13px] font-semibold uppercase",
+								]}
+							>
+								{post.authorName.slice(0, 2)}
+							</span>
+						)}
+						<span class="flex flex-col min-w-0 flex-1 gap-2">
+							<span class="mono-label text-[10px] leading-none">{C.author}</span>
+							<span class="text-[16px] leading-none font-semibold tracking-[-0.02em] text-[color:var(--color-ink-primary)] truncate">
+								{post.authorName}
+							</span>
+						</span>
+						{post.authorGithub && (
+							<svg
+								aria-hidden="true"
+								width="13"
+								height="13"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class:list={[
+									"shrink-0 text-[color:var(--color-ink-muted)]",
+									"transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",
+									"group-hover:translate-x-[2px] group-hover:-translate-y-[2px]",
+									"group-hover:text-[color:var(--color-signal)]",
+								]}
+							>
+								<path d="M7 17 17 7"></path>
+								<path d="M7 7h10v10"></path>
+							</svg>
+						)}
+					</AuthorTag>
+				)}
+
+				{post.tags.length > 0 && (
+					<div>
+						<span class="mono-label text-[10px] leading-none block">{C.tags}</span>
+						<ul class="mt-3 flex flex-wrap gap-1.5 list-none m-0 p-0" aria-label={C.tags}>
+							{post.tags.map((tag: PostVM["tags"][number]) => (
+								<li class="inline-flex">
+									<span class="chip">
+										<span aria-hidden="true" class="text-[color:var(--color-ink-muted)]">#</span>
+										{tag.name}
+									</span>
+								</li>
+							))}
+						</ul>
+					</div>
+				)}
 			</div>
+		)}
+	</PageHero>
 
-			<hr
-				class="border-0 border-t border-dashed border-[color:var(--color-hairline)] mt-5 sm:mt-6 lg:mt-8"
-				aria-hidden="true"
-			/>
-
-			{/* ---- 返回博客列表的快捷链接 ---- */}
+	{/* ======================= 正文网格 ======================= */}
+	<div class="wrap mt-4 lg:mt-10 grid grid-cols-1 lg:grid-cols-12 gap-x-10 xl:gap-x-12 gap-y-8">
+		{/* ---- 左轨:<xl 横排一行;xl 起竖排吸顶 ---- */}
+		<aside
+			aria-label={C.postInfo}
+			class:list={[
+				"order-1 lg:col-span-12 xl:col-span-2",
+				"flex items-center justify-between gap-4",
+				"xl:flex-col xl:items-start xl:justify-start xl:gap-10",
+				"xl:sticky xl:self-start xl:top-[calc(var(--layout-top-nav-height)+1rem)]",
+			]}
+		>
 			<a
 				href={tp("/blog")}
 				class:list={[
-					"group",
-					"mt-5 sm:mt-6 lg:mt-8",
-					"inline-flex items-center gap-2",
-					"font-[var(--font-mono)]",
-					"text-[10.5px]",
-					"leading-none",
+					"group w-fit inline-flex items-center gap-2",
+					"font-[var(--font-mono)] text-[10.5px] leading-none uppercase",
 					"tracking-[var(--tracking-wider)]",
-					"uppercase",
 					"text-[color:var(--color-ink-tertiary)]",
 					"hover:text-[color:var(--color-ink-primary)]",
-					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-					"w-fit",
+				]}
+			>
+				<span
+					aria-hidden="true"
+					class:list={[
+						"inline-flex items-center justify-center h-7 w-7",
+						"rounded-[var(--radius-sm)] border border-[color:var(--color-hairline)]",
+						"bg-[color:var(--color-surface)]",
+						"transition-[border-color] duration-[var(--duration-fast)]",
+						"group-hover:border-[color:var(--color-hairline-strong)]",
+					]}
+				>
+					<svg
+						width="11"
+						height="11"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.25"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class="transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)] group-hover:-translate-x-[2px]"
+					>
+						<path d="m12 19-7-7 7-7"></path>
+						<path d="M19 12H5"></path>
+					</svg>
+				</span>
+				<span>{C.backToList}</span>
+			</a>
+
+			{/* 档案日期:<xl 为紧凑 mono 行,xl 为大号竖排 */}
+			<div class="xl:w-full xl:pt-6 xl:border-t xl:border-[color:var(--color-hairline)]">
+				<span class="mono-label text-[10px] leading-none hidden xl:block">{C.entry}</span>
+				<time
+					datetime={post.date}
+					class="font-[var(--font-mono)] text-[11px] leading-none uppercase tracking-[var(--tracking-wider)] tabular-nums text-[color:var(--color-ink-tertiary)] xl:hidden"
+				>
+					{C.entry} · {postDateCompact}
+				</time>
+				<time datetime={post.date} class="hidden xl:block mt-4" aria-hidden="true">
+					<span class="block font-[var(--font-mono)] text-[11px] leading-none tabular-nums text-[color:var(--color-ink-muted)]">
+						{dateYear}
+					</span>
+					<span class="block mt-2 text-[40px] font-semibold leading-none tracking-[-0.05em] tabular-nums text-[color:var(--color-ink-primary)]">
+						{dateMonth}<span class="text-[color:var(--color-signal)]">.</span>{dateDay}
+					</span>
+				</time>
+			</div>
+
+			{sectionCount > 0 && (
+				<div class="hidden xl:block xl:w-full xl:pt-6 xl:border-t xl:border-[color:var(--color-hairline)]">
+					<span class="mono-label text-[10px] leading-none block">{C.sections}</span>
+					<span class="block mt-4 text-[40px] font-semibold leading-none tracking-[-0.05em] tabular-nums text-[color:var(--color-ink-primary)]">
+						<span aria-hidden="true" class="font-[var(--font-serif)] italic font-normal text-[color:var(--color-ink-muted)] mr-1">§</span>{String(sectionCount).padStart(2, "0")}
+					</span>
+				</div>
+			)}
+
+			<a
+				href="#main-content"
+				class:list={[
+					"group hidden xl:inline-flex items-center gap-2",
+					"font-[var(--font-mono)] text-[10.5px] leading-none uppercase",
+					"tracking-[var(--tracking-wider)]",
+					"text-[color:var(--color-ink-tertiary)] hover:text-[color:var(--color-ink-primary)]",
 				]}
 			>
 				<svg
@@ -247,464 +409,62 @@ const jsonLd = JSON.stringify({
 					viewBox="0 0 24 24"
 					fill="none"
 					stroke="currentColor"
-					stroke-width="2.5"
+					stroke-width="2.25"
 					stroke-linecap="round"
 					stroke-linejoin="round"
-					class:list={[
-						"shrink-0",
-						"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-						"group-hover:-translate-x-[2px]",
-					]}
+					class="transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)] group-hover:-translate-y-[2px] text-[color:var(--color-signal)]"
 				>
-					<path d="m12 19-7-7 7-7"></path>
-					<path d="M19 12H5"></path>
+					<path d="m5 12 7-7 7 7"></path>
+					<path d="M12 19V5"></path>
 				</svg>
-				<span>{C.backToList}</span>
+				<span class="link-underline">{C.backToTop}</span>
 			</a>
-
-			{/* ---- 文章标题(大字,左栏主视觉) ----
-			 * 移动端字号缩小,避免在 320~375px 窄屏下撑满多行把右栏推下去
-			 */}
-			<h1
-				class:list={[
-					"mt-6 sm:mt-8 lg:mt-10",
-					"font-medium",
-					"text-[color:var(--color-ink-primary)]",
-					"tracking-[-0.02em]",
-					"leading-[1.2]",
-					"text-[22px] sm:text-[28px] md:text-[30px] lg:text-[32px] xl:text-[34px]",
-				]}
-			>
-				{post.title}
-			</h1>
-
-			{/* ---- 摘要 ---- */}
-			{post.excerpt && (
-				<p
-					class:list={[
-						"mt-3 sm:mt-4",
-						"text-[color:var(--color-ink-secondary)]",
-						"text-[13.5px] sm:text-[14px] lg:text-[14.5px]",
-						"leading-[1.65]",
-						"max-w-[40ch]",
-					]}
-				>
-					{post.excerpt}
-				</p>
-			)}
-
-			{/* ---- 作者迷你卡片 ---- */}
-			{post.authorName && (
-				<a
-					href={post.authorGithub ?? "#"}
-					target={post.authorGithub ? "_blank" : undefined}
-					rel={post.authorGithub ? "noopener noreferrer" : undefined}
-					aria-label={C.viewAuthor}
-					class:list={[
-						"mt-5 sm:mt-7 lg:mt-8",
-						"group",
-						"flex items-center gap-3",
-						"p-3",
-						"border border-dashed border-[color:var(--color-hairline)]",
-						"rounded-[var(--radius-sm)]",
-						"bg-[color:var(--color-paper-muted)]/30",
-						"hover:bg-[color:var(--color-paper-muted)]/60",
-						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-						"w-fit",
-						"max-w-full",
-					]}
-				>
-					{post.authorAvatar ? (
-						<img
-							src={post.authorAvatar}
-							alt={post.authorName}
-							loading="lazy"
-							decoding="async"
-							class:list={[
-								"shrink-0",
-								"h-8 w-8",
-								"rounded-full",
-								"border border-[color:var(--color-hairline)]",
-								"bg-[color:var(--color-paper-subtle)]",
-							]}
-						/>
-					) : (
-						<span
-							aria-hidden="true"
-							class:list={[
-								"shrink-0",
-								"inline-flex items-center justify-center",
-								"h-8 w-8 rounded-full",
-								"bg-[color:var(--color-ink-primary)]",
-								"text-[color:var(--color-paper)]",
-								"font-[var(--font-mono)]",
-								"text-[12px] font-semibold",
-								"uppercase tabular-nums",
-							]}
-						>
-							{post.authorName.slice(0, 2)}
-						</span>
-					)}
-
-					<div class="flex flex-col min-w-0">
-						<span
-							class:list={[
-								"mono-label",
-								"text-[9.5px] leading-none",
-								"text-[color:var(--color-ink-tertiary)]",
-								"mb-1",
-							]}
-						>
-							{C.author}
-						</span>
-						<span
-							class:list={[
-								"text-[13px] leading-none",
-								"text-[color:var(--color-ink-primary)]",
-								"font-medium",
-								"truncate",
-								"group-hover:underline",
-								"decoration-[color:var(--color-hairline-strong)]",
-								"underline-offset-2",
-							]}
-						>
-							{post.authorName}
-						</span>
-					</div>
-				</a>
-			)}
-
-			{/* ---- 将后面的 meta 推到底部 ---- */}
-			<div class="flex-1" aria-hidden="true"></div>
-
-			{/* ---- Meta 元信息(底部) ----
-			 * 移动端折叠到 <details>,默认收起,避免把右栏正文推到很远下方
-			 * 桌面端(lg+)常驻展示,作为文章信息卡片
-			 */}
-
-			{/* 移动/中屏:折叠版 */}
-			<details
-				class:list={[
-					"post-meta-collapsible",
-					"lg:hidden",
-					"mt-6 pt-4",
-					"border-t border-dashed border-[color:var(--color-hairline)]",
-				]}
-			>
-				<summary
-					class:list={[
-						"flex items-center justify-between gap-2",
-						"cursor-pointer select-none list-none py-1",
-					]}
-				>
-					<span class="mono-label text-[11px] text-[color:var(--color-ink-tertiary)]">
-						{C.tags && post.tags.length > 0 ? `META · ${C.tags}` : "META"}
-					</span>
-					<span
-						aria-hidden="true"
-						class:list={[
-							"post-meta-chevron",
-							"inline-flex items-center justify-center h-5 w-5",
-							"text-[color:var(--color-ink-muted)]",
-							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-						]}
-					>
-						<svg
-							width="12"
-							height="12"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-						>
-							<path d="m6 9 6 6 6-6" />
-						</svg>
-					</span>
-				</summary>
-
-				<dl class="flex flex-col mt-2">
-					<MetaRow label={C.published} value={formatDate(post.date, lang)} />
-					{post.updatedDate && post.updatedDate !== post.date && (
-						<MetaRow
-							label={C.updated}
-							value={formatDate(post.updatedDate, lang)}
-						/>
-					)}
-					{post.categoryName && post.categorySlug && (
-						<MetaRow label={C.category}>
-							<Fragment slot="value">
-								<span class="uppercase">{post.categoryName}</span>
-							</Fragment>
-						</MetaRow>
-					)}
-					<MetaRow label={C.readingTime}>
-						<Fragment slot="value">
-							<span class="tabular-nums">{readingTimeMin}</span>
-							<span class="ml-1 uppercase">{C.minutes}</span>
-						</Fragment>
-					</MetaRow>
-					{wordCount > 0 && (
-						<MetaRow label={lang === "zh" ? "字数" : "Words"}>
-							<Fragment slot="value">
-								<span class="tabular-nums">{wordCount.toLocaleString()}</span>
-								<span class="ml-1 uppercase">{C.words}</span>
-							</Fragment>
-						</MetaRow>
-					)}
-				</dl>
-
-				{/* ---- 标签云(折叠内) ---- */}
-				{post.tags.length > 0 && (
-					<div class="mt-5">
-						<span
-							class:list={[
-								"mono-label",
-								"text-[10px] leading-none",
-								"text-[color:var(--color-ink-tertiary)]",
-								"tracking-[var(--tracking-wider)]",
-								"uppercase",
-								"block mb-2.5",
-							]}
-						>
-							{C.tags}
-						</span>
-						<ul class="flex flex-wrap gap-1.5 list-none m-0 p-0">
-							{post.tags.map((tag) => (
-								<li class="inline-flex">
-									<span
-										class:list={[
-											"inline-flex items-center",
-											"px-2 py-[3px]",
-											"font-[var(--font-mono)]",
-											"text-[10px]",
-											"leading-none",
-											"tracking-[var(--tracking-wide)]",
-											"text-[color:var(--color-ink-secondary)]",
-											"bg-[color:var(--color-paper-muted)]/60",
-											"border border-[color:var(--color-hairline)]",
-											"rounded-[var(--radius-sm)]",
-										]}
-									>
-										<span
-											aria-hidden="true"
-											class="text-[color:var(--color-ink-muted)] mr-[2px]"
-										>
-											#
-										</span>
-										{tag.name}
-									</span>
-								</li>
-							))}
-						</ul>
-					</div>
-				)}
-			</details>
-
-			{/* 桌面端:常驻展示 */}
-			<div
-				class:list={[
-					"hidden lg:block",
-					"mt-10 lg:mt-12",
-					"pt-4",
-					"border-t border-dashed border-[color:var(--color-hairline)]",
-				]}
-			>
-				<dl class="flex flex-col">
-					<MetaRow label={C.published} value={formatDate(post.date, lang)} />
-					{post.updatedDate && post.updatedDate !== post.date && (
-						<MetaRow
-							label={C.updated}
-							value={formatDate(post.updatedDate, lang)}
-						/>
-					)}
-					{post.categoryName && post.categorySlug && (
-						<MetaRow label={C.category}>
-							<Fragment slot="value">
-								<span class="uppercase">{post.categoryName}</span>
-							</Fragment>
-						</MetaRow>
-					)}
-					<MetaRow label={C.readingTime}>
-						<Fragment slot="value">
-							<span class="tabular-nums">{readingTimeMin}</span>
-							<span class="ml-1 uppercase">{C.minutes}</span>
-						</Fragment>
-					</MetaRow>
-					{wordCount > 0 && (
-						<MetaRow label={lang === "zh" ? "字数" : "Words"}>
-							<Fragment slot="value">
-								<span class="tabular-nums">{wordCount.toLocaleString()}</span>
-								<span class="ml-1 uppercase">{C.words}</span>
-							</Fragment>
-						</MetaRow>
-					)}
-				</dl>
-
-				{/* ---- 标签云(桌面) ---- */}
-				{post.tags.length > 0 && (
-					<div class="mt-5">
-						<span
-							class:list={[
-								"mono-label",
-								"text-[10px] leading-none",
-								"text-[color:var(--color-ink-tertiary)]",
-								"tracking-[var(--tracking-wider)]",
-								"uppercase",
-								"block mb-2.5",
-							]}
-						>
-							{C.tags}
-						</span>
-						<ul class="flex flex-wrap gap-1.5 list-none m-0 p-0">
-							{post.tags.map((tag) => (
-								<li class="inline-flex">
-									<span
-										class:list={[
-											"inline-flex items-center",
-											"px-2 py-[3px]",
-											"font-[var(--font-mono)]",
-											"text-[10px]",
-											"leading-none",
-											"tracking-[var(--tracking-wide)]",
-											"text-[color:var(--color-ink-secondary)]",
-											"bg-[color:var(--color-paper-muted)]/60",
-											"border border-[color:var(--color-hairline)]",
-											"rounded-[var(--radius-sm)]",
-										]}
-									>
-										<span
-											aria-hidden="true"
-											class="text-[color:var(--color-ink-muted)] mr-[2px]"
-										>
-											#
-										</span>
-										{tag.name}
-									</span>
-								</li>
-							))}
-						</ul>
-					</div>
-				)}
-			</div>
 		</aside>
-	</Fragment>
 
-	{/* ==========================================================================
-	 *                              右栏主内容
-	 * ========================================================================== */}
+		{/* ---- 正文(版心 68ch) ---- */}
+		<div class="order-3 lg:order-2 lg:col-span-8 xl:col-span-7 min-w-0">
+			<article
+				class="prose blog-post-article max-w-[68ch]"
+				data-anchor-label={C.anchor}
+			>
+				<Content />
+			</article>
+		</div>
 
-	{/* ---- 面包屑 + slug 标签 ---- */}
-	<div
-		class:list={[
-			"flex items-center gap-2",
-			"font-[var(--font-mono)]",
-			"text-[10.5px]",
-			"leading-none",
-			"tracking-[var(--tracking-wider)]",
-			"uppercase",
-			"text-[color:var(--color-ink-tertiary)]",
-			"mb-2",
-		]}
-	>
-		<a
-			href={tp("/blog")}
-			class:list={[
-				"hover:text-[color:var(--color-ink-primary)]",
-				"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-			]}
-		>
-			{C.blogBreadcrumb}
-		</a>
-		<span aria-hidden="true" class="text-[color:var(--color-ink-muted)]">
-			/
-		</span>
-		<span
-			class:list={[
-				"text-[color:var(--color-ink-secondary)]",
-				"truncate max-w-[32ch]",
-			]}
-		>
-			{post.slug}
-		</span>
-	</div>
-
-	{/* ---- 分区头 ---- */}
-	<SectionHeader
-		eyebrow={post.categoryName ?? C.blogBreadcrumb}
-		count={formatDateCompact(post.date)}
-	/>
-
-	{/* ---- 正文 + TOC 的两列布局 ----
-	 * 布局策略(响应式全宽,正文 + TOC 共同吃满右栏):
-	 *   - 右栏容器走 maxContentWidth="none",跟随屏幕宽度无上限
-	 *   - 正文 prose 用 flex-1 吃掉 TOC 以外的全部宽度,不再用 ch 锁定上限
-	 *     用户偏好:高分辨率大屏上内容区域宽度接近 100%,宁可单行略长也不
-	 *     留大片空白。可读性由字号 / 行高 / 段距共同保证
-	 *   - TOC 固定 220 / 240 / 260px,贴在右栏右侧
-	 *   - 移动端两栏塌陷为单列,TOC 置于正文上方
-	 */}
-	<div
-		class:list={[
-			"mt-6 lg:mt-8 mb-12",
-			"flex flex-col lg:flex-row",
-			"gap-8 lg:gap-12 xl:gap-16",
-			"items-start",
-		]}
-	>
-		{/* Article */}
-		<article
-			class:list={[
-				"prose",
-				"blog-post-article",
-				"min-w-0",
-				"w-full",
-				"lg:flex-1",
-				// 全宽填充,不再施加 ch 级别的 max-width 上限
-				"max-w-none",
-			]}
-		>
-			<Content />
-		</article>
-
-		{/* TOC(桌面端右侧 sticky 贴边,平板/移动置于正文上方) */}
+		{/* ---- TOC:<lg 折叠在正文前;lg 起右侧吸顶 ---- */}
 		{headings.length > 0 && (
 			<div
 				class:list={[
-					"w-full",
-					"lg:w-[220px] xl:w-[240px] 2xl:w-[260px] lg:shrink-0",
-					// 平板 / 移动端让 TOC 显示在正文上方以免被忽视
-					"order-first lg:order-last",
-					// 桌面端:wrapper 本身 sticky,高度和滚动由 TableOfContents 内部的 nav 自己控制
+					"order-2 lg:order-3 lg:col-span-4 xl:col-span-3 min-w-0",
 					"lg:sticky lg:self-start",
-					"lg:top-[calc(var(--layout-top-nav-height)+1.25rem)]",
+					"lg:top-[calc(var(--layout-top-nav-height)+1rem)]",
 				]}
 			>
-				<TableOfContents headings={headings} defaultOpen={true} />
+				<TableOfContents headings={headings} />
 			</div>
 		)}
 	</div>
 
-	{/* ---- 图片 Lightbox 容器(点击正文图片时放大查看) ---- */}
+	{/* ---- 图片 Lightbox(点击正文图片放大) ---- */}
 	<div
 		id="image-lightbox"
 		class="image-lightbox"
 		role="dialog"
 		aria-modal="true"
-		aria-label={lang === "zh" ? "图片查看器" : "Image viewer"}
+		aria-label={C.imageViewer}
 		aria-hidden="true"
 		hidden
 	>
 		<button
 			type="button"
 			class="image-lightbox__close"
-			aria-label={lang === "zh" ? "关闭" : "Close"}
+			aria-label={C.close}
 		>
+			<span class="image-lightbox__close-key" aria-hidden="true">Esc</span>
 			<svg
 				aria-hidden="true"
-				width="18"
-				height="18"
+				width="14"
+				height="14"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
@@ -722,254 +482,241 @@ const jsonLd = JSON.stringify({
 		</figure>
 	</div>
 
-	{/* ---- 分割线 ---- */}
-	<hr
-		aria-hidden="true"
-		class="border-0 border-t border-dashed border-[color:var(--color-hairline)] my-8"
-	/>
-
-	{/* ---- 上一篇 / 下一篇 ---- */}
-	{(prevVM || nextVM) && (
-		<nav
-			aria-label={lang === "zh" ? "文章导航" : "Post navigation"}
-			class:list={[
-				"mt-2 mb-16",
-				"grid grid-cols-1 sm:grid-cols-2",
-				"gap-0",
-				"border border-dashed border-[color:var(--color-hairline)]",
-				"divide-x divide-dashed divide-[color:var(--color-hairline)]",
-			]}
+	{/* ======================= 01 继续阅读 ======================= */}
+	{hasAdjacent && (
+		<CvSection
+			index="01"
+			label={C.continueReading}
+			sublabel={C.continueSub}
+			layout="full"
 		>
-			{/* 上一篇 */}
-			{prevVM ? (
-				<a
-					href={tp(`/blog/${prevVM.slug}/`)}
-					class:list={[
-						"group",
-						"flex flex-col gap-2",
-						"px-5 py-5 lg:px-6 lg:py-6",
-						"hover:bg-[color:var(--color-paper-muted)]/60",
-						"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-						"sm:border-r-0",
-					]}
-				>
-					<span
-						class:list={[
-							"inline-flex items-center gap-1.5",
-							"mono-label",
-							"text-[10px]",
-							"text-[color:var(--color-ink-tertiary)]",
-							"group-hover:text-[color:var(--color-ink-primary)]",
-							"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-						]}
+			<nav
+				aria-label={C.postNav}
+				class="grid grid-cols-1 md:grid-cols-2 gap-4"
+			>
+				{prevVM ? (
+					<a
+						href={tp(`/blog/${prevVM.slug}/`)}
+						rel="prev"
+						class="post-nav-card surface-card spotlight reveal-scroll group"
+						data-spotlight
 					>
-						<svg
-							aria-hidden="true"
-							width="10"
-							height="10"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2.5"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							class:list={[
-								"shrink-0",
-								"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-								"group-hover:-translate-x-[2px]",
-							]}
-						>
-							<path d="m12 19-7-7 7-7"></path>
-							<path d="M19 12H5"></path>
-						</svg>
-						{C.prev}
-					</span>
-					<span
-						class:list={[
-							"text-[14px] lg:text-[14.5px]",
-							"leading-[1.45]",
-							"text-[color:var(--color-ink-primary)]",
-							"font-medium",
-							"line-clamp-2",
-						]}
-					>
-						{prevVM.title}
-					</span>
-				</a>
-			) : (
-				<div aria-hidden="true" class="hidden sm:block"></div>
-			)}
+						<span class="post-nav-card__meta">
+							<span class="inline-flex items-center gap-2">
+								<svg
+									aria-hidden="true"
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.5"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									class="post-nav-card__arrow post-nav-card__arrow--prev"
+								>
+									<path d="m12 19-7-7 7-7"></path>
+									<path d="M19 12H5"></path>
+								</svg>
+								{C.prev}
+							</span>
+							<time datetime={prevVM.date} class="tabular-nums text-[color:var(--color-ink-muted)]">
+								{formatDateCompact(prevVM.date)}
+							</time>
+						</span>
+						<span class="post-nav-card__title line-clamp-3">{prevVM.title}</span>
+					</a>
+				) : (
+					<div aria-hidden="true" class="hidden md:block"></div>
+				)}
 
-			{/* 下一篇 */}
-			{nextVM ? (
-				<a
-					href={tp(`/blog/${nextVM.slug}/`)}
-					class:list={[
-						"group",
-						"flex flex-col gap-2 items-end text-right",
-						"px-5 py-5 lg:px-6 lg:py-6",
-						"hover:bg-[color:var(--color-paper-muted)]/60",
-						"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-					]}
-				>
-					<span
-						class:list={[
-							"inline-flex items-center gap-1.5",
-							"mono-label",
-							"text-[10px]",
-							"text-[color:var(--color-ink-tertiary)]",
-							"group-hover:text-[color:var(--color-ink-primary)]",
-							"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-						]}
+				{nextVM ? (
+					<a
+						href={tp(`/blog/${nextVM.slug}/`)}
+						rel="next"
+						class="post-nav-card post-nav-card--next surface-card spotlight reveal-scroll group"
+						data-spotlight
 					>
-						{C.next}
-						<svg
-							aria-hidden="true"
-							width="10"
-							height="10"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2.5"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							class:list={[
-								"shrink-0",
-								"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-								"group-hover:translate-x-[2px]",
-							]}
-						>
-							<path d="M5 12h14"></path>
-							<path d="m12 5 7 7-7 7"></path>
-						</svg>
-					</span>
-					<span
-						class:list={[
-							"text-[14px] lg:text-[14.5px]",
-							"leading-[1.45]",
-							"text-[color:var(--color-ink-primary)]",
-							"font-medium",
-							"line-clamp-2",
-						]}
-					>
-						{nextVM.title}
-					</span>
-				</a>
-			) : (
-				<div aria-hidden="true" class="hidden sm:block"></div>
-			)}
-		</nav>
+						<span class="post-nav-card__meta">
+							<time datetime={nextVM.date} class="tabular-nums text-[color:var(--color-ink-muted)]">
+								{formatDateCompact(nextVM.date)}
+							</time>
+							<span class="inline-flex items-center gap-2">
+								{C.next}
+								<svg
+									aria-hidden="true"
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.5"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									class="post-nav-card__arrow post-nav-card__arrow--next"
+								>
+									<path d="M5 12h14"></path>
+									<path d="m12 5 7 7-7 7"></path>
+								</svg>
+							</span>
+						</span>
+						<span class="post-nav-card__title line-clamp-3">{nextVM.title}</span>
+					</a>
+				) : (
+					<div aria-hidden="true" class="hidden md:block"></div>
+				)}
+			</nav>
+		</CvSection>
 	)}
 
-	{/* ---- 评论区(giscus,未配置 PUBLIC_GISCUS_* 时静默跳过) ---- */}
-	<Comments lang={lang} />
+	{/* ======================= 评论(giscus,未配置时静默跳过) ======================= */}
+	<Comments lang={lang} index={commentsIndex} />
 </AppShell>
 
 <style>
-	/* ----------------------------------------------------------------------------
-	 * line-clamp 兜底(相邻文章标题)
-	 * -------------------------------------------------------------------------- */
-
-	.line-clamp-2 {
+	.line-clamp-3 {
 		display: -webkit-box;
-		-webkit-line-clamp: 2;
+		-webkit-line-clamp: 3;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 移动端 meta 折叠区:自定义 summary 箭头
-	 * -------------------------------------------------------------------------- */
-	.post-meta-collapsible > summary {
-		list-style: none;
+	/* ---------- 上一篇 / 下一篇:大卡片 ---------- */
+	.post-nav-card {
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+		gap: 2.5rem;
+		min-height: 13rem;
+		padding: 1.5rem 1.5rem 1.75rem;
 	}
-	.post-meta-collapsible > summary::-webkit-details-marker {
-		display: none;
+	.post-nav-card--next {
+		text-align: right;
 	}
-	.post-meta-collapsible[open] .post-meta-chevron {
-		transform: rotate(180deg);
+	.post-nav-card__meta {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		line-height: 1;
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: var(--tracking-wider);
+		color: var(--color-ink-tertiary);
+		transition: color var(--duration-fast) var(--ease-standard);
+	}
+	.post-nav-card:hover .post-nav-card__meta {
+		color: var(--color-ink-primary);
+	}
+	.post-nav-card__arrow {
+		flex-shrink: 0;
+		transition: transform var(--duration-base) var(--ease-out-expo);
+	}
+	.post-nav-card:hover .post-nav-card__arrow {
+		color: var(--color-signal);
+	}
+	.post-nav-card:hover .post-nav-card__arrow--prev {
+		transform: translateX(-4px);
+	}
+	.post-nav-card:hover .post-nav-card__arrow--next {
+		transform: translateX(4px);
+	}
+	.post-nav-card__title {
+		font-size: clamp(1.375rem, 2.4vw, 2.125rem);
+		line-height: 1.12;
+		font-weight: 600;
+		letter-spacing: -0.035em;
+		color: var(--color-ink-primary);
+		text-wrap: balance;
+	}
+	@media (min-width: 1024px) {
+		.post-nav-card {
+			min-height: 17rem;
+			padding: 2rem 2rem 2.25rem;
+		}
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 全宽覆盖:解除 prose.css 默认的 72ch 最大宽度上限
-	 * --------------------------------------------------------------------------
-	 * prose.css 里 `.prose { max-width: 72ch }` 是为通用长文阅读服务的,
-	 * 博客详情页用户明确偏好全宽填充,这里用 .blog-post-article 作用域把它解除,
-	 * 只影响本组件,不污染项目内其他使用 .prose 的地方(如 about 页)。
-	 * -------------------------------------------------------------------------- */
-	.blog-post-article.prose {
-		max-width: none;
-	}
-
-	/* ----------------------------------------------------------------------------
-	 * 正文图片可点击放大的视觉提示(hover 时微微浮起 + cursor: zoom-in)
-	 * -------------------------------------------------------------------------- */
+	/* ---------- 正文图片:可放大提示 ---------- */
 	.blog-post-article :global(img) {
 		cursor: zoom-in;
 		transition:
-			transform var(--duration-base) var(--ease-standard),
-			box-shadow var(--duration-base) var(--ease-standard);
+			transform var(--duration-slow) var(--ease-out-expo),
+			opacity var(--duration-base) var(--ease-standard);
 	}
 	.blog-post-article :global(img:hover) {
-		transform: translateY(-1px);
-		box-shadow: 0 6px 24px -12px rgba(0, 0, 0, 0.25);
+		transform: translateY(-2px);
 	}
 
 	/* ----------------------------------------------------------------------------
-	 * 图片 Lightbox —— 点击正文图片时放大查看
+	 * 图片 Lightbox
 	 * --------------------------------------------------------------------------
-	 * 纯 CSS + 轻量 JS 实现,不引入任何三方库。
-	 * - 默认 hidden(display:none),由 JS 切换 data-open="true" 显示
-	 * - 遮罩层占满视口,暗色半透明背景,图片居中自适应
-	 * - 点击遮罩 / 关闭按钮 / Esc 键均可关闭
+	 * JS 契约不变:去掉 hidden → 下一帧加 data-open="true";关闭时先移除
+	 * data-open,220ms 后再 hidden。可见态用 opacity/transform 过渡,
+	 * @starting-style 保证"刚从 hidden 出来"那一帧也能播放进场。
 	 * -------------------------------------------------------------------------- */
 	.image-lightbox {
 		position: fixed;
 		inset: 0;
 		z-index: 100;
-		display: none;
+		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 2rem 1.25rem;
-		background-color: rgba(20, 20, 20, 0.88);
-		backdrop-filter: blur(6px);
-		-webkit-backdrop-filter: blur(6px);
+		padding: 3.5rem 1.25rem 2rem;
+		background-color: color-mix(in oklab, var(--color-paper) 94%, transparent);
 		opacity: 0;
 		transition: opacity var(--duration-base) var(--ease-standard);
 	}
-
+	.image-lightbox[hidden] {
+		display: none;
+	}
 	.image-lightbox[data-open="true"] {
-		display: flex;
 		opacity: 1;
+	}
+	@starting-style {
+		.image-lightbox[data-open="true"] {
+			opacity: 0;
+		}
 	}
 
 	.image-lightbox__close {
 		position: absolute;
 		top: 1rem;
 		right: 1rem;
-		width: 40px;
-		height: 40px;
 		display: inline-flex;
 		align-items: center;
-		justify-content: center;
-		border-radius: var(--radius-sm);
-		border: 1px dashed rgba(255, 255, 255, 0.35);
-		background-color: rgba(255, 255, 255, 0.05);
-		color: rgba(255, 255, 255, 0.92);
+		gap: 0.5rem;
+		height: 32px;
+		padding-inline: 0.5rem 0.625rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--color-hairline-strong);
+		background-color: var(--color-surface);
+		color: var(--color-ink-secondary);
+		box-shadow: var(--shadow-card);
 		cursor: pointer;
 		transition:
-			background-color var(--duration-fast) var(--ease-standard),
+			color var(--duration-fast) var(--ease-standard),
 			border-color var(--duration-fast) var(--ease-standard);
 	}
-
 	.image-lightbox__close:hover {
-		background-color: rgba(255, 255, 255, 0.12);
-		border-color: rgba(255, 255, 255, 0.6);
+		color: var(--color-ink-primary);
+		border-color: var(--signal-line);
 	}
-
 	.image-lightbox__close:focus-visible {
-		outline: 2px solid rgba(255, 255, 255, 0.8);
+		outline: 2px solid var(--color-signal);
 		outline-offset: 2px;
+	}
+	.image-lightbox__close-key {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		line-height: 1;
+		letter-spacing: var(--tracking-wide);
+		text-transform: uppercase;
+		padding: 3px 5px;
+		border-radius: 3px;
+		border: 1px solid var(--color-hairline);
+		color: var(--color-ink-tertiary);
 	}
 
 	.image-lightbox__figure {
@@ -977,39 +724,51 @@ const jsonLd = JSON.stringify({
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 0.75rem;
+		gap: 0.875rem;
 		max-width: min(96vw, 1400px);
 		max-height: 90vh;
+		transform: scale(0.965) translateY(6px);
+		transition: transform var(--duration-slow) var(--ease-out-expo);
+	}
+	.image-lightbox[data-open="true"] .image-lightbox__figure {
+		transform: none;
+	}
+	@starting-style {
+		.image-lightbox[data-open="true"] .image-lightbox__figure {
+			transform: scale(0.965) translateY(6px);
+		}
 	}
 
 	.image-lightbox__img {
 		display: block;
 		max-width: 100%;
-		max-height: 82vh;
+		max-height: 80vh;
 		width: auto;
 		height: auto;
 		object-fit: contain;
-		border-radius: var(--radius-sm);
-		background-color: rgba(0, 0, 0, 0.25);
-		box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+		border-radius: var(--radius-lg);
+		border: 1px solid var(--color-hairline);
+		background-color: var(--color-surface);
+		box-shadow: var(--shadow-pop);
 		cursor: zoom-out;
 	}
 
 	.image-lightbox__caption {
 		font-family: var(--font-mono);
-		font-size: 12px;
+		font-size: 11.5px;
 		letter-spacing: var(--tracking-wide);
-		color: rgba(255, 255, 255, 0.72);
+		color: var(--color-ink-tertiary);
 		text-align: center;
 		max-width: 72ch;
 	}
-
 	.image-lightbox__caption:empty {
 		display: none;
 	}
 
 	@media (prefers-reduced-motion: reduce) {
 		.image-lightbox,
+		.image-lightbox__figure,
+		.post-nav-card__arrow,
 		.blog-post-article :global(img) {
 			transition: none;
 		}
@@ -1138,11 +897,39 @@ const jsonLd = JSON.stringify({
 		});
 	}
 
+	/**
+	 * 标题锚点:给正文 h2–h4 追加 hover 可见的 "#" 链接(纯增强,幂等)。
+	 * aria-label 取自文章容器的 data-anchor-label(双语由服务端写入)。
+	 */
+	function setupHeadingAnchors() {
+		const article = document.querySelector<HTMLElement>(".blog-post-article");
+		if (!article) return;
+		const label = article.dataset.anchorLabel ?? "";
+		article
+			.querySelectorAll<HTMLHeadingElement>("h2[id], h3[id], h4[id]")
+			.forEach((heading) => {
+				if (heading.querySelector(".heading-anchor")) return;
+				// 脚注区的 sr-only 标题不需要锚点
+				if (heading.closest("[data-footnotes]")) return;
+				const a = document.createElement("a");
+				a.className = "heading-anchor";
+				a.href = `#${heading.id}`;
+				a.setAttribute("aria-label", label);
+				a.textContent = "#";
+				heading.appendChild(a);
+			});
+	}
+
+	function setupPost() {
+		setupImageLightbox();
+		setupHeadingAnchors();
+	}
+
 	// 首次加载 + Astro 客户端导航后(若启用 ViewTransitions)重新初始化
 	if (document.readyState === "loading") {
-		document.addEventListener("DOMContentLoaded", setupImageLightbox);
+		document.addEventListener("DOMContentLoaded", setupPost);
 	} else {
-		setupImageLightbox();
+		setupPost();
 	}
-	document.addEventListener("astro:page-load", setupImageLightbox);
+	document.addEventListener("astro:page-load", setupPost);
 </script>

@@ -1,7 +1,21 @@
 ---
+/**
+ * ============================================================================
+ * BenchmarksPage - LiveBench 双语榜单
+ * ----------------------------------------------------------------------------
+ *   PageHero   超大标题 + CTA          ┌ aside:当前榜首领奖台 ┐
+ *              SpecStrip:版本 / 同步 / 模型 / 机构 / 类别 / 来源
+ *   01 full    查询控制台 + 全宽表格(一体化仪表盘,表头在表格滚动区内吸顶)
+ *   02 full    Bento:总分前五(与表格同色阶)+ 各类别冠军 + 开放权重榜首
+ *   03 split   方法与来源(履历条目)
+ *
+ * 脚本依赖的 id / data-* 钩子(#benchmark-panel 及其内部控件)保持不变。
+ * ============================================================================
+ */
 import AppShell from "@layouts/AppShell.astro";
-import MetaRow from "@components/ui/MetaRow.astro";
-import SectionHeader from "@components/ui/SectionHeader.astro";
+import PageHero from "@components/layout/PageHero.astro";
+import CvSection from "@components/layout/CvSection.astro";
+import type { SpecItem } from "@components/layout/SpecStrip.astro";
 import { getLangFromUrl, useTranslations } from "@i18n/utils";
 import type { UIKey } from "@i18n/ui";
 import snapshot from "../../content/data/livebench.json";
@@ -11,6 +25,8 @@ const data = snapshot as unknown as {
 	sourceSha: string;
 	syncedAt: string;
 	release: string;
+	sourceUrl: string;
+	unofficial: boolean;
 	categories: Category[];
 	models: Model[];
 };
@@ -32,133 +48,927 @@ const initialShades = scoreShades(models, ["overall", ...data.categories.map((ca
 const scoreText = (score: number | null | undefined) => score == null ? "—" : score.toFixed(1);
 const organizations = [...new Set(data.models.map((model) => model.organization))].sort((a, b) => a.localeCompare(b));
 const syncedAt = new Date(data.syncedAt);
-const syncedLabel = Number.isNaN(syncedAt.getTime())
-	? data.syncedAt
-	: new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", {
+const syncedValid = !Number.isNaN(syncedAt.getTime());
+const syncedLabel = syncedValid
+	? new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", {
 			dateStyle: "medium", timeStyle: "short", timeZone: "UTC",
-		}).format(syncedAt) + " UTC";
+		}).format(syncedAt) + " UTC"
+	: data.syncedAt;
+const syncedDate = syncedValid ? syncedAt.toISOString().slice(0, 10) : data.syncedAt;
 const sourceUrl = `https://github.com/LiveBench/new-livebench/commit/${data.sourceSha}`;
-const control = "border border-[color:var(--color-hairline)] bg-transparent px-3 py-2 text-sm text-[color:var(--color-ink-primary)] focus-visible:outline-2 focus-visible:outline-offset-2";
+const shortSha = data.sourceSha.slice(0, 7);
+const zh = lang === "zh";
+const overallShades = initialShades.get("overall");
+const topTints = [...(overallShades?.values() ?? [])];
+const columnIds = ["overall", ...data.categories.map((category) => category.id)];
+const chevron = "M6 9l6 6 6-6";
+const pct = (score: number) => `${Math.max(0, Math.min(100, score)).toFixed(1)}%`;
+
+/* ---------- 领奖台:默认视图前三 ---------- */
+const podium = models.slice(0, 3);
+const leader = podium[0];
+const leadMargin = leader && podium[1] ? leader.overall - podium[1].overall : null;
+
+/* ---------- Bento:总分前五 / 各类别冠军 / 开放权重榜首 ---------- */
+const topFive = models.slice(0, 5);
+const categoryLeaders = data.categories.map((category) => {
+	let best: { model: Model; score: number } | null = null;
+	for (const model of models) {
+		const score = model.scores[category.id];
+		if (score != null && (!best || score > best.score)) best = { model, score };
+	}
+	return { category, best };
+});
+const openLeader = models.find((model) => model.openWeights);
+const visibleOrgCount = new Set(models.map((model) => model.organization)).size;
+
+const spec: SpecItem[] = [
+	{ label: t("benchmarks.release"), value: data.release },
+	{ label: t("benchmarks.syncedAt"), value: syncedDate, live: true },
+	{ label: t("benchmarks.models"), count: models.length },
+	{ label: t("benchmarks.organization"), count: visibleOrgCount },
+	{ label: t("benchmarks.categories"), count: data.categories.length },
+	{ label: t("benchmarks.source"), value: `@${shortSha}`, href: sourceUrl },
+];
+
+const C = zh
+	? {
+			jump: "查询榜单",
+			podium: "当前榜首",
+			podiumSub: "默认视图 · 总分",
+			lead: "领先第二名",
+			console: "查询控制台",
+			top5: "每列前五",
+			leadersLabel: "类别冠军",
+			leadersNote: "默认视图(隐藏微调、折叠变体)下各类别最高分。点击卡片,在榜单中展开该类别的子任务。",
+			top5Title: "总分前五",
+			top5Note: "色阶与表格一致:蓝色由深到浅",
+			subtasks: "项子任务",
+			openTitle: "开放权重榜首",
+			openCta: "只看开放权重",
+			methodLabel: "方法与来源",
+			method: "方法",
+			shading: "着色",
+			shadingText: "按当前可见结果,每列前五名以蓝色由深到浅标出;缺失成绩不着色。",
+			sync: "同步",
+			status: "性质",
+			statusText: "非官方同步快照,仅展示最新评测版本。",
+			noLeader: "暂无成绩",
+		}
+	: {
+			jump: "Query the board",
+			podium: "Current leader",
+			podiumSub: "Default view · overall",
+			lead: "Lead over #2",
+			console: "Query console",
+			top5: "Top 5 / column",
+			leadersLabel: "Category leaders",
+			leadersNote: "Highest score per category in the default view (fine-tunes hidden, variants folded). Open a card to expand that category's subtasks in the board.",
+			top5Title: "Overall top five",
+			top5Note: "Same shading as the table: blue, dark to light",
+			subtasks: "subtasks",
+			openTitle: "Open-weights leader",
+			openCta: "Open weights only",
+			methodLabel: "Method & source",
+			method: "Method",
+			shading: "Shading",
+			shadingText: "Within the visible results, each column's top five are shaded blue from dark to light; missing scores stay blank.",
+			sync: "Sync",
+			status: "Status",
+			statusText: "Unofficial synced snapshot showing the latest evaluation release only.",
+			noLeader: "No scores",
+		};
 ---
 
-<AppShell
-	title={t("benchmarks.title")}
-	description={t("benchmarks.description")}
-	eyebrow={t("benchmarks.eyebrow")}
-	leftTitle={t("benchmarks.title")}
-	leftDescription={t("benchmarks.description")}
-	maxContentWidth="none"
->
-	<Fragment slot="left-meta">
-		<MetaRow label={t("benchmarks.release")} value={data.release} />
-		<MetaRow label={t("benchmarks.syncedAt")} value={syncedLabel} />
-		<MetaRow label={t("benchmarks.models")} value={models.length} />
-	</Fragment>
+<AppShell title={t("benchmarks.title")} description={t("benchmarks.description")}>
+	<PageHero eyebrow={t("benchmarks.eyebrow")} description={t("benchmarks.description")} spec={spec}>
+		<Fragment slot="title">
+			{zh ? <>AI 模型<span class="text-signal">能力</span>榜</> : <>AI Model <span class="serif-accent">Benchmarks</span></>}
+		</Fragment>
 
-	<section id="benchmark-panel" data-lang={lang} aria-labelledby="benchmarks-heading" class="py-8 sm:py-12">
-		<SectionHeader id="benchmarks-heading" eyebrow="MODEL BENCHMARKS" title={t("benchmarks.table")} count={models.length} />
-		<p class="mt-5 text-sm leading-relaxed text-[color:var(--color-ink-secondary)]">{t("benchmarks.overview")}</p>
+		<Fragment slot="actions">
+			<a href="#leaderboard" class="btn btn-primary group">
+				{C.jump}
+				<svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="bm-nudge"><path d="M12 5v14M5 12l7 7 7-7" /></svg>
+			</a>
+			<a href={data.sourceUrl} target="_blank" rel="noopener noreferrer" class="btn btn-ghost">LiveBench ↗</a>
+		</Fragment>
 
-		<div class="mt-8 flex flex-wrap items-end gap-3">
-			<label class="flex min-w-56 flex-1 flex-col gap-2 sm:max-w-sm" for="benchmark-search">
-				<span class="font-[var(--font-mono)] text-xs uppercase tracking-wider text-[color:var(--color-ink-secondary)]">{t("benchmarks.search")}</span>
-				<input id="benchmark-search" type="search" name="q" autocomplete="off" placeholder={t("benchmarks.searchPlaceholder")} class={control + " w-full"} />
-			</label>
-			<label class="flex items-center gap-2 py-2 text-sm"><input id="benchmark-open" type="checkbox" />{t("benchmarks.openWeights")}</label>
-			<label class="flex flex-col gap-2 text-sm" for="benchmark-ft">
-				<span class="font-[var(--font-mono)] text-xs uppercase tracking-wider text-[color:var(--color-ink-secondary)]">{t("benchmarks.finetune")}</span>
-				<select id="benchmark-ft" class={control}>
-					<option value="hide">{t("benchmarks.ftHide")}</option>
-					<option value="all">{t("benchmarks.ftAll")}</option>
-					<option value="only">{t("benchmarks.ftOnly")}</option>
-				</select>
-			</label>
-			<label class="flex items-center gap-2 py-2 text-sm"><input id="benchmark-showorg" type="checkbox" checked />{t("benchmarks.showOrg")}</label>
-			<label class="flex flex-col gap-2 text-sm" for="benchmark-org">
-				<span class="font-[var(--font-mono)] text-xs uppercase tracking-wider text-[color:var(--color-ink-secondary)]">{t("benchmarks.organization")}</span>
-				<select id="benchmark-org" class={control}>
-					<option value="">{t("benchmarks.allOrganizations")}</option>
-					{organizations.map((org) => <option value={org}>{org}</option>)}
-				</select>
-			</label>
-		</div>
+		{leader && (
+			<aside slot="aside" class="bm-podium surface-card crop-marks spotlight" data-spotlight aria-labelledby="bm-podium-title">
+				<div class="bm-podium__head">
+					<span id="bm-podium-title" class="mono-label">{C.podium}</span>
+					<span aria-hidden="true" class="bm-rule"></span>
+					<span class="chip chip-signal">#01</span>
+				</div>
+				<div class="px-5 pt-5">
+					<p class="mono-label text-[10.5px] text-[color:var(--color-ink-muted)]">{C.podiumSub}</p>
+					<p class="bm-podium__score mt-2">{leader.overall.toFixed(1)}</p>
+					<p class="mt-3 text-[17px] font-semibold leading-snug tracking-[-0.02em]">{leader.name}</p>
+					<p class="mt-0.5 font-[var(--font-mono)] text-[11.5px] text-[color:var(--color-ink-tertiary)]">{leader.organization}</p>
+					<div class="meter mt-4" aria-hidden="true"><span data-animate style={{ width: pct(leader.overall) }} /></div>
+				</div>
+				<ol class="bm-podium__list" start="2" aria-label={zh ? "第二、三名" : "Runners-up"}>
+					{podium.slice(1).map((model, index) => (
+						<li>
+							<span class="bm-podium__rank">{String(index + 2).padStart(2, "0")}</span>
+							<span class="min-w-0">
+								<span class="block truncate text-[13.5px] font-medium text-[color:var(--color-ink-primary)]">{model.name}</span>
+								<span class="block truncate font-[var(--font-mono)] text-[11px] text-[color:var(--color-ink-tertiary)]">{model.organization}</span>
+							</span>
+							<span class="bm-podium__num">{model.overall.toFixed(1)}</span>
+						</li>
+					))}
+				</ol>
+				{leadMargin != null && (
+					<p class="bm-podium__foot">
+						<span>{C.lead}</span>
+						<span class="text-[color:var(--color-signal)]">+{leadMargin.toFixed(2)}</span>
+					</p>
+				)}
+			</aside>
+		)}
+	</PageHero>
 
-		<div class="mt-5 flex flex-wrap items-start gap-3">
-			<details id="benchmark-compare" class="relative">
-				<summary class={control + " cursor-pointer list-none"}>{t("benchmarks.compare")} <span id="benchmark-compare-count" /></summary>
-				<div class="absolute left-0 z-20 mt-1 w-[min(22rem,calc(100vw-3rem))] border border-[color:var(--color-hairline)] bg-[color:var(--color-paper)] p-3 shadow-lg">
-					<p class="mb-2 text-xs text-[color:var(--color-ink-secondary)]">{t("benchmarks.compareCount")}</p>
-					<div class="max-h-64 space-y-1 overflow-y-auto" role="group" aria-label={t("benchmarks.compare")}>
-						{[...data.models].sort((a, b) => a.name.localeCompare(b.name)).map((model) => (
-							<label class="flex items-start gap-2 py-1 text-sm"><input type="checkbox" data-compare={model.id} class="mt-1" /><span>{model.name} <small class="text-[color:var(--color-ink-tertiary)]">({model.organization})</small></span></label>
-						))}
-					</div>
-					<div class="mt-3 flex flex-wrap gap-2">
-						<button id="benchmark-compare-apply" type="button" class={control}>{t("benchmarks.compareApply")}</button>
-						<button id="benchmark-compare-clear" type="button" class={control}>{t("benchmarks.compareClear")}</button>
+	{/* ================= 01 · 查询控制台 + 全宽榜单 ================= */}
+	<CvSection
+		id="leaderboard"
+		index="01"
+		label={t("benchmarks.table")}
+		sublabel={`LiveBench · ${data.release}`}
+		note={t("benchmarks.overview")}
+		layout="full"
+		class="bm-anchor"
+	>
+		<div id="benchmark-panel" data-lang={lang}>
+			<div class="bm-deck reveal-scroll">
+				{/* 顶栏:终端提示符 + 实时匹配计数 */}
+				<div class="bm-deck__bar">
+					<span class="font-[var(--font-mono)] text-[12px] text-[color:var(--color-ink-tertiary)]">
+						<span aria-hidden="true" class="text-[color:var(--color-signal)]">$ </span>livebench query <span class="text-[color:var(--color-ink-muted)]">--release {data.release}</span>
+					</span>
+					<span aria-hidden="true" class="bm-rule hidden sm:block"></span>
+					<p class="bm-status" role="status" aria-live="polite">
+						<span class="dot-live" aria-hidden="true"></span>
+						<span>{t("benchmarks.results")}</span>
+						<span id="benchmark-count" class="bm-status__num">{models.length}</span>
+					</p>
+				</div>
+
+				{/* 查询行:搜索跨宽,筛选紧随 */}
+				<div class="bm-deck__query">
+					<label class="flex min-w-0 flex-col gap-1.5" for="benchmark-search">
+						<span class="bm-label">{t("benchmarks.search")}</span>
+						<span class="bm-field">
+							<svg aria-hidden="true" class="bm-field__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+							<input id="benchmark-search" type="search" name="q" autocomplete="off" spellcheck="false" placeholder={t("benchmarks.searchPlaceholder")} class="bm-control bm-control--search w-full" />
+						</span>
+					</label>
+					<label class="flex min-w-0 flex-col gap-1.5" for="benchmark-ft">
+						<span class="bm-label">{t("benchmarks.finetune")}</span>
+						<span class="bm-field">
+							<select id="benchmark-ft" class="bm-control bm-control--select w-full">
+								<option value="hide">{t("benchmarks.ftHide")}</option>
+								<option value="all">{t("benchmarks.ftAll")}</option>
+								<option value="only">{t("benchmarks.ftOnly")}</option>
+							</select>
+							<svg aria-hidden="true" class="bm-field__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={chevron} /></svg>
+						</span>
+					</label>
+					<label class="flex min-w-0 flex-col gap-1.5" for="benchmark-org">
+						<span class="bm-label">{t("benchmarks.organization")}</span>
+						<span class="bm-field">
+							<select id="benchmark-org" class="bm-control bm-control--select w-full">
+								<option value="">{t("benchmarks.allOrganizations")}</option>
+								{organizations.map((org) => <option value={org}>{org}</option>)}
+							</select>
+							<svg aria-hidden="true" class="bm-field__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={chevron} /></svg>
+						</span>
+					</label>
+					<div class="flex flex-wrap items-end gap-2">
+						<label class="bm-toggle"><input id="benchmark-open" type="checkbox" />{t("benchmarks.openWeights")}</label>
+						<label class="bm-toggle"><input id="benchmark-showorg" type="checkbox" checked />{t("benchmarks.showOrg")}</label>
 					</div>
 				</div>
-			</details>
-			<details id="benchmark-columns" class="relative">
-				<summary class={control + " cursor-pointer list-none"}>{t("benchmarks.columns")}</summary>
-				<div class="absolute left-0 z-20 mt-1 max-h-[60vh] w-[min(23rem,calc(100vw-3rem))] overflow-y-auto border border-[color:var(--color-hairline)] bg-[color:var(--color-paper)] p-3 shadow-lg">
-					<p class="mb-2 text-xs text-[color:var(--color-ink-secondary)]">{t("benchmarks.columns")}</p>
-					<label class="flex gap-2 py-1 text-sm"><input type="checkbox" data-column="overall" checked />{t("benchmarks.overall")}</label>
-					{data.categories.map((category) => (
-						<div class="border-t border-[color:var(--color-hairline)] py-2">
-							<label class="flex gap-2 text-sm font-medium"><input type="checkbox" data-group={category.id} checked />{categoryName(category)}</label>
-							<div class="mt-1 grid grid-cols-1 gap-1 pl-5">
-								<label class="flex gap-2 text-sm"><input type="checkbox" data-column={category.id} checked />{categoryName(category)}</label>
-								{category.subtasks.map((task) => <label class="flex gap-2 text-sm"><input type="checkbox" data-column={task} checked />{t(`benchmarks.task.${task}` as UIKey)}</label>)}
+
+				{/* 类别:选中 = 反色 + 加粗,无底线 */}
+				<div class="bm-deck__cats">
+					<span class="bm-label" aria-hidden="true">{t("benchmarks.categories")}</span>
+					<div class="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("benchmarks.categories")}>
+						<button type="button" data-cat="all" aria-pressed="true" class="bm-cat">{t("benchmarks.allCategories")}</button>
+						{data.categories.map((category) => <button type="button" data-cat={category.id} aria-pressed="false" class="bm-cat">{categoryName(category)}</button>)}
+					</div>
+				</div>
+
+				{/* 工具:对比 / 列 + 色阶图例 */}
+				<div class="bm-deck__tools">
+					<details id="benchmark-compare" class="bm-pop-host">
+						<summary class="bm-control bm-summary">{t("benchmarks.compare")}<span id="benchmark-compare-count" class="bm-summary__count" /><svg aria-hidden="true" class="bm-summary__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={chevron} /></svg></summary>
+						<div class="bm-pop w-[min(22rem,calc(100vw-3rem))]">
+							<p class="bm-label mb-2">{t("benchmarks.compareCount")}</p>
+							<div class="scroll-thin max-h-64 space-y-0.5 overflow-y-auto pr-1" role="group" aria-label={t("benchmarks.compare")}>
+								{[...data.models].sort((a, b) => a.name.localeCompare(b.name)).map((model) => (
+									<label class="bm-option"><input type="checkbox" data-compare={model.id} /><span>{model.name} <small class="text-[color:var(--color-ink-tertiary)]">({model.organization})</small></span></label>
+								))}
+							</div>
+							<div class="mt-3 flex flex-wrap gap-2 border-t border-[color:var(--color-hairline)] pt-3">
+								<button id="benchmark-compare-apply" type="button" class="btn btn-primary btn-sm">{t("benchmarks.compareApply")}</button>
+								<button id="benchmark-compare-clear" type="button" class="btn btn-ghost btn-sm">{t("benchmarks.compareClear")}</button>
 							</div>
 						</div>
-					))}
-					<button id="benchmark-columns-reset" type="button" class={control}>{t("benchmarks.columnsReset")}</button>
+					</details>
+					<details id="benchmark-columns" class="bm-pop-host">
+						<summary class="bm-control bm-summary">{t("benchmarks.columns")}<svg aria-hidden="true" class="bm-summary__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={chevron} /></svg></summary>
+						<div class="bm-pop scroll-thin max-h-[60vh] w-[min(23rem,calc(100vw-3rem))] overflow-y-auto">
+							<p class="bm-label mb-2">{t("benchmarks.columns")}</p>
+							<label class="bm-option"><input type="checkbox" data-column="overall" checked />{t("benchmarks.overall")}</label>
+							{data.categories.map((category) => (
+								<div class="mt-1 border-t border-[color:var(--color-hairline)] pt-2 pb-1">
+									<label class="bm-option font-semibold text-[color:var(--color-ink-primary)]"><input type="checkbox" data-group={category.id} checked />{categoryName(category)}</label>
+									<div class="ml-2 grid grid-cols-1 border-l border-[color:var(--color-hairline)] pl-3">
+										<label class="bm-option"><input type="checkbox" data-column={category.id} checked />{categoryName(category)}</label>
+										{category.subtasks.map((task) => <label class="bm-option"><input type="checkbox" data-column={task} checked />{t(`benchmarks.task.${task}` as UIKey)}</label>)}
+									</div>
+								</div>
+							))}
+							<div class="mt-2 border-t border-[color:var(--color-hairline)] pt-3">
+								<button id="benchmark-columns-reset" type="button" class="btn btn-ghost btn-sm">{t("benchmarks.columnsReset")}</button>
+							</div>
+						</div>
+					</details>
+					<span class="bm-legend ml-auto">
+						<span>{C.top5}</span>
+						<span class="bm-legend__swatches" aria-hidden="true">
+							{topTints.map((tint) => <span style={{ backgroundColor: tint }} />)}
+						</span>
+					</span>
 				</div>
-			</details>
-			<p class="ml-auto self-center font-[var(--font-mono)] text-xs text-[color:var(--color-ink-secondary)]" role="status" aria-live="polite">
-				{t("benchmarks.results")}: <span id="benchmark-count">{models.length}</span>
-			</p>
-		</div>
 
-		<div class="mt-5 flex flex-wrap items-center gap-2" role="group" aria-label={t("benchmarks.categories")}>
-			<button type="button" data-cat="all" aria-pressed="true" class={control}>{t("benchmarks.allCategories")}</button>
-			{data.categories.map((category) => <button type="button" data-cat={category.id} aria-pressed="false" class={control}>{categoryName(category)}</button>)}
+				{/* 全宽数据表:滚动区内表头吸顶,排名/模型列吸左 */}
+				<div class="bm-scroll scroll-thin" tabindex="0" role="region" aria-label={t("benchmarks.table")}>
+					<table id="benchmark-table" class="bm-table">
+						<caption class="sr-only">{t("benchmarks.table")} — {data.release}</caption>
+						<thead><tr>
+							<th scope="col" class="bt-th bt-th--rank">{t("benchmarks.rank")}</th>
+							<th scope="col" class="bt-th bt-th--name">{t("benchmarks.model")}</th>
+							<th scope="col" class="bt-th">{t("benchmarks.organization")}</th>
+							{columnIds.map((column) => {
+								const name = column === "overall" ? t("benchmarks.overall") : categoryName(data.categories.find((category) => category.id === column)!);
+								return <th scope="col" aria-sort={column === "overall" ? "descending" : "none"} class="bt-th bt-th--num"><button type="button" data-sort={column} class="bt-sort" aria-label={`${t("benchmarks.sortBy")}: ${name}`}>{name}<span class="bt-sort__icon" aria-hidden="true">↕</span></button></th>;
+							})}
+						</tr></thead>
+						<tbody>{models.map((model, index) => <tr data-model-id={model.id}>
+							<td class="bt-rank">{String(index + 1).padStart(2, "0")}</td>
+							<th scope="row" class="bt-name">{model.name}</th>
+							<td class="bt-org">{model.organization}</td>
+							<td style={{ backgroundColor: overallShades?.get(model.id) }} class:list={["bt-score bt-score--lead", { "is-empty": model.overall == null }]}>{scoreText(model.overall)}</td>
+							{data.categories.map((category) => <td style={{ backgroundColor: initialShades.get(category.id)?.get(model.id) }} class:list={["bt-score", { "is-empty": model.scores[category.id] == null }]} title={model.scores[category.id] == null ? t("benchmarks.noScore") : undefined}>{scoreText(model.scores[category.id])}</td>)}
+						</tr>)}</tbody>
+					</table>
+				</div>
+				<p id="benchmark-empty" hidden={models.length !== 0} class="bm-empty" role="status"><span class="mono-label mb-2 block text-[color:var(--color-ink-muted)]">0 rows · no match</span>{t("benchmarks.noResults")}</p>
+			</div>
 		</div>
+	</CvSection>
 
-		<div class="mt-5 max-w-full overflow-x-auto border-y border-[color:var(--color-hairline)]" tabindex="0" role="region" aria-label={t("benchmarks.table")}>
-			<table id="benchmark-table" class="w-full min-w-[760px] border-collapse text-left text-sm">
-				<caption class="sr-only">{t("benchmarks.table")} — {data.release}</caption>
-				<thead><tr class="border-b border-[color:var(--color-hairline)] bg-[color:var(--color-paper-muted)]/40 font-[var(--font-mono)] text-xs text-[color:var(--color-ink-secondary)]">
-					<th scope="col" class="px-3 py-3 font-normal">{t("benchmarks.rank")}</th>
-					<th scope="col" class="min-w-52 px-3 py-3 font-normal">{t("benchmarks.model")}</th>
-					<th scope="col" class="px-3 py-3 font-normal">{t("benchmarks.organization")}</th>
-					{["overall", ...data.categories.map((category) => category.id)].map((column) => <th scope="col" aria-sort={column === "overall" ? "descending" : "none"} class="px-3 py-3 text-right font-normal"><button type="button" data-sort={column} class="whitespace-nowrap underline-offset-4 hover:underline focus-visible:underline">{column === "overall" ? t("benchmarks.overall") : categoryName(data.categories.find((category) => category.id === column)!)} <span aria-hidden="true">↕</span></button></th>)}
-				</tr></thead>
-				<tbody>{models.map((model, index) => <tr data-model-id={model.id} class="border-b border-dashed border-[color:var(--color-hairline)] last:border-0 hover:bg-[color:var(--color-paper-muted)]/40">
-					<td class="px-3 py-3 font-[var(--font-mono)] tabular-nums text-[color:var(--color-ink-tertiary)]">{index + 1}</td>
-					<th scope="row" class="px-3 py-3 font-medium text-[color:var(--color-ink-primary)]">{model.name}</th>
-					<td class="px-3 py-3 text-[color:var(--color-ink-secondary)]">{model.organization}</td>
-					<td style={{ backgroundColor: initialShades.get("overall")?.get(model.id) }} class="px-3 py-3 text-right font-[var(--font-mono)] font-semibold tabular-nums">{scoreText(model.overall)}</td>
-					{data.categories.map((category) => <td style={{ backgroundColor: initialShades.get(category.id)?.get(model.id) }} class="px-3 py-3 text-right font-[var(--font-mono)] tabular-nums text-[color:var(--color-ink-secondary)]" title={model.scores[category.id] == null ? t("benchmarks.noScore") : undefined}>{scoreText(model.scores[category.id])}</td>)}
-				</tr>)}</tbody>
-			</table>
+	{/* ================= 02 · 类别冠军 Bento ================= */}
+	<CvSection index="02" label={C.leadersLabel} sublabel="Category leaders · default view" note={C.leadersNote} layout="full">
+		<div class="bm-bento">
+			{/* 大格:总分前五,色阶与表格一致 */}
+			<section class="bm-cell bm-cell--hero surface-card reveal-scroll" aria-labelledby="bm-top5-title">
+				<div class="flex items-baseline justify-between gap-4">
+					<h3 id="bm-top5-title" class="text-[20px] font-semibold tracking-[-0.03em]">{C.top5Title}</h3>
+					<span class="mono-label text-[10.5px] text-[color:var(--color-ink-muted)]">{t("benchmarks.overall")}</span>
+				</div>
+				<p class="mt-1 text-[13px] text-[color:var(--color-ink-tertiary)]">{C.top5Note}</p>
+				<ol class="bm-top5 mt-6">
+					{topFive.map((model, index) => (
+						<li style={{ backgroundColor: overallShades?.get(model.id) }}>
+							<span class="bm-top5__rank">{String(index + 1).padStart(2, "0")}</span>
+							<span class="min-w-0">
+								<span class="block truncate text-[14px] font-semibold tracking-[-0.01em]">{model.name}</span>
+								<span class="block truncate font-[var(--font-mono)] text-[11px] text-[color:var(--color-ink-tertiary)]">{model.organization}</span>
+							</span>
+							<span class="bm-top5__score">{model.overall.toFixed(1)}</span>
+						</li>
+					))}
+				</ol>
+			</section>
+
+			{categoryLeaders.map(({ category, best }, index) => (
+				<a
+					href={`?cats=${encodeURIComponent(category.id)}#leaderboard`}
+					class="bm-cell surface-card spotlight reveal-scroll"
+					data-spotlight
+					style={`--i: ${index}`}
+				>
+					<span class="flex items-center justify-between gap-3 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">
+						<span><span class="text-[color:var(--color-signal)]">C{index + 1}</span> · {category.subtasks.length} {C.subtasks}</span>
+						<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="bm-cell__arrow"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+					</span>
+					<span class="mt-3 block text-[18px] font-semibold tracking-[-0.025em]">{categoryName(category)}</span>
+					{best ? (
+						<>
+							<span class="bm-cell__score">{best.score.toFixed(1)}</span>
+							<span class="block truncate text-[13px] font-medium text-[color:var(--color-ink-secondary)]">{best.model.name}</span>
+							<span class="block truncate font-[var(--font-mono)] text-[11px] text-[color:var(--color-ink-tertiary)]">{best.model.organization}</span>
+							<span class="meter mt-4 block" aria-hidden="true"><span data-animate style={{ width: pct(best.score) }} /></span>
+						</>
+					) : (
+						<span class="mt-auto block pt-6 text-[13px] text-[color:var(--color-ink-muted)]">{C.noLeader}</span>
+					)}
+				</a>
+			))}
+
+			{openLeader && (
+				<a href="?open=1#leaderboard" class="bm-cell bm-cell--open surface-card spotlight reveal-scroll" data-spotlight>
+					<span class="flex items-center justify-between gap-3 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">
+						<span class="text-[color:var(--color-live)]">● {t("benchmarks.openWeights")}</span>
+						<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="bm-cell__arrow"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+					</span>
+					<span class="mt-3 block text-[18px] font-semibold tracking-[-0.025em]">{C.openTitle}</span>
+					<span class="bm-cell__score">{openLeader.overall.toFixed(1)}</span>
+					<span class="block truncate text-[13px] font-medium text-[color:var(--color-ink-secondary)]">{openLeader.name}</span>
+					<span class="block truncate font-[var(--font-mono)] text-[11px] text-[color:var(--color-ink-tertiary)]">{openLeader.organization} · {C.openCta} →</span>
+				</a>
+			)}
 		</div>
-		<p id="benchmark-empty" hidden={models.length !== 0} class="py-8 text-center text-sm text-[color:var(--color-ink-secondary)]" role="status">{t("benchmarks.noResults")}</p>
-		<p class="mt-6 border-l-2 border-[color:var(--color-hairline)] pl-4 text-sm leading-relaxed text-[color:var(--color-ink-secondary)]">{t("benchmarks.method")}</p>
-		<p class="mt-3 text-xs text-[color:var(--color-ink-tertiary)]">{t("benchmarks.source")}: <a href={sourceUrl} target="_blank" rel="noopener noreferrer" class="underline underline-offset-4 hover:text-[color:var(--color-ink-primary)]">LiveBench/new-livebench @ {data.sourceSha.slice(0, 8)}</a></p>
-	</section>
+	</CvSection>
+
+	{/* ================= 03 · 方法与来源 ================= */}
+	<CvSection
+		index="03"
+		label={C.methodLabel}
+		sublabel="Method / provenance"
+		linkText={`LiveBench @ ${shortSha}`}
+		linkHref={sourceUrl}
+	>
+		<dl class="bm-method">
+			<div>
+				<dt>{C.method}</dt>
+				<dd>{t("benchmarks.method")}</dd>
+			</div>
+			<div>
+				<dt>{C.shading}</dt>
+				<dd>
+					<span class="bm-legend__swatches bm-legend__swatches--lg mb-3" aria-hidden="true">
+						{topTints.map((tint, index) => <span style={{ backgroundColor: tint }}>{index + 1}</span>)}
+					</span>
+					<span class="block">{C.shadingText}</span>
+				</dd>
+			</div>
+			<div>
+				<dt>{t("benchmarks.source")}</dt>
+				<dd>
+					<a href={sourceUrl} target="_blank" rel="noopener noreferrer" class="link-underline font-[var(--font-mono)] text-[13px] text-[color:var(--color-ink-primary)]">LiveBench/new-livebench @ {data.sourceSha.slice(0, 8)} ↗</a>
+				</dd>
+			</div>
+			<div>
+				<dt>{C.sync}</dt>
+				<dd class="font-[var(--font-mono)] text-[13px]">
+					<time datetime={data.syncedAt}>{syncedLabel}</time>
+					<span class="text-[color:var(--color-ink-muted)]"> · {t("benchmarks.release")} {data.release}</span>
+				</dd>
+			</div>
+			{data.unofficial && (
+				<div>
+					<dt>{C.status}</dt>
+					<dd>{C.statusText}</dd>
+				</div>
+			)}
+		</dl>
+	</CvSection>
 </AppShell>
 
 <style>
-	button[data-cat] { transition: background-color 120ms, color 120ms, border-color 120ms; }
-	button[data-cat][aria-pressed="true"] {
+	/* 锚点跳转让出悬浮导航 */
+	:global(.bm-anchor) { scroll-margin-top: calc(var(--layout-top-nav-height) + 1rem); }
+
+	.bm-nudge { transition: transform var(--duration-fast) var(--ease-out-expo); }
+	.group:hover .bm-nudge { transform: translateY(2px); }
+	.bm-rule { flex: 1; height: 1px; background: var(--color-hairline); }
+
+	/* ---------- Hero aside:领奖台 ---------- */
+	.bm-podium { overflow: hidden; }
+	.bm-podium__head {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.75rem 1.25rem;
+		border-bottom: 1px solid var(--color-hairline);
+	}
+	.bm-podium__head .mono-label { font-size: 10.5px; color: var(--color-ink-tertiary); }
+	.bm-podium__score {
+		font-family: var(--font-mono);
+		font-size: clamp(3.5rem, 6vw, 5rem);
+		font-weight: 600;
+		line-height: 0.9;
+		letter-spacing: -0.06em;
+		font-variant-numeric: tabular-nums;
+		background: var(--gradient-signal);
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+	}
+	.bm-podium__list { margin-top: 1.25rem; border-top: 1px solid var(--color-hairline); }
+	.bm-podium__list > li {
+		display: grid;
+		grid-template-columns: 2rem minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.7rem 1.25rem;
+		border-bottom: 1px solid var(--color-hairline);
+	}
+	.bm-podium__rank { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--color-signal); }
+	.bm-podium__num { font-family: var(--font-mono); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+	.bm-podium__foot {
+		display: flex;
+		justify-content: space-between;
+		padding: 0.7rem 1.25rem;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--color-ink-tertiary);
+	}
+
+	/* ---------- 01:一体化仪表盘(控制台 + 表格) ---------- */
+	.bm-deck {
+		position: relative;
+		z-index: 10; /* 弹层需压过后续分节 */
+		background-color: var(--color-surface);
+		border: 1px solid var(--color-hairline-strong);
+		border-radius: var(--radius-lg);
+		box-shadow: var(--shadow-card);
+	}
+	.bm-deck__bar {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 1rem;
+		padding: 0.75rem 1.25rem;
+		border-bottom: 1px solid var(--color-hairline);
+	}
+	.bm-deck__query {
+		display: grid;
+		gap: 0.875rem 1rem;
+		padding: 1.25rem;
+		align-items: end;
+	}
+	@media (min-width: 640px) {
+		.bm-deck__query { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		.bm-deck__query > :first-child { grid-column: 1 / -1; }
+	}
+	@media (min-width: 1024px) {
+		.bm-deck__query { grid-template-columns: minmax(0, 5fr) minmax(0, 2fr) minmax(0, 2fr) auto; }
+		.bm-deck__query > :first-child { grid-column: auto; }
+	}
+	.bm-deck__cats {
+		display: grid;
+		gap: 0.625rem 1.25rem;
+		align-items: center;
+		padding: 0.875rem 1.25rem;
+		border-top: 1px solid var(--color-hairline);
+		background-color: color-mix(in oklab, var(--color-paper-muted) 45%, transparent);
+	}
+	@media (min-width: 768px) {
+		.bm-deck__cats { grid-template-columns: 7rem minmax(0, 1fr); }
+	}
+	.bm-deck__tools {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.75rem 1.25rem;
+		border-top: 1px solid var(--color-hairline);
+		border-bottom: 1px solid var(--color-hairline-strong);
+	}
+
+	.bm-label {
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--color-ink-tertiary);
+	}
+
+	.bm-field { position: relative; display: block; }
+	.bm-field__icon,
+	.bm-field__chevron {
+		position: absolute;
+		top: 50%;
+		width: 14px;
+		height: 14px;
+		transform: translateY(-50%);
+		color: var(--color-ink-muted);
+		pointer-events: none;
+	}
+	.bm-field__icon { left: 0.875rem; width: 16px; height: 16px; }
+	.bm-field__chevron { right: 0.625rem; }
+	.bm-field:focus-within .bm-field__icon { color: var(--color-signal); }
+
+	.bm-control {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		height: 40px;
+		padding-inline: 0.75rem;
+		font-size: 13px;
+		color: var(--color-ink-primary);
+		background-color: color-mix(in oklab, var(--color-paper) 70%, transparent);
+		border: 1px solid var(--color-hairline-strong);
+		border-radius: var(--radius-md);
+		transition: border-color var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard);
+	}
+	.bm-control:hover { border-color: var(--color-ink-muted); }
+	.bm-control:focus-visible,
+	.bm-summary:focus-visible {
+		outline: none;
+		border-color: var(--color-signal);
+		box-shadow: 0 0 0 3px var(--signal-soft);
+	}
+	.bm-control::placeholder { color: var(--color-ink-muted); }
+	.bm-control--search { height: 44px; padding-left: 2.5rem; font-size: 15px; }
+	.bm-control--search::-webkit-search-cancel-button { cursor: pointer; }
+	.bm-control--select {
+		appearance: none;
+		min-width: 0;
+		padding-right: 2rem;
+		cursor: pointer;
+	}
+	.bm-deck__query .bm-control--select { height: 44px; }
+
+	.bm-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		height: 44px;
+		padding-inline: 0.75rem;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		white-space: nowrap;
+		color: var(--color-ink-secondary);
+		border: 1px solid var(--color-hairline-strong);
+		border-radius: var(--radius-md);
+		cursor: pointer;
+		user-select: none;
+		transition: border-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+	}
+	.bm-toggle:hover { border-color: var(--color-ink-muted); }
+	.bm-toggle:has(input:checked) {
+		color: var(--color-ink-primary);
+		border-color: var(--signal-line);
+		background-color: var(--signal-soft);
+	}
+	.bm-toggle:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--signal-soft); border-color: var(--color-signal); }
+
+	#benchmark-panel input[type="checkbox"] {
+		width: 14px;
+		height: 14px;
+		flex: none;
+		accent-color: var(--color-signal);
+		cursor: pointer;
+	}
+
+	/* 类别:选中 = 反色背景 + 加粗,不加底部横线 */
+	.bm-cat {
+		height: 32px;
+		padding-inline: 0.875rem;
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+		letter-spacing: 0.02em;
+		color: var(--color-ink-secondary);
+		background-color: var(--color-surface);
+		border: 1px solid var(--color-hairline-strong);
+		border-radius: var(--radius-md);
+		transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard), transform var(--duration-fast) var(--ease-standard);
+	}
+	.bm-cat:hover { color: var(--color-ink-primary); border-color: var(--color-ink-muted); }
+	.bm-cat:active { transform: translateY(1px); }
+	.bm-cat:focus-visible { outline: 2px solid var(--color-signal); outline-offset: 2px; }
+	.bm-cat[aria-pressed="true"] {
 		background-color: var(--color-ink-primary);
 		color: var(--color-paper);
 		border-color: var(--color-ink-primary);
 		font-weight: 600;
 	}
-	@media (prefers-reduced-motion: reduce) { button[data-cat] { transition: none; } }
+
+	/* 对比 / 列 弹层 */
+	.bm-pop-host { position: relative; }
+	.bm-summary {
+		cursor: pointer;
+		list-style: none;
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+	.bm-summary::-webkit-details-marker { display: none; }
+	.bm-summary__count { color: var(--color-signal); font-variant-numeric: tabular-nums; }
+	.bm-summary__count:empty { display: none; }
+	.bm-summary__chevron {
+		width: 13px;
+		height: 13px;
+		color: var(--color-ink-muted);
+		transition: transform var(--duration-base) var(--ease-out-expo);
+	}
+	details[open] > .bm-summary { border-color: var(--color-ink-muted); background-color: var(--color-surface-raised); }
+	details[open] > .bm-summary .bm-summary__chevron { transform: rotate(180deg); }
+	.bm-pop {
+		position: absolute;
+		left: 0;
+		top: calc(100% + 6px);
+		z-index: 20;
+		padding: 0.75rem;
+		background-color: var(--color-surface-raised);
+		border: 1px solid var(--color-hairline-strong);
+		border-radius: var(--radius-lg);
+		box-shadow: var(--shadow-pop);
+		transform-origin: top left;
+		animation: bm-pop-in var(--duration-base) var(--ease-out-expo) both;
+	}
+	@keyframes bm-pop-in {
+		from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+		to { opacity: 1; transform: none; }
+	}
+	.bm-option {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.5rem;
+		padding: 0.3rem 0.375rem;
+		font-size: 13px;
+		line-height: 1.35;
+		color: var(--color-ink-secondary);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+	}
+	.bm-option input { margin-top: 0.1rem; }
+	.bm-option:hover { background-color: var(--color-paper-muted); color: var(--color-ink-primary); }
+
+	.bm-status {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-left: auto;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--color-ink-tertiary);
+	}
+	.bm-status__num {
+		min-width: 2ch;
+		font-size: 15px;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-ink-primary);
+	}
+
+	.bm-legend {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--color-ink-tertiary);
+	}
+	.bm-legend__swatches { display: inline-flex; gap: 2px; }
+	.bm-legend__swatches > span {
+		width: 14px;
+		height: 10px;
+		border-radius: 2px;
+		box-shadow: inset 0 0 0 1px var(--color-hairline);
+	}
+	.bm-legend__swatches--lg { gap: 3px; }
+	.bm-legend__swatches--lg > span {
+		display: inline-grid;
+		place-items: center;
+		width: 2.25rem;
+		height: 1.5rem;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		color: var(--color-ink-secondary);
+	}
+
+	/* 数据表:滚动区内吸顶表头(避开悬浮导航) */
+	.bm-scroll {
+		max-width: 100%;
+		max-height: min(76vh, 56rem);
+		overflow: auto;
+		overscroll-behavior-x: contain;
+		border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
+	}
+	.bm-scroll:focus-visible { outline: 2px solid var(--color-signal); outline-offset: -2px; }
+	.bm-table {
+		width: 100%;
+		min-width: 760px;
+		border-collapse: separate;
+		border-spacing: 0;
+		text-align: left;
+		font-size: 13.5px;
+	}
+	.bm-table :global(.bt-th) {
+		position: sticky;
+		top: 0;
+		z-index: 2;
+		padding: 0.75rem 0.875rem;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		font-weight: 500;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		white-space: nowrap;
+		color: var(--color-ink-tertiary);
+		background-color: var(--color-surface-raised);
+		box-shadow: inset 0 -1px 0 var(--color-hairline-strong);
+	}
+	.bm-table :global(.bt-th--num) { text-align: right; }
+	.bm-table :global(.bt-th--rank),
+	.bm-table :global(.bt-rank) {
+		position: sticky;
+		left: 0;
+		width: 4.25rem;
+		min-width: 4.25rem;
+		padding-left: 1.25rem;
+	}
+	.bm-table :global(.bt-th--name),
+	.bm-table :global(.bt-name) {
+		position: sticky;
+		left: 4.25rem;
+		min-width: 11rem;
+		box-shadow: inset -1px 0 0 var(--color-hairline);
+	}
+	.bm-table :global(.bt-th--rank),
+	.bm-table :global(.bt-th--name) { z-index: 3; }
+	.bm-table :global(.bt-th--name) { box-shadow: inset 0 -1px 0 var(--color-hairline-strong), inset -1px 0 0 var(--color-hairline); }
+	@media (min-width: 640px) {
+		.bm-table :global(.bt-th--name),
+		.bm-table :global(.bt-name) { min-width: 14rem; }
+	}
+
+	.bm-table :global(.bt-sort) {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		font: inherit;
+		letter-spacing: inherit;
+		text-transform: inherit;
+		color: inherit;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition: color var(--duration-fast) var(--ease-standard);
+	}
+	.bm-table :global(.bt-sort:hover) { color: var(--color-ink-primary); }
+	.bm-table :global(.bt-sort:focus-visible) { outline: 2px solid var(--color-signal); outline-offset: 3px; }
+	.bm-table :global(.bt-sort__icon) { color: var(--color-ink-muted); font-size: 11px; }
+	.bm-table :global(th[aria-sort="ascending"] .bt-sort),
+	.bm-table :global(th[aria-sort="descending"] .bt-sort) { color: var(--color-ink-primary); }
+	.bm-table :global(th[aria-sort="ascending"] .bt-sort__icon),
+	.bm-table :global(th[aria-sort="descending"] .bt-sort__icon) { color: var(--color-signal); }
+
+	.bm-table :global(tbody td),
+	.bm-table :global(tbody th) {
+		padding: 0.7rem 0.875rem;
+		border-bottom: 1px solid var(--color-hairline);
+		vertical-align: middle;
+	}
+	.bm-table :global(tbody tr:last-child > *) { border-bottom: 0; }
+	.bm-table :global(.bt-rank) {
+		z-index: 1;
+		font-family: var(--font-mono);
+		font-size: 12px;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-ink-muted);
+		background-color: var(--color-surface);
+	}
+	.bm-table :global(tbody tr:nth-child(-n + 3) .bt-rank) { color: var(--color-signal); font-weight: 600; }
+	.bm-table :global(.bt-name) {
+		z-index: 1;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		color: var(--color-ink-primary);
+		background-color: var(--color-surface);
+	}
+	.bm-table :global(.bt-org) { color: var(--color-ink-tertiary); white-space: nowrap; }
+	.bm-table :global(.bt-score) {
+		text-align: right;
+		font-family: var(--font-mono);
+		font-size: 12.5px;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-ink-secondary);
+	}
+	.bm-table :global(.bt-score:last-child) { padding-right: 1.25rem; }
+	.bm-table :global(.bt-score--lead) { font-weight: 600; color: var(--color-ink-primary); }
+	.bm-table :global(.bt-score.is-empty) { color: var(--color-ink-muted); }
+
+	/* 行 hover:整行淡 Signal 底 + 排名列左侧指示线(粘性列需不透明底) */
+	.bm-table :global(tbody tr:hover) { background-color: color-mix(in oklab, var(--color-surface) 94%, var(--color-signal)); }
+	.bm-table :global(tbody tr:hover > .bt-rank),
+	.bm-table :global(tbody tr:hover > .bt-name) { background-color: color-mix(in oklab, var(--color-surface) 94%, var(--color-signal)); }
+	.bm-table :global(tbody tr:hover > .bt-rank) { box-shadow: inset 2px 0 0 var(--color-signal); }
+
+	.bm-empty {
+		padding: 2.5rem 1rem;
+		text-align: center;
+		font-size: 14px;
+		color: var(--color-ink-secondary);
+		border-top: 1px solid var(--color-hairline);
+	}
+
+	/* ---------- 02:Bento ---------- */
+	.bm-bento {
+		display: grid;
+		gap: 0.75rem;
+	}
+	@media (min-width: 640px) {
+		.bm-bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		.bm-cell--hero { grid-column: 1 / -1; }
+	}
+	@media (min-width: 1024px) {
+		.bm-bento { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+		.bm-cell--hero { grid-column: span 2; grid-row: span 2; }
+	}
+	.bm-cell {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		padding: 1.25rem;
+	}
+	.bm-cell--open { background-color: color-mix(in oklab, var(--color-surface) 92%, var(--color-live)); }
+	.bm-cell__arrow {
+		color: var(--color-signal);
+		opacity: 0;
+		transform: translateX(-4px);
+		transition: opacity var(--duration-base) var(--ease-out-expo), transform var(--duration-base) var(--ease-out-expo);
+	}
+	a.bm-cell:hover .bm-cell__arrow,
+	a.bm-cell:focus-visible .bm-cell__arrow { opacity: 1; transform: none; }
+	.bm-cell__score {
+		display: block;
+		margin-top: auto;
+		padding-top: 1.5rem;
+		font-family: var(--font-mono);
+		font-size: clamp(2.25rem, 3.4vw, 2.875rem);
+		font-weight: 600;
+		line-height: 1;
+		letter-spacing: -0.05em;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-ink-primary);
+		margin-bottom: 0.5rem;
+	}
+	.bm-top5 { display: grid; gap: 4px; }
+	.bm-top5 > li {
+		display: grid;
+		grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.8rem 1rem;
+		border-radius: var(--radius-md);
+		box-shadow: inset 0 0 0 1px var(--color-hairline);
+	}
+	.bm-top5__rank { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--color-signal); }
+	.bm-top5__score {
+		font-family: var(--font-mono);
+		font-size: 22px;
+		font-weight: 600;
+		letter-spacing: -0.04em;
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* ---------- 03:方法条目 ---------- */
+	.bm-method > div {
+		display: grid;
+		gap: 0.5rem 2rem;
+		padding-block: 1.25rem;
+		border-top: 1px solid var(--color-hairline);
+	}
+	.bm-method > div:first-child { border-top: 0; padding-top: 0; }
+	@media (min-width: 768px) {
+		.bm-method > div { grid-template-columns: 9rem minmax(0, 1fr); }
+	}
+	.bm-method dt {
+		padding-top: 0.2rem;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--color-ink-tertiary);
+	}
+	.bm-method dd {
+		margin: 0;
+		max-width: 64ch;
+		font-size: 15px;
+		line-height: 1.7;
+		color: var(--color-ink-secondary);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.bm-pop { animation: none; }
+	}
 </style>
 
 <script>
@@ -217,34 +1027,36 @@ const control = "border border-[color:var(--color-hairline)] bg-transparent px-3
 			const rows = visibleModels(data.models, state);
 			const shades = scoreShades(rows, columns, state.cats);
 			const heading = document.createElement("tr");
-			heading.className = "border-b border-[color:var(--color-hairline)] bg-[color:var(--color-paper-muted)]/40 font-[var(--font-mono)] text-xs text-[color:var(--color-ink-secondary)]";
-			for (const name of [text("benchmarks.rank"), text("benchmarks.model"), ...(state.showorg ? [text("benchmarks.organization")] : [])]) {
-				const th = document.createElement("th"); th.scope = "col"; th.className = "px-3 py-3 font-normal"; th.textContent = name; heading.append(th);
+			const fixed: [string, string][] = [[text("benchmarks.rank"), "bt-th bt-th--rank"], [text("benchmarks.model"), "bt-th bt-th--name"], ...(state.showorg ? [[text("benchmarks.organization"), "bt-th"] as [string, string]] : [])];
+			for (const [name, className] of fixed) {
+				const th = document.createElement("th"); th.scope = "col"; th.className = className; th.textContent = name; heading.append(th);
 			}
 			for (const column of columns) {
-				const th = document.createElement("th"); th.scope = "col"; th.className = "px-3 py-3 text-right font-normal";
+				const th = document.createElement("th"); th.scope = "col"; th.className = "bt-th bt-th--num";
 				th.setAttribute("aria-sort", column === state.sort ? (state.dir === "asc" ? "ascending" : "descending") : "none");
 				const button = document.createElement("button"); button.type = "button"; button.dataset.sort = column;
-				button.className = "whitespace-nowrap underline-offset-4 hover:underline focus-visible:underline";
+				button.className = "bt-sort";
 				button.setAttribute("aria-label", `${text("benchmarks.sortBy")}: ${label(column)}`);
-				button.textContent = `${label(column)} ${column === state.sort && state.dir !== "default" ? (state.dir === "asc" ? "↑" : "↓") : "↕"}`;
+				const icon = document.createElement("span"); icon.className = "bt-sort__icon"; icon.setAttribute("aria-hidden", "true");
+				icon.textContent = column === state.sort && state.dir !== "default" ? (state.dir === "asc" ? "↑" : "↓") : "↕";
+				button.append(label(column), icon);
 				th.append(button); heading.append(th);
 			}
 			table.tHead!.replaceChildren(heading);
 			const fragment = document.createDocumentFragment();
 			rows.forEach((model, index) => {
 				const tr = document.createElement("tr"); tr.dataset.modelId = model.id;
-				tr.className = "border-b border-dashed border-[color:var(--color-hairline)] last:border-0 hover:bg-[color:var(--color-paper-muted)]/40";
-				const rank = document.createElement("td"); rank.className = "px-3 py-3 font-[var(--font-mono)] tabular-nums text-[color:var(--color-ink-tertiary)]"; rank.textContent = String(index + 1); tr.append(rank);
-				const name = document.createElement("th"); name.scope = "row"; name.className = "px-3 py-3 font-medium text-[color:var(--color-ink-primary)]"; name.textContent = model.name; tr.append(name);
-				if (state.showorg) { const organization = document.createElement("td"); organization.className = "px-3 py-3 text-[color:var(--color-ink-secondary)]"; organization.textContent = model.organization; tr.append(organization); }
-				for (const column of columns) {
-					const td = document.createElement("td"); td.className = "px-3 py-3 text-right font-[var(--font-mono)] tabular-nums text-[color:var(--color-ink-secondary)]";
+				const rank = document.createElement("td"); rank.className = "bt-rank"; rank.textContent = String(index + 1).padStart(2, "0"); tr.append(rank);
+				const name = document.createElement("th"); name.scope = "row"; name.className = "bt-name"; name.textContent = model.name; tr.append(name);
+				if (state.showorg) { const organization = document.createElement("td"); organization.className = "bt-org"; organization.textContent = model.organization; tr.append(organization); }
+				columns.forEach((column, columnIndex) => {
+					const td = document.createElement("td");
 					const score = modelScore(model, column, state.cats); td.textContent = score == null ? "—" : score.toFixed(1);
+					td.className = `bt-score${columnIndex === 0 ? " bt-score--lead" : ""}${score == null ? " is-empty" : ""}`;
 					td.style.backgroundColor = shades.get(column)?.get(model.id) ?? "";
 					if (score == null) td.title = text("benchmarks.noScore");
 					tr.append(td);
-				}
+				});
 				fragment.append(tr);
 			});
 			table.tBodies[0].replaceChildren(fragment);

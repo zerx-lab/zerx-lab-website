@@ -1,50 +1,45 @@
 /* ============================================================================
- * ZerxLab Website - Markdown 正文样式 (Prose)
+ * ZerxLab Website - Markdown 正文排版 (Prose)
  * ----------------------------------------------------------------------------
- * 用途:
- *   为博客详情页、项目介绍页等"文章型"页面的 Markdown 渲染结果提供统一排版。
- *   不依赖 @tailwindcss/typography 插件,避免与设计 tokens 冲突。
+ * 用于博客详情页 <article class="prose"> 内由 astro:content render() 输出的
+ * HTML(remark-gfm + Shiki)。不依赖 @tailwindcss/typography。
  *
- * 视觉基调:
- *   - 编辑派(Editorial),贴合 better-auth.com / leerob.com 的长文阅读体验
- *   - 正文字号略大于界面文字,提升阅读舒适度(16-17px)
- *   - 行高宽松(1.75),段间距克制但分明
- *   - 标题与正文共用 Sans 字族,靠字重与大小建立层级
- *   - 内联代码与围栏代码有清晰的差异:内联带轻灰底,围栏为完整 <pre> 块
+ * 基调:阅读优先的"实验室档案"——
+ *   - 正文 16.5 → 17px,行高 1.8;标题 600 紧排,hover 浮现 "#" 锚点
+ *   - 代码块 = 终端卡片(顶栏三点 + 语言标签,12px 圆角,surface 表面)
+ *   - 表格 = 规格表(实线发丝、mono 表头、tabular 数字)
+ *   - 引用 = 左侧 Signal 渐变竖线;hr = 居中 Signal 小方块
+ *   - Signal 仅用于链接 hover 线、引用竖线、脚注编号、勾选态等少量强调
  *
- * 作用域:
- *   所有样式通过 `.prose` 根类作用域化,避免污染其他区域。
- *   用法:<article class="prose">...marked 输出的 HTML...</article>
+ * 作用域:全部以 `.prose` 为根。宽度由外层容器决定,这里不设 max-width。
  *
- * 暗色模式:
- *   完全依赖 global.css 已定义的 --color-* 变量;.dark 根类切换时自动反相。
- *   Shiki 代码高亮使用 CSS 变量模式(see markdown.ts defaultColor: false),
- *   主题切换靠 html.dark 驱动 --shiki-dark* 变量。
+ * Shiki:Astro 输出 <pre class="astro-code ..." data-language="x">,浅色值
+ * 写在内联 style(color / background-color),深色值在 --shiki-dark /
+ * --shiki-dark-bg 变量中;:root.dark 时用 !important 切到深色变量。
+ * 卡片底色统一改用 --color-surface,只保留 token 前景色。
  * ============================================================================ */
 
 /* ----------------------------------------------------------------------------
- * 容器基础:正文字号、行高、最大宽度
+ * 容器
  * -------------------------------------------------------------------------- */
 
 .prose {
 	color: var(--color-ink-primary);
 	font-family: var(--font-sans);
-	font-size: 16px;
-	line-height: 1.75;
-	letter-spacing: -0.003em;
-	/* 最佳可读宽度约 65ch;父容器的 max-width 也会约束这里 */
-	max-width: 72ch;
-	word-wrap: break-word;
-	hyphens: auto;
+	font-size: 16.5px;
+	line-height: 1.8;
+	letter-spacing: -0.006em;
+	overflow-wrap: break-word;
+	font-feature-settings: "ss01", "cv11";
+	text-rendering: optimizeLegibility;
 }
 
 @media (min-width: 1024px) {
 	.prose {
-		font-size: 16.5px;
+		font-size: 17px;
 	}
 }
 
-/* 容器内部首个与末个元素不额外占 margin,避免双重留白 */
 .prose > :first-child {
 	margin-top: 0;
 }
@@ -52,294 +47,336 @@
 	margin-bottom: 0;
 }
 
+.prose ::selection {
+	background-color: color-mix(in oklab, var(--color-signal) 22%, transparent);
+}
+
 /* ----------------------------------------------------------------------------
- * 段落与分段节奏
+ * 段落
  * -------------------------------------------------------------------------- */
 
 .prose p {
-	margin: 1.35em 0;
+	margin: 1.25em 0;
 	color: var(--color-ink-secondary);
+	text-wrap: pretty;
 }
 
-.prose p strong {
+.prose strong,
+.prose b {
 	color: var(--color-ink-primary);
 	font-weight: 600;
 }
 
-/* 首段可选的 drop cap 样式(不主动启用,仅当 .prose--dropcap 时生效) */
-.prose--dropcap > p:first-of-type::first-letter {
-	float: left;
-	font-size: 3.2em;
-	line-height: 0.9;
-	font-weight: 500;
-	padding: 0.1em 0.1em 0 0;
-	color: var(--color-ink-primary);
+.prose em {
+	font-style: italic;
 }
 
 /* ----------------------------------------------------------------------------
- * 标题:md-heading 样式来自 markdown.ts 的自定义 renderer
+ * 标题
  * -------------------------------------------------------------------------- */
 
-.prose .md-heading {
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
 	position: relative;
 	color: var(--color-ink-primary);
 	font-family: var(--font-sans);
 	font-weight: 600;
-	letter-spacing: -0.02em;
+	letter-spacing: -0.025em;
 	line-height: 1.25;
+	text-wrap: balance;
 	scroll-margin-top: calc(var(--layout-top-nav-height) + 1.5rem);
 }
 
-.prose .md-heading-1 {
-	/* H1 通常是文章主标题(由页面模板渲染),正文里几乎不出现 H1。
-	   这里给一个兜底样式,即便出现也不会跳出视觉 */
+.prose h1 {
 	font-size: 2em;
-	margin: 2em 0 0.8em;
+	letter-spacing: -0.035em;
+	margin: 2em 0 0.75em;
 }
 
-.prose .md-heading-2 {
+.prose h2 {
 	font-size: 1.55em;
-	margin: 2.25em 0 0.7em;
-	/* H2 之上加一条极淡的虚线,强化分节感 */
-	border-top: 1px dashed var(--color-hairline);
-	padding-top: 1.5em;
+	letter-spacing: -0.03em;
+	margin: 2.4em 0 0.75em;
+	padding-top: 1.35em;
+	border-top: 1px solid var(--color-hairline);
 }
 
-/* 正文第一个 H2 不画上方虚线(避免紧贴文章 meta 下方双线) */
-.prose > .md-heading-2:first-child {
+.prose > h2:first-child {
 	border-top: 0;
 	padding-top: 0;
-	margin-top: 0;
 }
 
-.prose .md-heading-3 {
-	font-size: 1.25em;
-	margin: 1.8em 0 0.5em;
-	font-weight: 600;
+.prose h3 {
+	font-size: 1.22em;
+	margin: 2em 0 0.55em;
 }
 
-.prose .md-heading-4 {
-	font-size: 1.05em;
-	margin: 1.5em 0 0.4em;
-	font-weight: 600;
+.prose h4 {
+	font-size: 1.04em;
+	margin: 1.7em 0 0.45em;
 }
 
-.prose .md-heading-5,
-.prose .md-heading-6 {
-	font-size: 1em;
-	margin: 1.3em 0 0.3em;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: var(--tracking-wide);
+.prose h5,
+.prose h6 {
 	font-family: var(--font-mono);
+	font-size: 0.75em;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-wider);
 	color: var(--color-ink-tertiary);
+	margin: 1.6em 0 0.4em;
 }
 
-/* ----------------------------------------------------------------------------
- * 标题锚点 (#) —— 默认隐藏,hover 标题行时浮现
- * --------------------------------------------------------------------------
- * markdown.ts 给每个 heading 注入一个 <a class="md-anchor">#</a>,
- * 位置在标题文字之前。此处将其绝对定位到左侧外缘,hover 时显现。
- * -------------------------------------------------------------------------- */
+.prose h2 + h3,
+.prose h3 + h4 {
+	margin-top: 1em;
+}
 
-.prose .md-anchor {
-	position: absolute;
-	left: -1.2em;
-	top: 50%;
-	transform: translateY(-50%);
-	width: 1em;
-	text-align: right;
-	padding-right: 0.2em;
+/* 目标章节(从 TOC / 锚点跳转过来)轻微提示 */
+.prose :is(h2, h3, h4):target {
+	animation: prose-target 1.6s var(--ease-standard) both;
+}
+@keyframes prose-target {
+	0%,
+	30% {
+		opacity: 0.55;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+
+/* ---- 标题 "#" 锚点:由页面脚本追加 <a class="heading-anchor">,悬浮时浮现 ---- */
+
+.prose .heading-anchor {
+	display: inline-block;
+	margin-left: 0.4em;
+	padding: 0 0.15em;
 	font-family: var(--font-mono);
 	font-weight: 400;
+	font-size: 0.72em;
+	line-height: 1;
+	vertical-align: 0.15em;
 	color: var(--color-ink-muted);
 	text-decoration: none;
+	background: none;
+	border-radius: var(--radius-sm);
 	opacity: 0;
-	transition: opacity var(--duration-fast) var(--ease-standard);
+	transform: translateX(-4px);
+	transition:
+		opacity var(--duration-fast) var(--ease-standard),
+		transform var(--duration-base) var(--ease-out-expo),
+		color var(--duration-fast) var(--ease-standard);
 }
 
-.prose .md-heading:hover .md-anchor,
-.prose .md-anchor:focus-visible {
+.prose :is(h2, h3, h4):hover .heading-anchor,
+.prose .heading-anchor:focus-visible {
 	opacity: 1;
+	transform: none;
 }
 
-.prose .md-anchor:hover {
-	color: var(--color-ink-primary);
+.prose .heading-anchor:hover {
+	color: var(--color-signal);
 }
 
-/* 窄屏下锚点无法放到外缘,改为隐藏 */
-@media (max-width: 768px) {
-	.prose .md-anchor {
-		display: none;
+.prose .heading-anchor:focus-visible {
+	outline: 2px solid var(--color-signal);
+	outline-offset: 2px;
+}
+
+/* 触屏无 hover:常驻淡显 */
+@media (hover: none) {
+	.prose .heading-anchor {
+		opacity: 0.5;
+		transform: none;
 	}
 }
 
 /* ----------------------------------------------------------------------------
- * 链接
- * --------------------------------------------------------------------------
- * 编辑派:默认带下划线,hover 时变墨色实线,外链额外补一个极小箭头
+ * 链接:底部常驻细线 + hover 时墨色线从左生长(同 .link-underline)
  * -------------------------------------------------------------------------- */
 
-.prose a {
+.prose a:not(.heading-anchor):not([data-footnote-ref]):not(
+		[data-footnote-backref]
+	) {
 	color: var(--color-ink-primary);
-	text-decoration: underline;
-	text-decoration-color: var(--color-hairline-strong);
-	text-decoration-thickness: 1px;
-	text-underline-offset: 3px;
+	font-weight: 500;
+	text-decoration: none;
+	padding-bottom: 1px;
+	background-image:
+		linear-gradient(currentColor, currentColor),
+		linear-gradient(var(--color-hairline-strong), var(--color-hairline-strong));
+	background-size:
+		0% 1px,
+		100% 1px;
+	background-position:
+		0 100%,
+		0 100%;
+	background-repeat: no-repeat;
 	transition:
-		color var(--duration-fast) var(--ease-standard),
-		text-decoration-color var(--duration-fast) var(--ease-standard);
+		background-size var(--duration-base) var(--ease-out-expo),
+		color var(--duration-fast) var(--ease-standard);
 }
 
-.prose a:hover {
-	text-decoration-color: var(--color-ink-primary);
+.prose
+	a:not(.heading-anchor):not([data-footnote-ref]):not(
+		[data-footnote-backref]
+	):is(:hover, :focus-visible) {
+	background-size:
+		100% 1px,
+		100% 1px;
 }
 
-/* 外链末尾的小箭头(marked link renderer 给外链打了 target="_blank") */
-.prose a[target="_blank"]::after {
+.prose a:focus-visible {
+	outline: 2px solid var(--color-signal);
+	outline-offset: 2px;
+	border-radius: 2px;
+}
+
+/* 外链:末尾小箭头 */
+.prose a[href^="http"]:not(:has(img))::after {
 	content: "↗";
 	display: inline-block;
-	margin-left: 0.15em;
-	font-size: 0.85em;
+	margin-left: 0.12em;
+	font-size: 0.78em;
+	font-weight: 400;
 	color: var(--color-ink-muted);
-	transition: transform var(--duration-fast) var(--ease-standard);
-	vertical-align: baseline;
+	transition:
+		transform var(--duration-base) var(--ease-out-expo),
+		color var(--duration-fast) var(--ease-standard);
 }
 
-.prose a[target="_blank"]:hover::after {
+.prose a[href^="http"]:not(:has(img)):hover::after {
 	transform: translate(1px, -1px);
-	color: var(--color-ink-primary);
+	color: var(--color-signal);
 }
 
-/* 锚点链接(md-anchor)不继承上面的下划线与箭头 */
-.prose a.md-anchor,
-.prose a.md-anchor:hover {
-	text-decoration: none;
-}
-.prose a.md-anchor::after {
-	content: none;
+/* 包裹图片的链接不要下划线 */
+.prose a:has(img) {
+	background-image: none;
+	padding-bottom: 0;
 }
 
 /* ----------------------------------------------------------------------------
  * 列表
- * --------------------------------------------------------------------------
- * 无序列表用小方块项目符(比默认圆点更"工程"),有序列表用等宽数字
  * -------------------------------------------------------------------------- */
 
 .prose ul,
 .prose ol {
-	margin: 1.25em 0;
-	padding-left: 1.5em;
+	margin: 1.2em 0;
+	padding-left: 1.4em;
 	color: var(--color-ink-secondary);
 }
 
 .prose ul {
-	list-style: none;
-}
-
-.prose ul > li {
-	position: relative;
-	margin: 0.45em 0;
-	padding-left: 0.25em;
-}
-
-.prose ul > li::before {
-	content: "";
-	position: absolute;
-	left: -1em;
-	top: 0.7em;
-	width: 4px;
-	height: 4px;
-	background-color: var(--color-ink-muted);
-	border-radius: 0;
-	transform: translateY(-50%);
+	list-style: square;
 }
 
 .prose ol {
-	list-style: none;
-	counter-reset: md-ol-counter;
+	list-style: decimal-leading-zero;
+	padding-left: 2em;
 }
 
-.prose ol > li {
-	position: relative;
-	margin: 0.45em 0;
-	padding-left: 0.25em;
-	counter-increment: md-ol-counter;
-}
-
-.prose ol > li::before {
-	content: counter(md-ol-counter, decimal-leading-zero);
-	position: absolute;
-	left: -1.8em;
-	top: 0.1em;
-	font-family: var(--font-mono);
-	font-size: 0.75em;
-	font-weight: 500;
-	color: var(--color-ink-muted);
-	letter-spacing: var(--tracking-wide);
-	font-variant-numeric: tabular-nums;
-}
-
-/* 嵌套列表层级 */
-.prose ul ul,
-.prose ul ol,
-.prose ol ul,
-.prose ol ol {
+.prose li {
 	margin: 0.4em 0;
+	padding-left: 0.3em;
+}
+
+.prose li::marker {
+	color: var(--color-ink-muted);
+}
+
+.prose ol > li::marker {
+	font-family: var(--font-mono);
+	font-size: 0.8em;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: var(--tracking-wide);
+}
+
+.prose ul ul {
+	list-style: circle;
+}
+
+.prose :is(ul, ol) :is(ul, ol) {
+	margin: 0.35em 0;
 }
 
 .prose li > p {
-	margin: 0.3em 0;
+	margin: 0.35em 0;
 }
 
-/* GFM 任务列表(- [ ] xxx / - [x] xxx) */
-.prose ul > li > input[type="checkbox"] {
+/* ---- GFM 任务列表 ---- */
+
+.prose ul.contains-task-list {
+	list-style: none;
+	padding-left: 0.2em;
+}
+
+.prose li.task-list-item {
+	padding-left: 0;
+}
+
+.prose li.task-list-item > input[type="checkbox"] {
 	appearance: none;
 	-webkit-appearance: none;
-	width: 12px;
-	height: 12px;
-	margin: 0 0.5em 0 -1.5em;
-	vertical-align: middle;
-	border: 1px solid var(--color-hairline-strong);
-	background-color: var(--color-paper);
-	border-radius: 2px;
-	cursor: default;
 	position: relative;
+	display: inline-block;
+	width: 14px;
+	height: 14px;
+	margin: 0 0.6em 0 0;
+	vertical-align: -0.12em;
+	border: 1px solid var(--color-hairline-strong);
+	background-color: var(--color-surface);
+	border-radius: 3px;
+	cursor: default;
 }
 
-.prose ul > li > input[type="checkbox"]:checked {
-	background-color: var(--color-ink-primary);
-	border-color: var(--color-ink-primary);
+.prose li.task-list-item > input[type="checkbox"]:checked {
+	background: var(--gradient-signal);
+	border-color: transparent;
 }
 
-.prose ul > li > input[type="checkbox"]:checked::after {
+.prose li.task-list-item > input[type="checkbox"]:checked::after {
 	content: "";
 	position: absolute;
-	left: 3px;
-	top: 0px;
-	width: 3px;
+	left: 4px;
+	top: 1.5px;
+	width: 4px;
 	height: 7px;
-	border: solid var(--color-paper);
+	border: solid var(--color-signal-ink);
 	border-width: 0 1.5px 1.5px 0;
 	transform: rotate(45deg);
 }
 
-.prose ul > li:has(> input[type="checkbox"])::before {
-	display: none;
-}
-
 /* ----------------------------------------------------------------------------
- * 引用块(blockquote)
- * --------------------------------------------------------------------------
- * 左侧墨色实线 + 略微下沉的颜色;不使用斜体,避免 CJK 字体变形
+ * 引用块:左侧 Signal 渐变竖线
  * -------------------------------------------------------------------------- */
 
 .prose blockquote {
-	margin: 1.5em 0;
-	padding: 0.1em 0 0.1em 1.2em;
-	border-left: 2px solid var(--color-ink-primary);
+	position: relative;
+	margin: 1.75em 0;
+	padding: 0.15em 0 0.15em 1.35em;
 	color: var(--color-ink-secondary);
 	font-style: normal;
+}
+
+.prose blockquote::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 0.2em;
+	bottom: 0.2em;
+	width: 2px;
+	border-radius: 2px;
+	background: linear-gradient(
+		180deg,
+		var(--color-signal),
+		var(--color-signal-2)
+	);
 }
 
 .prose blockquote p {
@@ -347,67 +384,128 @@
 	color: inherit;
 }
 
-.prose blockquote p:first-child {
+.prose blockquote > :first-child {
 	margin-top: 0;
 }
-.prose blockquote p:last-child {
+.prose blockquote > :last-child {
 	margin-bottom: 0;
 }
 
 .prose blockquote cite,
 .prose blockquote footer {
 	display: block;
-	margin-top: 0.6em;
+	margin-top: 0.75em;
 	font-family: var(--font-mono);
-	font-size: 0.85em;
-	color: var(--color-ink-tertiary);
+	font-size: 0.78em;
 	font-style: normal;
-	letter-spacing: var(--tracking-wide);
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-wider);
+	color: var(--color-ink-tertiary);
 }
 
 /* ----------------------------------------------------------------------------
  * 行内代码
- * --------------------------------------------------------------------------
- * 与界面上 <code> 基础样式保持一致,略小于正文
  * -------------------------------------------------------------------------- */
 
 .prose :not(pre) > code {
 	font-family: var(--font-mono);
-	font-size: 0.88em;
-	padding: 0.12em 0.4em;
+	font-size: 0.86em;
+	font-weight: 450;
+	padding: 0.14em 0.42em;
+	margin: 0 0.05em;
+	color: var(--color-ink-primary);
 	background-color: var(--color-paper-muted);
 	border: 1px solid var(--color-hairline);
 	border-radius: var(--radius-sm);
-	color: var(--color-ink-primary);
-	white-space: nowrap;
+	overflow-wrap: anywhere;
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
 }
 
-/* 链接中的行内代码:继承链接颜色,但不丢失下划线 */
 .prose a > code {
 	color: inherit;
 }
 
+.prose :is(h2, h3, h4) > code {
+	font-size: 0.84em;
+	font-weight: 500;
+}
+
 /* ----------------------------------------------------------------------------
- * 围栏代码块(Shiki 输出)
+ * 围栏代码块:终端卡片
  * --------------------------------------------------------------------------
- * Shiki 输出结构:<pre class="shiki shiki-themes ..."><code>...</code></pre>
- * 使用 defaultColor: false,通过 html.dark 切换 --shiki-dark* 变量
+ * 顶栏 = pre::before(三点 + 发丝底线),语言标签 = pre::after(attr)。
+ * Shiki 配置 wrap: true(pre-wrap),不产生横向滚动,伪元素可安全绝对定位。
  * -------------------------------------------------------------------------- */
 
 .prose pre {
-	margin: 1.75em 0;
-	padding: 1em 1.1em;
+	--code-bar: 2.4rem;
+	position: relative;
+	margin: 1.9em 0;
+	padding: calc(var(--code-bar) + 0.95rem) 1.15rem 1.05rem;
 	font-family: var(--font-mono);
 	font-size: 13.5px;
-	line-height: 1.65;
+	line-height: 1.7;
+	letter-spacing: 0;
+	tab-size: 2;
 	overflow-x: auto;
-	background-color: var(--color-paper-muted);
-	border: 1px dashed var(--color-hairline);
-	border-radius: var(--radius-sm);
 	color: var(--color-ink-primary);
-	/* 细款滚动条,与站点风格统一 */
+	background-color: var(--color-surface) !important;
+	border: 1px solid var(--color-hairline);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-card);
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-hairline-strong) transparent;
+}
+
+.prose pre::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: var(--code-bar);
+	border-bottom: 1px solid var(--color-hairline);
+	border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+	background-color: color-mix(in oklab, var(--color-paper-muted) 55%, transparent);
+	background-image:
+		radial-gradient(circle, var(--color-ink-faint) 3.5px, transparent 4px),
+		radial-gradient(circle, var(--color-ink-faint) 3.5px, transparent 4px),
+		radial-gradient(circle, var(--color-ink-faint) 3.5px, transparent 4px);
+	background-repeat: no-repeat;
+	background-size: 10px 10px;
+	background-position:
+		14px 50%,
+		30px 50%,
+		46px 50%;
+	pointer-events: none;
+}
+
+.prose pre[data-language]::after {
+	content: attr(data-language);
+	position: absolute;
+	top: 0;
+	right: 0.95rem;
+	height: var(--code-bar);
+	display: flex;
+	align-items: center;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-wider);
+	color: var(--color-ink-tertiary);
+	pointer-events: none;
+}
+
+.prose pre[data-language="plaintext"]::after,
+.prose pre[data-language="text"]::after {
+	content: "text";
+}
+
+.prose pre:focus-visible {
+	outline: 2px solid var(--color-signal);
+	outline-offset: 2px;
 }
 
 .prose pre::-webkit-scrollbar {
@@ -428,89 +526,75 @@
 	font-family: inherit;
 	font-size: inherit;
 	line-height: inherit;
-	white-space: pre;
-	background: none;
-	border: none;
-	padding: 0;
+	white-space: inherit;
 	color: inherit;
 }
 
-/* Shiki 双主题 CSS 变量注入:通过 html.dark 切换 */
-.prose pre.shiki,
-.prose pre.shiki span {
-	color: var(--shiki-light);
-	background-color: var(--shiki-light-bg);
+/* Shiki 深色:切到 --shiki-dark 变量(内联浅色值需 !important 覆盖) */
+:root.dark .prose pre.astro-code,
+:root.dark .prose pre.astro-code span {
+	color: var(--shiki-dark) !important;
 }
 
-:root.dark .prose pre.shiki,
-:root.dark .prose pre.shiki span {
-	color: var(--shiki-dark);
-	background-color: var(--shiki-dark-bg);
-}
-
-/* 代码块 fallback(语言未识别时由 markdown.ts 生成) */
-.prose pre.md-code-fallback {
-	background-color: var(--color-paper-muted);
-}
-
-.prose pre.md-code-fallback::before {
-	content: attr(data-lang);
-	display: block;
-	font-family: var(--font-mono);
-	font-size: 10px;
-	text-transform: uppercase;
-	letter-spacing: var(--tracking-wider);
-	color: var(--color-ink-muted);
-	margin-bottom: 0.6em;
-	padding-bottom: 0.5em;
-	border-bottom: 1px dashed var(--color-hairline);
+:root.dark .prose pre.astro-code span {
+	background-color: transparent !important;
 }
 
 /* ----------------------------------------------------------------------------
- * 水平分隔线
+ * 水平分隔线:发丝 + 居中 Signal 小方块
  * -------------------------------------------------------------------------- */
 
 .prose hr {
-	margin: 2.5em 0;
-	border: 0;
-	border-top: 1px dashed var(--color-hairline);
-	/* 中央放一个小点,编辑派签名细节 */
 	position: relative;
+	height: 1px;
+	margin: 3em 0;
+	border: 0;
 	overflow: visible;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		var(--color-hairline-strong) 18%,
+		var(--color-hairline-strong) calc(50% - 14px),
+		transparent calc(50% - 14px),
+		transparent calc(50% + 14px),
+		var(--color-hairline-strong) calc(50% + 14px),
+		var(--color-hairline-strong) 82%,
+		transparent
+	);
 }
 
 .prose hr::after {
-	content: "·";
+	content: "";
 	position: absolute;
-	top: -0.75em;
+	top: 50%;
 	left: 50%;
-	transform: translateX(-50%);
-	background-color: var(--color-paper);
-	padding: 0 0.5em;
-	color: var(--color-ink-muted);
-	font-family: var(--font-mono);
-	font-size: 14px;
-	line-height: 1;
+	width: 6px;
+	height: 6px;
+	border-radius: 1.5px;
+	background: var(--gradient-signal);
+	transform: translate(-50%, -50%) rotate(45deg);
 }
 
 /* ----------------------------------------------------------------------------
- * 图片
- * --------------------------------------------------------------------------
- * 默认独占一行,带细边框与轻微内阴影,保持"纸上印刷"感
+ * 图片 / figure
  * -------------------------------------------------------------------------- */
 
 .prose img {
 	display: block;
 	max-width: 100%;
 	height: auto;
-	margin: 1.75em auto;
+	margin: 2em auto;
 	border: 1px solid var(--color-hairline);
-	border-radius: var(--radius-sm);
+	border-radius: var(--radius-lg);
 	background-color: var(--color-paper-subtle);
 }
 
+.prose p > img:only-child {
+	margin-block: 0.5em;
+}
+
 .prose figure {
-	margin: 1.75em 0;
+	margin: 2em 0;
 }
 
 .prose figure > img {
@@ -518,111 +602,202 @@
 }
 
 .prose figcaption {
-	margin-top: 0.6em;
+	margin-top: 0.75em;
 	text-align: center;
 	font-family: var(--font-mono);
-	font-size: 12px;
-	color: var(--color-ink-tertiary);
+	font-size: 11.5px;
 	letter-spacing: var(--tracking-wide);
+	color: var(--color-ink-tertiary);
 }
 
 /* ----------------------------------------------------------------------------
- * 表格
- * --------------------------------------------------------------------------
- * GFM 表格;全虚线发丝,与站点整体节奏一致
+ * 表格:规格表
  * -------------------------------------------------------------------------- */
 
 .prose table {
+	display: block;
 	width: 100%;
-	margin: 1.75em 0;
+	max-width: 100%;
+	margin: 2em 0;
+	overflow-x: auto;
 	border-collapse: collapse;
 	font-size: 14px;
-	line-height: 1.5;
-	/* 超长表格允许横向滚动 */
-	display: block;
-	overflow-x: auto;
-	border: 1px dashed var(--color-hairline);
-}
-
-.prose thead {
-	background-color: var(--color-paper-muted);
-	border-bottom: 1px dashed var(--color-hairline-strong);
+	line-height: 1.55;
+	font-variant-numeric: tabular-nums;
+	border-top: 1px solid var(--color-hairline-strong);
+	border-bottom: 1px solid var(--color-hairline-strong);
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-hairline-strong) transparent;
 }
 
 .prose th,
 .prose td {
-	padding: 0.65em 1em;
+	padding: 0.7em 1.1em 0.7em 0;
 	text-align: left;
-	border-bottom: 1px dashed var(--color-hairline);
-	border-right: 1px dashed var(--color-hairline);
 	vertical-align: top;
+	border-bottom: 1px solid var(--color-hairline);
 }
 
 .prose th:last-child,
 .prose td:last-child {
-	border-right: 0;
+	padding-right: 0;
 }
 
-.prose tbody tr:last-child th,
-.prose tbody tr:last-child td {
+.prose tbody tr:last-child td,
+.prose tbody tr:last-child th {
 	border-bottom: 0;
 }
 
 .prose th {
+	padding-top: 0.85em;
 	font-family: var(--font-mono);
-	font-size: 11.5px;
+	font-size: 10.5px;
 	font-weight: 500;
 	text-transform: uppercase;
 	letter-spacing: var(--tracking-wider);
+	white-space: nowrap;
 	color: var(--color-ink-tertiary);
+	border-bottom-color: var(--color-hairline-strong);
 }
 
 .prose td {
 	color: var(--color-ink-secondary);
 }
 
-/* 表格单元格内的数字 / 代码:等宽,tabular-nums */
-.prose td code,
-.prose td:has(> code) {
-	font-variant-numeric: tabular-nums;
+.prose td:first-child {
+	color: var(--color-ink-primary);
+	font-weight: 500;
 }
 
-/* 斑马纹(轻度,仅 hover 时突出) */
+.prose :is(th, td)[align="right"] {
+	text-align: right;
+}
+.prose :is(th, td)[align="center"] {
+	text-align: center;
+}
+
+.prose tbody tr {
+	transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
 .prose tbody tr:hover {
-	background-color: var(--color-paper-muted);
+	background-color: color-mix(in oklab, var(--color-paper-muted) 60%, transparent);
 }
 
 /* ----------------------------------------------------------------------------
- * 键盘按键(<kbd>)
+ * 脚注(remark-gfm):<sup><a data-footnote-ref>…</a></sup> +
+ * <section data-footnotes class="footnotes"><h2 class="sr-only">…</h2><ol>…
+ * -------------------------------------------------------------------------- */
+
+.prose sup {
+	line-height: 0;
+}
+
+.prose a[data-footnote-ref] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 1.45em;
+	height: 1.45em;
+	margin-left: 0.1em;
+	padding: 0 0.3em;
+	font-family: var(--font-mono);
+	font-size: 0.72em;
+	font-weight: 500;
+	text-decoration: none;
+	vertical-align: 0.35em;
+	color: var(--color-signal);
+	background-color: var(--signal-soft);
+	border: 1px solid var(--signal-line);
+	border-radius: var(--radius-sm);
+	transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.prose a[data-footnote-ref]:hover {
+	border-color: var(--color-signal);
+}
+
+.prose .footnotes,
+.prose section[data-footnotes] {
+	margin-top: 3.5em;
+	padding-top: 1.25em;
+	border-top: 1px solid var(--color-hairline-strong);
+	font-size: 0.86em;
+	line-height: 1.7;
+	color: var(--color-ink-tertiary);
+}
+
+.prose section[data-footnotes] > h2 {
+	/* 通常带 sr-only;若没有则以 mono 眉标呈现 */
+	margin: 0 0 1em;
+	padding: 0;
+	border: 0;
+	font-family: var(--font-mono);
+	font-size: 0.8em;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-wider);
+	color: var(--color-ink-tertiary);
+}
+
+.prose section[data-footnotes] ol {
+	margin: 0;
+	color: inherit;
+}
+
+.prose section[data-footnotes] li {
+	scroll-margin-top: calc(var(--layout-top-nav-height) + 1.5rem);
+	border-radius: var(--radius-sm);
+}
+
+.prose section[data-footnotes] li:target {
+	background-color: var(--signal-soft);
+}
+
+.prose section[data-footnotes] p {
+	margin: 0.3em 0;
+	color: inherit;
+}
+
+.prose a[data-footnote-backref] {
+	margin-left: 0.3em;
+	font-family: var(--font-mono);
+	text-decoration: none;
+	color: var(--color-ink-muted);
+	transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.prose a[data-footnote-backref]:hover {
+	color: var(--color-signal);
+}
+
+/* ----------------------------------------------------------------------------
+ * 键盘按键 / 标记 / 删除线 / 缩写
  * -------------------------------------------------------------------------- */
 
 .prose kbd {
-	display: inline-block;
-	padding: 0.15em 0.5em;
+	display: inline-flex;
+	align-items: center;
+	min-width: 1.6em;
+	justify-content: center;
+	padding: 0.2em 0.45em;
 	font-family: var(--font-mono);
-	font-size: 0.8em;
+	font-size: 0.78em;
 	line-height: 1;
 	color: var(--color-ink-primary);
-	background-color: var(--color-paper);
+	background-color: var(--color-surface-raised);
 	border: 1px solid var(--color-hairline-strong);
 	border-bottom-width: 2px;
 	border-radius: var(--radius-sm);
-	vertical-align: middle;
+	vertical-align: 0.1em;
 	white-space: nowrap;
 }
 
-/* ----------------------------------------------------------------------------
- * 标记文字 / 删除线 / 缩写
- * -------------------------------------------------------------------------- */
-
 .prose mark {
-	background-color: color-mix(
-		in srgb,
-		var(--color-ink-primary) 12%,
-		transparent
-	);
 	color: var(--color-ink-primary);
-	padding: 0.05em 0.25em;
+	background-color: var(--signal-soft);
+	box-shadow: inset 0 -1px 0 var(--signal-line);
+	padding: 0.05em 0.2em;
 	border-radius: 2px;
 }
 
@@ -633,32 +808,32 @@
 }
 
 .prose abbr[title] {
-	border-bottom: 1px dotted var(--color-hairline-strong);
-	text-decoration: none;
+	text-decoration: underline dotted var(--color-hairline-strong);
+	text-underline-offset: 3px;
 	cursor: help;
 }
 
 /* ----------------------------------------------------------------------------
- * 内嵌详情折叠(<details>/<summary>)
+ * <details>/<summary>
  * -------------------------------------------------------------------------- */
 
 .prose details {
-	margin: 1.5em 0;
-	padding: 0.75em 1em;
-	border: 1px dashed var(--color-hairline);
-	border-radius: var(--radius-sm);
-	background-color: var(--color-paper-muted);
+	margin: 1.6em 0;
+	padding: 0.85em 1.1em;
+	background-color: var(--color-surface);
+	border: 1px solid var(--color-hairline);
+	border-radius: var(--radius-md);
 }
 
 .prose summary {
-	cursor: pointer;
-	font-weight: 500;
-	color: var(--color-ink-primary);
-	list-style: none;
 	display: flex;
 	align-items: center;
-	gap: 0.5em;
-	font-size: 14px;
+	gap: 0.6em;
+	cursor: pointer;
+	list-style: none;
+	font-size: 0.92em;
+	font-weight: 500;
+	color: var(--color-ink-primary);
 }
 
 .prose summary::-webkit-details-marker {
@@ -666,56 +841,70 @@
 }
 
 .prose summary::before {
-	content: "▸";
-	display: inline-block;
-	color: var(--color-ink-muted);
-	font-size: 0.8em;
-	transition: transform var(--duration-fast) var(--ease-standard);
+	content: "";
+	width: 6px;
+	height: 6px;
+	flex-shrink: 0;
+	border-right: 1.5px solid var(--color-ink-muted);
+	border-bottom: 1.5px solid var(--color-ink-muted);
+	transform: rotate(-45deg);
+	transition: transform var(--duration-base) var(--ease-out-expo);
 }
 
 .prose details[open] > summary::before {
-	transform: rotate(90deg);
+	transform: rotate(45deg);
 }
 
 .prose details > :not(summary) {
 	margin-top: 0.75em;
 }
 
+.prose details > :last-child {
+	margin-bottom: 0;
+}
+
 /* ----------------------------------------------------------------------------
- * 可访问性:禁用动效偏好
+ * 可访问性:减弱动效
  * -------------------------------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
-	.prose * {
+	.prose *,
+	.prose *::before,
+	.prose *::after {
 		transition: none !important;
+		animation: none !important;
 	}
 }
 
 /* ----------------------------------------------------------------------------
- * 打印样式
- * --------------------------------------------------------------------------
- * 供读者"保存为 PDF"时拥有干净的文章排版
+ * 打印
  * -------------------------------------------------------------------------- */
 
 @media print {
 	.prose {
 		color: #000;
-		max-width: none;
 	}
 	.prose a {
 		color: #000;
 		text-decoration: underline;
+		background: none !important;
 	}
-	.prose a[target="_blank"]::after {
-		content: "";
+	.prose a[href^="http"]::after,
+	.prose .heading-anchor {
+		display: none;
 	}
 	.prose pre,
 	.prose code {
-		background: transparent;
+		background: transparent !important;
 		border-color: #bbb;
+		box-shadow: none;
 		color: #000;
 	}
-	.prose .md-anchor {
+	.prose pre::before,
+	.prose pre::after {
 		display: none;
+	}
+	.prose pre {
+		padding-top: 1rem;
 	}
 }

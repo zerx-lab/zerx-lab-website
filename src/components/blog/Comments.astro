@@ -3,6 +3,9 @@
  * ============================================================================
  * Comments - giscus 评论区(基于 GitHub Discussions)
  * ----------------------------------------------------------------------------
+ * 呈现为一个简历式章节(CvSection:左栏编号 / 标题 / 注记吸顶,右栏
+ * surface 卡片容器),iframe 在卡片内渲染,与站内其它卡片同一视觉语言。
+ *
  * 数据来源:giscus 官方 <script src="https://giscus.app/client.js">,
  * data-* 配置来自构建期注入的 PUBLIC_GISCUS_* 环境变量,运行时由 giscus.app
  * 的客户端脚本接管渲染(内嵌 iframe)。
@@ -28,16 +31,18 @@
  * ============================================================================
  */
 
-import SectionHeader from "@components/ui/SectionHeader.astro";
+import CvSection from "@components/layout/CvSection.astro";
 import { useTranslations } from "@i18n/utils";
 import type { Lang } from "@i18n/ui";
 
 interface Props {
 	/** 当前语言,决定评论区标题文案与传给 giscus 的 data-lang */
 	lang: Lang;
+	/** 章节号(履历章节编号,如 "03") */
+	index?: string;
 }
 
-const { lang } = Astro.props;
+const { lang, index } = Astro.props;
 const t = useTranslations(lang);
 
 const repo = import.meta.env.PUBLIC_GISCUS_REPO;
@@ -50,23 +55,31 @@ const categoryId = import.meta.env.PUBLIC_GISCUS_CATEGORY_ID;
 const isConfigured = Boolean(repo && repoId && category && categoryId);
 
 const giscusLang = lang === "zh" ? "zh-CN" : "en";
+
+const note =
+	lang === "zh"
+		? "评论托管在 GitHub Discussions,使用 GitHub 账号登录即可参与讨论。"
+		: "Comments live in GitHub Discussions — sign in with GitHub to join in.";
 ---
 
 {
 	isConfigured && (
-		<section aria-label={t("blog.comments")} class="mt-2 mb-16">
-			<SectionHeader eyebrow={t("blog.comments")} spacious />
-
+		<CvSection
+			index={index}
+			label={t("blog.comments")}
+			sublabel="GitHub Discussions"
+			note={note}
+		>
 			<div
 				id="giscus-container"
-				class="mt-6 lg:mt-8"
+				class="surface-card p-4 sm:p-6 min-h-[8rem]"
 				data-repo={repo}
 				data-repo-id={repoId}
 				data-category={category}
 				data-category-id={categoryId}
 				data-lang={giscusLang}
 			/>
-		</section>
+		</CvSection>
 	)
 }
 

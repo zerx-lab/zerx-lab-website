@@ -3,7 +3,7 @@
  * ============================================================================
  * ThemeToggle - 主题切换器 (light / dark / system)
  * ----------------------------------------------------------------------------
- * 视觉: 三段式 Monospace 图标按钮组,当前激活项墨色,其余淡灰
+ * 视觉: 三段式分段控件,激活项为抬起的小底片 + Signal 色图标
  *
  * 布局策略:
  *   [☀][◑][●]
@@ -58,10 +58,10 @@ const OPTIONS = [
 	aria-label={t("action.toggleTheme")}
 	class:list={[
 		"theme-toggle",
-		"flex items-center",
-		"h-full",
-		"px-2 sm:px-3",
-		"gap-0.5",
+		"inline-flex items-center",
+		"p-0.5 gap-0.5",
+		"rounded-[var(--radius-md)]",
+		"bg-[color:var(--color-paper-muted)]",
 		"select-none",
 		className,
 	]}
@@ -76,12 +76,11 @@ const OPTIONS = [
 				class:list={[
 					"theme-btn",
 					"inline-flex items-center justify-center",
-					"h-6 w-6",
-					"rounded-[var(--radius-sm)]",
+					"h-7 w-7",
+					"rounded-[6px]",
 					"text-[color:var(--color-ink-muted)]",
-					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
+					"transition-[color,background-color,box-shadow] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
 					"hover:text-[color:var(--color-ink-primary)]",
-					"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-ink-primary)]",
 					"cursor-pointer",
 				]}
 			>
@@ -146,14 +145,21 @@ const OPTIONS = [
 </div>
 
 <style>
-	/* 激活态: 当前选中项 */
+	/* 激活态: 抬起的小底片 + Signal 图标 */
 	.theme-btn[data-active="true"] {
-		background-color: var(--color-paper-muted);
-		color: var(--color-ink-primary);
+		background-color: var(--color-surface-raised);
+		color: var(--color-signal);
+		box-shadow:
+			0 0 0 1px var(--color-hairline),
+			0 1px 2px rgba(0, 0, 0, 0.08);
 	}
 
-	:global(:root.dark) .theme-btn[data-active="true"] {
-		background-color: var(--color-paper-subtle);
+	.theme-btn svg {
+		transition: transform var(--duration-slow) var(--ease-spring);
+	}
+
+	.theme-btn[data-active="true"] svg {
+		transform: rotate(-12deg) scale(1.05);
 	}
 </style>
 

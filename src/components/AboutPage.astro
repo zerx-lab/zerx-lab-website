@@ -1,34 +1,26 @@
 ---
 /**
  * ============================================================================
- * AboutPage - 关于/社区页共享组件
+ * AboutPage - 关于页(/about 与 /en/about 共享)
  * ----------------------------------------------------------------------------
- * 为什么抽成独立组件:
- *   中文 /about 与英文 /en/about 两个入口页面 95% 的逻辑相同,
- *   只有语言推导与少量默认文案不同。本组件负责:
- *     1. 用 @lib/content / @lib/queries/site-settings 在构建期读取站点设置、
- *        项目、语言占比等内容
- *     2. 把 Bilingual 字段按当前 lang 解包
- *     3. 展示:ABOUT / IN NUMBERS / JOIN US ON / STACK / CONTACT 分区
+ * 实验室的完整简历:
+ *   PageHero  超大开场句(serif 强调词)+ 描述 + 社交 CTA
+ *             aside:档案卡(站名 / 标语 / 方向 / 主力语言)
+ *             spec :STARS / REPOS / CONTRIBUTORS / SINCE / LOCATION / LICENSE
+ *   01 概述   引导段 + 叙述 + 三栏工程原则(超大键名)
+ *   02 数据   全宽 Bento:Stars 巨型格(2×2)+ 仓库 / AUR / 贡献者
+ *   03 社区   不对称平台卡片(4/2 · 2/4)+ 联络规格条(邮箱 / GitHub / 回复时效)
+ *   04 技术栈 全宽:首位语言超大百分比 + 堆叠色条 + 双列图例
  *
- * 视觉参考: better-auth.com 的 /community 页
- *   - 大号数字统计("IN NUMBERS")作为主视觉
- *   - "JOIN US ON" 平台卡片,每张带图标 + 标签 + 数据 + CTA
- *   - 右下角"Shop our merch" 式的额外条目用来挂"友情链接"位
- *   - 整页深度贴合编辑派极简 + Monospace 元素
- *
- * 左栏 meta 字段说明:
- *   - STARS         GitHub 总 star 数
- *   - REPOS         仓库数
- *   - CONTRIBUTORS  贡献者数
- *   - MEMBERS       社区成员(Discord,占位)
- *   - SINCE         建立年份
+ * 联系 CTA 统一由全站页脚提供,本页不重复。
+ * 数据:站点设置 / 实时计数 / 语言占比均在构建期读取。
  * ============================================================================
  */
 
 import AppShell from "@layouts/AppShell.astro";
-import SectionHeader from "@components/ui/SectionHeader.astro";
-import MetaRow from "@components/ui/MetaRow.astro";
+import PageHero from "@components/layout/PageHero.astro";
+import CvSection from "@components/layout/CvSection.astro";
+import SpecStrip, { type SpecItem } from "@components/layout/SpecStrip.astro";
 import {
 	getLangFromUrl,
 	useTranslations,
@@ -47,21 +39,18 @@ const lang = getLangFromUrl(Astro.url) as Lang;
 const t = useTranslations(lang);
 const tp = useTranslatedPath(lang);
 
-// RSS feed URL 按当前语言走:
-//   zh → /rss.xml,en → /en/rss.xml
-// 与全站其它路由的语言前缀约定一致(见 src/pages/en/rss.xml.ts)。
+// RSS feed URL 按当前语言走:zh → /rss.xml,en → /en/rss.xml
 const rssHref = tp("/rss.xml");
 
 /* ----------------------------------------------------------------------------
  * 数据
  * ----------------------------------------------------------------------------
- *   - settings       @lib/queries/site-settings 的 loadSiteSettings(lang),
- *                    已按当前语言解包 tagline / description / location /
- *                    social_* 等字段,直接消费(不再需要 pickLang)。
- *   - counts         @lib/queries/projects 的 loadLiveCounts():文章 / 分类等
- *                    取内容仓库,projects / totalStars / totalForks 用 GitHub
- *                    实时清单覆盖,与首页 meta、/projects 左栏同源同数。
- *   - languageStats  @lib/content 的 loadLanguageStats(),按占比降序。
+ *   - settings       loadSiteSettings(lang):已按语言解包 tagline / description /
+ *                    location / social_* 等字段。
+ *   - counts         loadLiveCounts():文章 / 分类取内容仓库,projects /
+ *                    totalStars / totalForks 用 GitHub 实时清单覆盖,与首页、
+ *                    /projects 同源同数。
+ *   - languageStats  loadLanguageStats(),按占比降序。
  * -------------------------------------------------------------------------- */
 
 const settings = await loadSiteSettings(lang);
@@ -70,11 +59,11 @@ const [counts, languageStats] = await Promise.all([
 	loadLanguageStats(),
 ]);
 
-// settings 里的 tagline / description / location 已在 loadSiteSettings 内部
-// 按 lang 解包完毕,这里只做同名变量映射,尽量少改下面模板的引用点。
 const tagline = settings.tagline;
 const description = settings.description;
 const location = settings.location;
+const githubUrl = settings.socialGithub ?? "https://github.com/zerx-lab";
+const emailHref = settings.socialEmail ? `mailto:${settings.socialEmail}` : null;
 
 /* ----------------------------------------------------------------------------
  * 格式化辅助
@@ -87,11 +76,16 @@ function formatCount(n: number): string {
 }
 
 function formatLarge(n: number): string {
-	// 大号数字展示(用于 IN NUMBERS 分区),保留一位小数
+	// 超出 count-up 合理位数时的静态大号展示,保留一位小数
 	if (n < 1000) return String(n);
 	if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10000 ? 2 : 1)}K`;
 	return `${(n / 1_000_000).toFixed(1)}M`;
 }
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** count-up 的合理上限;超过则以静态文本展示 */
+const COUNT_UP_MAX = 100_000;
 
 /* ----------------------------------------------------------------------------
  * 页面级文案
@@ -99,25 +93,44 @@ function formatLarge(n: number): string {
 
 const COPY = {
 	zh: {
-		eyebrow: "关于",
+		eyebrow: "关于 ZerxLab",
 		title: "关于 ZerxLab",
 		description: description,
 
-		sectionAbout: "ABOUT",
-		sectionNumbers: "IN NUMBERS",
-		sectionJoin: "JOIN US ON",
-		sectionStack: "STACK",
-		sectionContact: "CONTACT",
+		/* Hero */
+		heroPre: "把好奇心沉淀为",
+		heroAccent: "可用的",
+		heroPost: "开源工具。",
+		actionGithub: "GitHub",
+		actionEmail: "邮件",
+		actionRss: "RSS 订阅",
+		profileLabel: "实验室档案",
+		profileKind: "一个人的全栈实验室",
+		profileFocus: "方向",
+		profileStack: "主力语言",
+		profileStatus: "开放合作",
 
-		/* ABOUT 区 */
+		/* 01 概述 */
+		sectionAbout: "概述",
+		sectionAboutSub: "OVERVIEW",
+		sectionAboutNote: "独立开发者维护的全栈实验室。",
 		aboutBody1:
 			"ZerxLab 不是一家公司,也不是一个产品团队。它是一个独立开发者维护的全栈实验室 —— 把业余时间、工程实践和好奇心沉淀为一批可用的开源工具。",
 		aboutBody2:
 			"这里产出的东西都有一个共同标准:能跑、能测、能用。每个项目都提供基准数据、完整文档,并以 MIT 协议开放源代码。",
 		aboutBody3:
-			"如果你也相信「细节即品牌、代码即文档」,欢迎通过 Issue、PR 或下方任一渠道加入对话。",
+			"如果你也相信「细节即品牌、代码即文档」,欢迎通过 Issue、PR 或社区渠道加入对话。",
+		principlesLabel: "工程原则",
+		principles: [
+			{ key: "RUNS", title: "能跑", text: "真实场景可用,而非演示" },
+			{ key: "MEASURED", title: "能测", text: "每个项目附基准数据" },
+			{ key: "OPEN", title: "能用", text: "完整文档,MIT 开源" },
+		],
 
-		/* 数字标签 */
+		/* 02 数据 */
+		sectionNumbers: "数据",
+		sectionNumbersSub: "BY THE NUMBERS",
+		sectionNumbersNote: "构建期从 GitHub 实时清单读取。",
 		numberGithubStars: "GITHUB STARS",
 		numberRepos: "REPOSITORIES",
 		numberAurPkgs: "AUR PACKAGES",
@@ -127,7 +140,12 @@ const COPY = {
 		numberLabelOpenSource: "MIT 开源",
 		numberLabelCommunity: "社区成员",
 
-		/* JOIN US ON 平台卡片 */
+		/* 03 社区 */
+		sectionJoin: "社区",
+		sectionJoinSub: "COMMUNITY",
+		sectionJoinNote: "更愿意在公开渠道讨论技术问题,让其他人也能从对话中受益。",
+		sectionJoinLink: "在 GitHub 发起讨论",
+
 		joinGithub: "GITHUB",
 		joinGithubDesc: "所有项目源码、Issue 与 Release 的根据地。",
 		joinGithubCta: "前往 GitHub",
@@ -148,44 +166,60 @@ const COPY = {
 		joinEmailCta: "发送邮件",
 		joinEmailLabel: "回复",
 		joinEmailLabelValue: "48h",
+		contactReply: "工作日 48h 内回复",
 
-		/* STACK */
+		/* 04 技术栈 */
+		sectionStack: "技术栈",
 		stackBody:
 			"日常高频使用的技术栈,按语言占比排序。比例来自 GitHub 公开仓库的真实统计。",
+		stackBarLabel: "语言占比",
+		stackLanguages: "种语言",
+		stackLead: "首位语言",
 
-		/* CONTACT */
-		contactBody:
-			"最快的方式是 GitHub Issue 或邮件。我更愿意在公开渠道讨论技术问题,因为其他人也能从对话中受益。",
-		contactPrimary: "发送邮件",
-		contactSecondary: "在 GitHub 发起讨论",
-
-		/* meta 区 */
+		/* spec */
 		metaStars: "STARS",
 		metaRepos: "REPOS",
 		metaContributors: "CONTRIBUTORS",
-		metaMembers: "MEMBERS",
 		metaSince: "SINCE",
 		metaLicense: "LICENSE",
 	},
 
 	en: {
-		eyebrow: "About",
+		eyebrow: "About ZerxLab",
 		title: "About ZerxLab",
 		description: description,
 
-		sectionAbout: "ABOUT",
-		sectionNumbers: "IN NUMBERS",
-		sectionJoin: "JOIN US ON",
-		sectionStack: "STACK",
-		sectionContact: "CONTACT",
+		heroPre: "Turning curiosity into",
+		heroAccent: "usable",
+		heroPost: "open-source tools.",
+		actionGithub: "GitHub",
+		actionEmail: "Email",
+		actionRss: "RSS feed",
+		profileLabel: "Lab profile",
+		profileKind: "A one-person full-stack lab",
+		profileFocus: "Focus",
+		profileStack: "Main languages",
+		profileStatus: "Open for collaboration",
 
+		sectionAbout: "About",
+		sectionAboutSub: "OVERVIEW",
+		sectionAboutNote: "A full-stack lab run by a solo developer.",
 		aboutBody1:
 			"ZerxLab is not a company or a product team. It is a full-stack laboratory run by a solo developer — distilling side-project hours, engineering practice, and curiosity into a portfolio of open-source tools.",
 		aboutBody2:
 			"Everything shipped here meets a single bar: it runs, it is benchmarked, it is usable. Every project ships with numbers, docs, and MIT-licensed source.",
 		aboutBody3:
-			'If you also believe that "details are the brand, code is the docs", join the conversation via an Issue, PR, or any channel below.',
+			'If you also believe that "details are the brand, code is the docs", join the conversation via an Issue, PR, or any community channel.',
+		principlesLabel: "Principles",
+		principles: [
+			{ key: "RUNS", title: "It runs", text: "Built for real use, not demos" },
+			{ key: "MEASURED", title: "It's measured", text: "Every project ships benchmarks" },
+			{ key: "OPEN", title: "It's usable", text: "Full docs, MIT licensed" },
+		],
 
+		sectionNumbers: "In numbers",
+		sectionNumbersSub: "BY THE NUMBERS",
+		sectionNumbersNote: "Read from the live GitHub inventory at build time.",
 		numberGithubStars: "GITHUB STARS",
 		numberRepos: "REPOSITORIES",
 		numberAurPkgs: "AUR PACKAGES",
@@ -194,6 +228,12 @@ const COPY = {
 		numberLabelMaintained: "all maintained",
 		numberLabelOpenSource: "MIT licensed",
 		numberLabelCommunity: "community",
+
+		sectionJoin: "Join us on",
+		sectionJoinSub: "COMMUNITY",
+		sectionJoinNote:
+			"Public channels are preferred for technical topics so others can benefit from the conversation.",
+		sectionJoinLink: "Start a discussion",
 
 		joinGithub: "GITHUB",
 		joinGithubDesc:
@@ -219,19 +259,18 @@ const COPY = {
 		joinEmailCta: "Send email",
 		joinEmailLabel: "Reply",
 		joinEmailLabelValue: "48h",
+		contactReply: "Within 48h on weekdays",
 
+		sectionStack: "Stack",
 		stackBody:
 			"Day-to-day stack, ordered by real usage. Percentages from public GitHub repos.",
-
-		contactBody:
-			"Fastest path is GitHub Issues or email. I prefer public channels for technical topics so others can benefit from the conversation.",
-		contactPrimary: "Send email",
-		contactSecondary: "Start a discussion",
+		stackBarLabel: "Language distribution",
+		stackLanguages: "languages",
+		stackLead: "Primary language",
 
 		metaStars: "STARS",
 		metaRepos: "REPOS",
 		metaContributors: "CONTRIBUTORS",
-		metaMembers: "MEMBERS",
 		metaSince: "SINCE",
 		metaLicense: "LICENSE",
 	},
@@ -240,9 +279,89 @@ const COPY = {
 const C = COPY[lang] ?? COPY.zh;
 
 /* ----------------------------------------------------------------------------
- * JOIN US ON 平台卡片数据
+ * 图标(内联 SVG 片段,24×24 视口)
+ * -------------------------------------------------------------------------- */
+
+type IconKey =
+	| "github"
+	| "email"
+	| "rss"
+	| "star"
+	| "repo"
+	| "package"
+	| "users"
+	| "blog";
+
+const GITHUB_PATH =
+	'<path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/>';
+
+/** filled = 实心图标(fill=currentColor),否则为 2px 描边图标 */
+const ICONS: Record<IconKey, { filled: boolean; svg: string }> = {
+	github: { filled: true, svg: GITHUB_PATH },
+	star: {
+		filled: true,
+		svg: '<path d="M12 .587l3.668 7.568 8.332 1.151-6.064 5.828 1.48 8.279L12 19.446l-7.416 3.967 1.48-8.279L0 9.306l8.332-1.151z"/>',
+	},
+	email: {
+		filled: false,
+		svg: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+	},
+	rss: {
+		filled: false,
+		svg: '<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
+	},
+	repo: {
+		filled: false,
+		svg: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+	},
+	package: {
+		filled: false,
+		svg: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+	},
+	users: {
+		filled: false,
+		svg: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+	},
+	blog: {
+		filled: false,
+		svg: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+	},
+};
+
+function iconAttrs(key: IconKey): astroHTML.JSX.SVGAttributes {
+	const icon = ICONS[key];
+	return icon.filled
+		? { fill: "currentColor" }
+		: {
+				fill: "none",
+				stroke: "currentColor",
+				"stroke-width": "2",
+				"stroke-linecap": "round",
+				"stroke-linejoin": "round",
+			};
+}
+
+/* ----------------------------------------------------------------------------
+ * PageHero 规格条(原左栏 meta)
+ * -------------------------------------------------------------------------- */
+
+const spec: SpecItem[] = [
+	counts.totalStars < COUNT_UP_MAX
+		? { label: C.metaStars, count: counts.totalStars }
+		: { label: C.metaStars, value: formatCount(counts.totalStars) },
+	{ label: C.metaRepos, count: counts.projects, href: tp("/projects") },
+	settings.contributors !== null
+		? { label: C.metaContributors, count: settings.contributors }
+		: { label: C.metaContributors, value: "—" },
+	{ label: C.metaSince, value: settings.establishedYear ?? "—" },
+	{ label: t("meta.location"), value: location },
+	{ label: C.metaLicense, value: "MIT" },
+];
+
+/* ----------------------------------------------------------------------------
+ * 03 社区:平台卡片数据
  * ----------------------------------------------------------------------------
- * 静态配置,避免在 JSX 里写太长的条件表达式
+ *   span  sm 起 6 列网格中的跨度,4/2 · 2/4 交错形成不对称 Bento
  * -------------------------------------------------------------------------- */
 
 interface JoinPlatform {
@@ -254,7 +373,8 @@ interface JoinPlatform {
 	external: boolean;
 	metricLabel: string;
 	metricValue: string;
-	icon: "github" | "aur" | "blog" | "email";
+	icon: IconKey;
+	span: string;
 }
 
 const joinPlatforms: readonly JoinPlatform[] = [
@@ -263,11 +383,12 @@ const joinPlatforms: readonly JoinPlatform[] = [
 		eyebrow: C.joinGithub,
 		description: C.joinGithubDesc,
 		cta: C.joinGithubCta,
-		ctaHref: settings.socialGithub ?? "https://github.com/zerx-lab",
+		ctaHref: githubUrl,
 		external: true,
 		metricLabel: C.joinGithubLabel,
 		metricValue: "zerx-lab",
 		icon: "github",
+		span: "sm:col-span-4",
 	},
 	{
 		key: "aur",
@@ -278,7 +399,8 @@ const joinPlatforms: readonly JoinPlatform[] = [
 		external: false,
 		metricLabel: C.joinAurLabel,
 		metricValue: String(counts.aurPackages),
-		icon: "aur",
+		icon: "package",
+		span: "sm:col-span-2",
 	},
 	{
 		key: "blog",
@@ -290,737 +412,479 @@ const joinPlatforms: readonly JoinPlatform[] = [
 		metricLabel: C.joinBlogLabel,
 		metricValue: String(counts.posts),
 		icon: "blog",
+		span: "sm:col-span-2",
 	},
 	{
 		key: "email",
 		eyebrow: C.joinEmail,
 		description: C.joinEmailDesc,
 		cta: C.joinEmailCta,
-		ctaHref: settings.socialEmail
-			? `mailto:${settings.socialEmail}`
-			: "#",
+		ctaHref: emailHref ?? "#",
 		external: false,
 		metricLabel: C.joinEmailLabel,
 		metricValue: C.joinEmailLabelValue,
 		icon: "email",
+		span: "sm:col-span-4",
 	},
 ] as const;
 
+const githubHandle = githubUrl
+	.replace(/^https?:\/\//i, "")
+	.replace(/\/$/, "");
+
+/** 社区节底部联络规格条:原"联系"节的独有信息 */
+const contactSpec: SpecItem[] = [
+	...(settings.socialEmail && emailHref
+		? [{ label: "EMAIL", value: settings.socialEmail, href: emailHref }]
+		: []),
+	{ label: "GITHUB", value: githubHandle, href: githubUrl },
+	{ label: C.joinEmailLabel, value: C.contactReply, live: true },
+];
+
 /* ----------------------------------------------------------------------------
- * IN NUMBERS 数据条目
+ * 02 数据:数字条目
+ * ----------------------------------------------------------------------------
+ *   raw   原始整数,驱动 CSS count-up 与 sr-only 真值(缺失为 null)
+ *   value 缺失或超过 count-up 合理位数(≥100k)时的静态展示文本
+ *   cell  Bento 格位:hero = 2×2 巨型格
  * -------------------------------------------------------------------------- */
 
 interface NumberStat {
 	label: string;
+	raw: number | null;
 	value: string;
 	sub: string;
-	icon: "star" | "repo" | "package" | "users";
+	icon: IconKey;
+	cell: "hero" | "half" | "wide";
 }
 
 const numberStats: readonly NumberStat[] = [
 	{
 		label: C.numberGithubStars,
+		raw: counts.totalStars,
 		value: formatLarge(counts.totalStars),
 		sub: C.numberLabelWeek,
 		icon: "star",
+		cell: "hero",
 	},
 	{
 		label: C.numberRepos,
+		raw: counts.projects,
 		value: String(counts.projects),
 		sub: C.numberLabelOpenSource,
 		icon: "repo",
+		cell: "half",
 	},
 	{
 		label: C.numberAurPkgs,
+		raw: counts.aurPackages,
 		value: String(counts.aurPackages),
 		sub: C.numberLabelMaintained,
 		icon: "package",
+		cell: "half",
 	},
 	{
 		label: C.numberContributors,
-		value: String(settings.contributors),
+		raw: settings.contributors,
+		value: settings.contributors !== null ? String(settings.contributors) : "—",
 		sub: C.numberLabelCommunity,
 		icon: "users",
+		cell: "wide",
 	},
 ] as const;
+
+const CELL_CLASS: Record<NumberStat["cell"], string> = {
+	hero: "col-span-2 lg:col-span-6 lg:row-span-2 min-h-[260px] lg:min-h-[420px]",
+	half: "col-span-1 lg:col-span-3 min-h-[170px] lg:min-h-[200px]",
+	wide: "col-span-2 lg:col-span-6 min-h-[170px] lg:min-h-[200px]",
+};
+
+const NUMBER_SIZE: Record<NumberStat["cell"], string> = {
+	hero: "text-[clamp(88px,14vw,200px)] tracking-[-0.06em]",
+	half: "text-[48px] sm:text-[56px] lg:text-[64px] tracking-[-0.045em]",
+	wide: "text-[48px] sm:text-[56px] lg:text-[64px] tracking-[-0.045em]",
+};
+
+/* ----------------------------------------------------------------------------
+ * 04 技术栈
+ * -------------------------------------------------------------------------- */
+
+const stackAriaLabel = `${C.stackBarLabel}: ${languageStats
+	.map((lg) => `${lg.name} ${lg.percent.toFixed(1)}%`)
+	.join(", ")}`;
+
+const leadLanguage = languageStats[0] ?? null;
+const topLanguages = languageStats.slice(0, 3);
 ---
 
-<AppShell
-	title={C.title}
-	description={C.description}
-	eyebrow={C.eyebrow}
-	leftTitle={C.title}
-	leftDescription={C.description}
-	maxContentWidth="none"
->
-	{/* ---------- 左栏:社交 ---------- */}
-	<Fragment slot="left-social">
-		<a
-			href={settings.socialGithub}
-			target="_blank"
-			rel="noopener noreferrer"
-			aria-label="GitHub"
-			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
-		>
-			<svg
-				width="16"
-				height="16"
-				viewBox="0 0 24 24"
-				fill="currentColor"
-				aria-hidden="true"
-			>
-				<path
-					d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
-				></path>
-			</svg>
-		</a>
-		{settings.socialEmail && (
-			<a
-				href={`mailto:${settings.socialEmail}`}
-				aria-label="Email"
-				class="transition-colors hover:text-[color:var(--color-ink-primary)]"
-			>
-				<svg
-					width="15"
-					height="15"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					aria-hidden="true"
-				>
-					<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-					<polyline points="22,6 12,13 2,6"></polyline>
-				</svg>
+<AppShell title={C.title} description={C.description}>
+	{/* ================= PageHero ================= */}
+	<PageHero eyebrow={C.eyebrow} description={description} spec={spec}>
+		<Fragment slot="title">
+			{C.heroPre}{lang === "en" && " "}<span class="serif-accent">{C.heroAccent}</span>{lang === "en" && " "}{C.heroPost}
+		</Fragment>
+
+		<Fragment slot="actions">
+			<a href={githubUrl} target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+				<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" {...iconAttrs("github")} set:html={ICONS.github.svg} />
+				{C.actionGithub}
 			</a>
-		)}
-		<a
-			href={rssHref}
-			aria-label="RSS"
-			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
-		>
-			<svg
-				width="15"
-				height="15"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-				aria-hidden="true"
-			>
-				<path d="M4 11a9 9 0 0 1 9 9"></path>
-				<path d="M4 4a16 16 0 0 1 16 16"></path>
-				<circle cx="5" cy="19" r="1"></circle>
-			</svg>
-		</a>
-	</Fragment>
+			{emailHref && (
+				<a href={emailHref} class="btn btn-ghost">
+					<svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" {...iconAttrs("email")} set:html={ICONS.email.svg} />
+					{C.actionEmail}
+				</a>
+			)}
+			<a href={rssHref} class="btn btn-ghost">
+				<svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" {...iconAttrs("rss")} set:html={ICONS.rss.svg} />
+				{C.actionRss}
+			</a>
+		</Fragment>
 
-	{/* ---------- 左栏:Meta ---------- */}
-	<Fragment slot="left-meta">
-		<MetaRow
-			label={C.metaStars}
-			value={formatCount(counts.totalStars)}
-		/>
-		<MetaRow label={C.metaRepos} value={String(counts.projects)} />
-		<MetaRow
-			label={C.metaContributors}
-			value={String(settings.contributors)}
-		/>
-		<MetaRow
-			label={C.metaSince}
-			value={String(settings.establishedYear)}
-		/>
-		<MetaRow
-			label={t("meta.location")}
-			value={location}
-		/>
-		<MetaRow label={C.metaLicense} value="MIT" />
-	</Fragment>
-
-	{/* ==========================================================================
-	 *                            右栏主内容
-	 * ========================================================================== */}
-
-	{/* ---------- ABOUT 分区 ---------- */}
-	<SectionHeader eyebrow={C.sectionAbout} />
-
-	<div class="mt-6 lg:mt-8 space-y-4 lg:space-y-5">
-		<p
-			class:list={[
-				"text-[color:var(--color-ink-secondary)]",
-				"text-[15px] lg:text-[15.5px]",
-				"leading-[1.75]",
-				"max-w-[68ch]",
-			]}
-		>
-			<span class="text-[color:var(--color-ink-primary)] font-medium">
-				{settings.siteName}
-			</span>{" "}
-			— {tagline}. {C.aboutBody1}
-		</p>
-
-		<p
-			class:list={[
-				"text-[color:var(--color-ink-secondary)]",
-				"text-[15px] lg:text-[15.5px]",
-				"leading-[1.75]",
-				"max-w-[68ch]",
-			]}
-		>
-			{C.aboutBody2}
-		</p>
-
-		<p
-			class:list={[
-				"text-[color:var(--color-ink-secondary)]",
-				"text-[15px] lg:text-[15.5px]",
-				"leading-[1.75]",
-				"max-w-[68ch]",
-			]}
-		>
-			{C.aboutBody3}
-		</p>
-	</div>
-
-	{/* ---------- IN NUMBERS 分区 ---------- */}
-	<SectionHeader eyebrow={C.sectionNumbers} spacious />
-
-	<div
-		class:list={[
-			"mt-6 lg:mt-8",
-			"grid grid-cols-1 sm:grid-cols-2",
-			"border border-dashed border-[color:var(--color-hairline)]",
-			"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
-		]}
-	>
-		{numberStats.map((stat) => (
-			<div
-				class:list={[
-					"flex flex-col",
-					"p-5 sm:p-6 lg:p-8",
-					"min-h-[120px] sm:min-h-[140px]",
-				]}
-			>
-				{/* 顶栏:icon + label */}
-				<div class="flex items-center gap-2 mb-3 sm:mb-4">
-					<span
-						aria-hidden="true"
-						class="inline-flex items-center justify-center h-4 w-4 text-[color:var(--color-ink-tertiary)]"
-					>
-						{stat.icon === "star" && (
-							<svg
-								width="13"
-								height="13"
-								viewBox="0 0 24 24"
-								fill="currentColor"
-							>
-								<path d="M12 .587l3.668 7.568 8.332 1.151-6.064 5.828 1.48 8.279L12 19.446l-7.416 3.967 1.48-8.279L0 9.306l8.332-1.151z" />
-							</svg>
-						)}
-						{stat.icon === "repo" && (
-							<svg
-								width="13"
-								height="13"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							>
-								<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-								<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-							</svg>
-						)}
-						{stat.icon === "package" && (
-							<svg
-								width="13"
-								height="13"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							>
-								<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-								<polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-								<line x1="12" y1="22.08" x2="12" y2="12" />
-							</svg>
-						)}
-						{stat.icon === "users" && (
-							<svg
-								width="13"
-								height="13"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							>
-								<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-								<circle cx="9" cy="7" r="4" />
-								<path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-								<path d="M16 3.13a4 4 0 0 1 0 7.75" />
-							</svg>
-						)}
-					</span>
-					<span
-						class:list={[
-							"mono-label",
-							"text-[10.5px] leading-none",
-							"tracking-[var(--tracking-wider)]",
-							"text-[color:var(--color-ink-tertiary)]",
-						]}
-					>
-						{stat.label}
-					</span>
+		{/* aside:实验室档案卡 */}
+		<aside slot="aside" aria-label={C.profileLabel} class="surface-card crop-marks relative overflow-hidden p-6 lg:p-7">
+			<div aria-hidden="true" class="about-profile-grid dot-grid pointer-events-none absolute inset-0"></div>
+			<div class="relative">
+				<div class="flex items-center justify-between gap-3">
+					<span class="mono-label text-[10.5px]">{C.profileLabel}</span>
+					<span class="mono-num text-[10.5px]">EST. {settings.establishedYear ?? "—"}</span>
 				</div>
 
-				{/* 大数字 */}
-				<div
-					class:list={[
-						"font-medium",
-						"text-[color:var(--color-ink-primary)]",
-						"tracking-[-0.02em]",
-						"leading-none",
-						"text-[36px] sm:text-[44px] md:text-[48px] lg:text-[56px]",
-						"tabular-nums",
-						"mb-2 sm:mb-3",
-					]}
-				>
-					{stat.value}
-				</div>
-
-				{/* 副标题 */}
-				<div
-					class:list={[
-						"mono-label",
-						"text-[10px] leading-none",
-						"tracking-[var(--tracking-wide)]",
-						"text-[color:var(--color-ink-muted)]",
-					]}
-				>
-					{stat.sub}
-				</div>
-			</div>
-		))}
-	</div>
-
-	{/* ---------- JOIN US ON 分区 ---------- */}
-	<SectionHeader
-		eyebrow={C.sectionJoin}
-		count={joinPlatforms.length}
-		spacious
-	/>
-
-	<div
-		class:list={[
-			"mt-6 lg:mt-8",
-			"grid grid-cols-1 sm:grid-cols-2",
-			"border border-dashed border-[color:var(--color-hairline)]",
-			"divide-x divide-y divide-dashed divide-[color:var(--color-hairline)]",
-		]}
-	>
-		{joinPlatforms.map((platform) => (
-			<div class="flex flex-col p-5 sm:p-6 lg:p-7 min-h-[180px] sm:min-h-[200px]">
-				{/* 顶栏:icon + eyebrow + 右侧数据
-				 * 移动端允许换行,避免 icon + eyebrow + metric 三段横向挤爆 */}
-				<div class="flex items-center gap-3 mb-4 flex-wrap">
-					<span
-						aria-hidden="true"
-						class:list={[
-							"inline-flex items-center justify-center",
-							"h-8 w-8",
-							"bg-[color:var(--color-paper-muted)]",
-							"border border-[color:var(--color-hairline)]",
-							"rounded-[var(--radius-sm)]",
-							"text-[color:var(--color-ink-primary)]",
-						]}
-					>
-						{platform.icon === "github" && (
-							<svg
-								width="15"
-								height="15"
-								viewBox="0 0 24 24"
-								fill="currentColor"
-							>
-								<path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3" />
-							</svg>
-						)}
-						{platform.icon === "aur" && (
-							<svg
-								width="15"
-								height="15"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							>
-								<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-								<polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-								<line x1="12" y1="22.08" x2="12" y2="12" />
-							</svg>
-						)}
-						{platform.icon === "blog" && (
-							<svg
-								width="15"
-								height="15"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							>
-								<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-								<polyline points="14 2 14 8 20 8" />
-								<line x1="16" y1="13" x2="8" y2="13" />
-								<line x1="16" y1="17" x2="8" y2="17" />
-								<polyline points="10 9 9 9 8 9" />
-							</svg>
-						)}
-						{platform.icon === "email" && (
-							<svg
-								width="15"
-								height="15"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							>
-								<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-								<polyline points="22,6 12,13 2,6" />
-							</svg>
-						)}
-					</span>
-
-					<span
-						class:list={[
-							"mono-label",
-							"text-[11px] leading-none",
-							"tracking-[var(--tracking-wider)]",
-							"text-[color:var(--color-ink-primary)]",
-							"font-semibold",
-						]}
-					>
-						{platform.eyebrow}
-					</span>
-
-					<span
-						class:list={[
-							"ml-auto",
-							"inline-flex flex-col items-end gap-0.5",
-						]}
-					>
-						<span
-							class:list={[
-								"mono-label",
-								"text-[9px] leading-none",
-								"tracking-[var(--tracking-wider)]",
-								"text-[color:var(--color-ink-muted)]",
-							]}
-						>
-							{platform.metricLabel}
-						</span>
-						<span
-							class:list={[
-								"font-[var(--font-mono)]",
-								"text-[13px] leading-none",
-								"text-[color:var(--color-ink-secondary)]",
-								"font-semibold",
-								"tabular-nums",
-								"truncate max-w-[14ch]",
-							]}
-						>
-							{platform.metricValue}
-						</span>
-					</span>
-				</div>
-
-				{/* 描述 */}
-				<p
-					class:list={[
-						"text-[color:var(--color-ink-secondary)]",
-						"text-[13.5px] sm:text-[14px]",
-						"leading-[1.6]",
-						"mb-5",
-						"flex-1",
-					]}
-				>
-					{platform.description}
+				<p class="mt-6 text-[26px] font-semibold leading-none tracking-[-0.035em] text-[color:var(--color-ink-primary)]">
+					{settings.siteName}
+				</p>
+				<p class="mt-2 text-[13.5px] leading-[1.55] text-[color:var(--color-ink-tertiary)]">
+					{C.profileKind} · {tagline}
 				</p>
 
-				{/* CTA 按钮(满宽) */}
-				<a
-					href={platform.ctaHref}
-					target={platform.external ? "_blank" : undefined}
-					rel={platform.external ? "noopener noreferrer" : undefined}
-					class:list={[
-						"group",
-						"inline-flex items-center justify-center gap-2",
-						"w-full",
-						"h-9",
-						"border border-[color:var(--color-hairline-strong)]",
-						"rounded-[var(--radius-sm)]",
-						"mono-label",
-						"text-[11px] leading-none",
-						"tracking-[var(--tracking-wider)]",
-						"text-[color:var(--color-ink-primary)]",
-						"hover:bg-[color:var(--color-ink-primary)]",
-						"hover:text-[color:var(--color-paper)]",
-						"hover:border-[color:var(--color-ink-primary)]",
-						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-					]}
-				>
-					<span>{platform.cta}</span>
-					<svg
-						aria-hidden="true"
-						width="10"
-						height="10"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2.5"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						class:list={[
-							"shrink-0",
-							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-							platform.external
-								? "group-hover:translate-x-[1px] group-hover:-translate-y-[1px]"
-								: "group-hover:translate-x-[2px]",
-						]}
-					>
-						{platform.external ? (
-							<>
-								<path d="M7 17L17 7" />
-								<path d="M8 7h9v9" />
-							</>
-						) : (
-							<>
-								<path d="M5 12h14" />
-								<path d="m12 5 7 7-7 7" />
-							</>
-						)}
-					</svg>
-				</a>
+				<dl class="mt-6 m-0 border-t border-[color:var(--color-hairline)]">
+					{settings.focus && (
+						<div class="flex items-baseline justify-between gap-4 py-3 border-b border-[color:var(--color-hairline)]">
+							<dt class="mono-label text-[10px]">{C.profileFocus}</dt>
+							<dd class="m-0 text-right font-[var(--font-mono)] text-[11.5px] text-[color:var(--color-ink-primary)]">{settings.focus}</dd>
+						</div>
+					)}
+					{topLanguages.length > 0 && (
+						<div class="py-3 border-b border-[color:var(--color-hairline)]">
+							<dt class="mono-label text-[10px]">{C.profileStack}</dt>
+							<dd class="m-0 mt-3 space-y-2">
+								{topLanguages.map((lg) => (
+									<div class="grid grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)_3rem] items-center gap-x-3">
+										<span class="flex min-w-0 items-center gap-2">
+											<span aria-hidden="true" class="h-1.5 w-1.5 shrink-0 rounded-full" style={`background-color: ${lg.color};`}></span>
+											<span class="truncate font-[var(--font-mono)] text-[11.5px] text-[color:var(--color-ink-primary)]">{lg.name}</span>
+										</span>
+										<span class="meter" aria-hidden="true">
+											<span data-animate style={`width: ${lg.percent}%; background: ${lg.color};`}></span>
+										</span>
+										<span class="text-right font-[var(--font-mono)] text-[11px] tabular-nums text-[color:var(--color-ink-secondary)]">
+											{lg.percent.toFixed(1)}%
+										</span>
+									</div>
+								))}
+							</dd>
+						</div>
+					)}
+				</dl>
+
+				<p class="mt-5 flex items-center gap-2 font-[var(--font-mono)] text-[11px] uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-secondary)]">
+					<span class="dot-live" aria-hidden="true"></span>
+					{C.profileStatus}
+				</p>
 			</div>
-		))}
-	</div>
+		</aside>
+	</PageHero>
 
-	{/* ---------- STACK 分区(语言占比条) ---------- */}
-	<SectionHeader eyebrow={C.sectionStack} spacious />
+	{/* ================= 01 概述 ================= */}
+	<CvSection index="01" label={C.sectionAbout} sublabel={C.sectionAboutSub} note={C.sectionAboutNote}>
+		<div class="reveal-scroll">
+			<p class="max-w-[34ch] text-[22px] lg:text-[28px] font-medium leading-[1.4] tracking-[-0.02em] text-[color:var(--color-ink-primary)] text-balance">
+				<span class="font-semibold">{settings.siteName}</span>
+				<span class="text-[color:var(--color-ink-tertiary)]">{" — "}{tagline}.</span>
+			</p>
 
-	<div class="mt-6 lg:mt-8">
-		<p
-			class:list={[
-				"text-[color:var(--color-ink-secondary)]",
-				"text-[14px]",
-				"leading-[1.65]",
-				"max-w-[68ch]",
-				"mb-6",
-			]}
-		>
-			{C.stackBody}
-		</p>
-
-		{/* 横向语言占比条 */}
-		<div
-			class:list={[
-				"w-full",
-				"h-2.5",
-				"flex overflow-hidden",
-				"border border-[color:var(--color-hairline)]",
-				"rounded-[var(--radius-sm)]",
-				"bg-[color:var(--color-paper-muted)]",
-			]}
-			role="img"
-			aria-label={lang === "zh" ? "语言占比条" : "Language distribution"}
-		>
-			{languageStats.map((lg) => (
-				<span
-					style={`width: ${lg.percent}%; background-color: ${lg.color};`}
-					class="h-full inline-block"
-					title={`${lg.name}: ${lg.percent}%`}
-				></span>
-			))}
+			<div class="mt-8 grid gap-6 lg:gap-10 md:grid-cols-2 text-[15px] lg:text-[15.5px] leading-[1.8] text-[color:var(--color-ink-secondary)]">
+				<p>{C.aboutBody1}</p>
+				<div class="space-y-4">
+					<p>{C.aboutBody2}</p>
+					<p>{C.aboutBody3}</p>
+				</div>
+			</div>
 		</div>
 
-		{/* 图例 */}
+		{/* 工程原则:三栏,超大键名 */}
+		<div class="mt-14 lg:mt-20">
+			<p class="mono-label text-[10.5px]">{C.principlesLabel}</p>
+			<ol class="mt-4 list-none m-0 p-0 grid grid-cols-1 sm:grid-cols-3 border-t border-[color:var(--color-hairline-strong)]">
+				{C.principles.map((p, idx) => (
+					<li
+						class="reveal-scroll group py-6 sm:py-8 sm:pr-6 border-b sm:border-b-0 sm:[&:not(:first-child)]:pl-6 sm:[&:not(:first-child)]:border-l border-[color:var(--color-hairline)]"
+						style={`--i: ${idx}`}
+					>
+						<span class="mono-num transition-colors duration-[var(--duration-fast)] group-hover:text-[color:var(--color-signal)]">
+							{pad2(idx + 1)} / {p.key}
+						</span>
+						<p class="display mt-5 text-[32px] lg:text-[40px] leading-none text-[color:var(--color-ink-primary)]">
+							{p.title}
+						</p>
+						<p class="mt-3 text-[13.5px] leading-[1.6] text-[color:var(--color-ink-tertiary)]">
+							{p.text}
+						</p>
+					</li>
+				))}
+			</ol>
+		</div>
+	</CvSection>
+
+	{/* ================= 02 数据:全宽 Bento ================= */}
+	<CvSection
+		index="02"
+		label={C.sectionNumbers}
+		sublabel={`${C.sectionNumbersSub} · ${pad2(numberStats.length)}`}
+		note={C.sectionNumbersNote}
+		layout="full"
+	>
 		<ul
 			class:list={[
-				"mt-4",
-				"grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4",
-				"gap-x-4 gap-y-2",
+				"about-stats reveal-scroll",
 				"list-none m-0 p-0",
+				"grid grid-cols-2 lg:grid-cols-12 gap-px",
+				"overflow-hidden rounded-[var(--radius-lg)]",
+				"border border-[color:var(--color-hairline)]",
+				"bg-[color:var(--color-hairline)]",
 			]}
 		>
-			{languageStats.map((lg) => (
-				<li class="flex items-center gap-2">
-					<span
-						aria-hidden="true"
-						class="inline-block h-2 w-2 rounded-full shrink-0"
-						style={`background-color: ${lg.color};`}
-					></span>
-					<span
+			{numberStats.map((stat, idx) => (
+				<li
+					class:list={[
+						"group relative flex flex-col bg-[color:var(--color-surface)] p-5 sm:p-6 lg:p-8",
+						CELL_CLASS[stat.cell],
+					]}
+				>
+					{stat.cell === "hero" && (
+						<div aria-hidden="true" class="about-stats-glow pointer-events-none absolute inset-0"></div>
+					)}
+					<div class="relative flex items-center justify-between gap-3">
+						<span class="mono-num text-[10.5px]" aria-hidden="true">N.{pad2(idx + 1)}</span>
+						<svg
+							width={stat.cell === "hero" ? 16 : 13}
+							height={stat.cell === "hero" ? 16 : 13}
+							viewBox="0 0 24 24"
+							aria-hidden="true"
+							class:list={[
+								"transition-colors duration-[var(--duration-base)] group-hover:text-[color:var(--color-signal)]",
+								stat.cell === "hero" ? "text-[color:var(--color-signal)]" : "text-[color:var(--color-ink-faint)]",
+							]}
+							{...iconAttrs(stat.icon)}
+							set:html={ICONS[stat.icon].svg}
+						/>
+					</div>
+
+					<p
 						class:list={[
-							"font-[var(--font-mono)]",
-							"text-[11px] leading-none",
-							"text-[color:var(--color-ink-secondary)]",
-							"truncate",
+							"relative m-0 mt-auto pt-8 font-semibold leading-[0.85] tabular-nums text-[color:var(--color-ink-primary)]",
+							NUMBER_SIZE[stat.cell],
 						]}
 					>
-						{lg.name}
-					</span>
-					<span
-						class:list={[
-							"ml-auto",
-							"font-[var(--font-mono)]",
-							"text-[11px] leading-none",
-							"text-[color:var(--color-ink-muted)]",
-							"tabular-nums",
-						]}
-					>
-						{lg.percent.toFixed(1)}%
-					</span>
+						{stat.raw !== null && stat.raw < COUNT_UP_MAX ? (
+							<>
+								<span class="count-up" aria-hidden="true" style={`--to: ${stat.raw}; --i: ${idx}`}></span>
+								<span class="sr-only">{stat.raw}</span>
+							</>
+						) : (
+							stat.value
+						)}
+					</p>
+
+					<p class="relative m-0 mt-4 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+						<span class="mono-label text-[10.5px] text-[color:var(--color-ink-secondary)]">{stat.label}</span>
+						<span class="font-[var(--font-mono)] text-[10.5px] text-[color:var(--color-ink-muted)]">/ {stat.sub}</span>
+					</p>
 				</li>
 			))}
 		</ul>
-	</div>
+	</CvSection>
 
-	{/* ---------- CONTACT 分区 ---------- */}
-	<SectionHeader eyebrow={C.sectionContact} spacious />
-
-	<div
-		class:list={[
-			"mt-6 lg:mt-8 mb-16",
-			"border border-dashed border-[color:var(--color-hairline)]",
-			"bg-[color:var(--color-paper-muted)]/30",
-			"px-5 sm:px-6 lg:px-8 py-6 lg:py-8",
-		]}
+	{/* ================= 03 社区 ================= */}
+	<CvSection
+		index="03"
+		label={C.sectionJoin}
+		sublabel={`${C.sectionJoinSub} · ${pad2(joinPlatforms.length)}`}
+		note={C.sectionJoinNote}
+		linkText={C.sectionJoinLink}
+		linkHref={`${githubUrl}/zerx-lab-website/discussions`}
 	>
-		<p
-			class:list={[
-				"text-[color:var(--color-ink-secondary)]",
-				"text-[14.5px]",
-				"leading-[1.7]",
-				"max-w-[64ch]",
-				"mb-5",
-			]}
-		>
-			{C.contactBody}
-		</p>
-
-		<div class="flex flex-wrap items-center gap-2">
-			{settings.socialEmail && (
-				<a
-					href={`mailto:${settings.socialEmail}`}
-					class:list={[
-						"inline-flex items-center justify-center gap-2",
-						"h-9 px-4",
-						"bg-[color:var(--color-ink-primary)]",
-						"text-[color:var(--color-paper)]",
-						"text-[12px] font-medium",
-						"tracking-[var(--tracking-wide)]",
-						"rounded-[var(--radius-sm)]",
-						"hover:opacity-85",
-						"transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-						"whitespace-nowrap",
-					]}
-				>
-					<svg
-						aria-hidden="true"
-						width="12"
-						height="12"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
+		<ul class="list-none m-0 p-0 grid grid-cols-1 sm:grid-cols-6 gap-3 lg:gap-4">
+			{joinPlatforms.map((platform, idx) => (
+				<li class:list={["reveal-scroll", platform.span]} style={`--i: ${idx}`}>
+					<a
+						href={platform.ctaHref}
+						target={platform.external ? "_blank" : undefined}
+						rel={platform.external ? "noopener noreferrer" : undefined}
+						data-spotlight
+						class="surface-card spotlight group flex h-full flex-col p-5 sm:p-6 min-h-[210px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-signal)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--color-paper)]"
 					>
-						<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-						<polyline points="22,6 12,13 2,6" />
-					</svg>
-					{C.contactPrimary}
-				</a>
+						<div class="flex items-start gap-3">
+							<span
+								aria-hidden="true"
+								class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--color-hairline)] bg-[color:var(--color-surface-raised)] text-[color:var(--color-ink-primary)] transition-colors duration-[var(--duration-base)] group-hover:border-[color:var(--signal-line)] group-hover:text-[color:var(--color-signal)]"
+							>
+								<svg width="15" height="15" viewBox="0 0 24 24" {...iconAttrs(platform.icon)} set:html={ICONS[platform.icon].svg} />
+							</span>
+							<span class="ml-auto flex flex-col items-end gap-1.5 text-right">
+								<span class="mono-label text-[9.5px] leading-none text-[color:var(--color-ink-muted)]">{platform.metricLabel}</span>
+								<span class="max-w-[14ch] truncate font-[var(--font-mono)] text-[18px] font-semibold leading-none tabular-nums tracking-[-0.02em] text-[color:var(--color-ink-primary)]">
+									{platform.metricValue}
+								</span>
+							</span>
+						</div>
+
+						<p class="mt-6 text-[22px] font-semibold leading-none tracking-[-0.03em] text-[color:var(--color-ink-primary)]">
+							{platform.eyebrow}
+						</p>
+						<p class="mt-3 flex-1 max-w-[46ch] text-[14px] leading-[1.6] text-[color:var(--color-ink-secondary)]">
+							{platform.description}
+						</p>
+
+						<span class="mt-5 flex items-center justify-between border-t border-[color:var(--color-hairline)] pt-4">
+							<span class="font-[var(--font-mono)] text-[11px] uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-primary)]">
+								{platform.cta}
+							</span>
+							<svg
+								aria-hidden="true"
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2.25"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class:list={[
+									"shrink-0 text-[color:var(--color-ink-tertiary)]",
+									"transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",
+									"group-hover:text-[color:var(--color-signal)]",
+									platform.external
+										? "group-hover:translate-x-[2px] group-hover:-translate-y-[2px]"
+										: "group-hover:translate-x-[3px]",
+								]}
+							>
+								{platform.external ? (
+									<>
+										<path d="M7 17L17 7" />
+										<path d="M8 7h9v9" />
+									</>
+								) : (
+									<>
+										<path d="M5 12h14" />
+										<path d="m12 5 7 7-7 7" />
+									</>
+								)}
+							</svg>
+						</span>
+					</a>
+				</li>
+			))}
+		</ul>
+
+		{/* 联络规格:邮箱 / GitHub / 回复时效(mono,便于复制) */}
+		<div class="reveal-scroll mt-6 lg:mt-8">
+			<SpecStrip items={contactSpec} />
+		</div>
+	</CvSection>
+
+	{/* ================= 04 技术栈:全宽 ================= */}
+	<CvSection
+		index="04"
+		label={C.sectionStack}
+		sublabel={`STACK · ${pad2(languageStats.length)} ${C.stackLanguages}`}
+		description={C.stackBody}
+		layout="full"
+		class="mb-8 lg:mb-16"
+	>
+		<div class="reveal-scroll grid gap-10 lg:gap-12 lg:grid-cols-12 lg:items-end">
+			{leadLanguage && (
+				<div class="lg:col-span-4">
+					<p class="mono-label text-[10.5px]">{C.stackLead}</p>
+					<p class="m-0 mt-4 font-semibold leading-[0.85] tracking-[-0.06em] tabular-nums text-[clamp(80px,11vw,160px)] text-[color:var(--color-ink-primary)]">
+						{leadLanguage.percent.toFixed(0)}<span class="text-[0.4em] tracking-[-0.03em] text-[color:var(--color-ink-tertiary)]">%</span>
+					</p>
+					<p class="mt-4 flex items-center gap-2 font-[var(--font-mono)] text-[13px] text-[color:var(--color-ink-primary)]">
+						<span aria-hidden="true" class="h-2.5 w-2.5 rounded-full" style={`background-color: ${leadLanguage.color};`}></span>
+						{leadLanguage.name}
+					</p>
+				</div>
 			)}
 
-			<a
-				href={`${settings.socialGithub}/zerx-lab-website/discussions`}
-				target="_blank"
-				rel="noopener noreferrer"
-				class:list={[
-					"inline-flex items-center justify-center gap-2",
-					"h-9 px-4",
-					"border border-[color:var(--color-hairline-strong)]",
-					"text-[color:var(--color-ink-primary)]",
-					"text-[12px] font-medium",
-					"tracking-[var(--tracking-wide)]",
-					"rounded-[var(--radius-sm)]",
-					"hover:bg-[color:var(--color-paper-muted)]",
-					"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-					"whitespace-nowrap",
-				]}
-			>
-				{C.contactSecondary}
-				<svg
-					aria-hidden="true"
-					width="10"
-					height="10"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2.5"
-					stroke-linecap="round"
-					stroke-linejoin="round"
+			<div class:list={[leadLanguage ? "lg:col-span-8" : "lg:col-span-12"]}>
+				{/* 堆叠色条:linguist 颜色,flex-grow 按占比分配,段间 2px 呼吸 */}
+				<div
+					class="about-stackbar flex h-4 w-full gap-[2px] overflow-hidden rounded-full bg-[color:var(--color-paper-subtle)]"
+					role="img"
+					aria-label={stackAriaLabel}
 				>
-					<path d="M7 17L17 7" />
-					<path d="M8 7h9v9" />
-				</svg>
-			</a>
-		</div>
+					{languageStats.map((lg) => (
+						<span
+							class="h-full min-w-[3px] first:rounded-l-full last:rounded-r-full transition-opacity duration-[var(--duration-fast)] hover:opacity-80"
+							style={`flex: ${lg.percent} 1 0%; background-color: ${lg.color};`}
+							title={`${lg.name}: ${lg.percent.toFixed(1)}%`}
+						></span>
+					))}
+				</div>
 
-		{/* 邮件地址以 Monospace 显示,方便复制 */}
-		{settings.socialEmail && (
-			<div
-				class:list={[
-					"mt-5 pt-4",
-					"border-t border-dashed border-[color:var(--color-hairline)]",
-					"flex items-center gap-3 flex-wrap",
-				]}
-			>
-				<span
-					class:list={[
-						"mono-label",
-						"text-[10px] leading-none",
-						"text-[color:var(--color-ink-muted)]",
-					]}
-				>
-					EMAIL
-				</span>
-				<code
-					class:list={[
-						"font-[var(--font-mono)]",
-						"text-[13px] leading-none",
-						"text-[color:var(--color-ink-primary)]",
-						"bg-transparent border-0 p-0",
-						"select-all",
-					]}
-				>
-					{settings.socialEmail}
-				</code>
+				{/* 图例:逐行编号 + 名称 + meter + 百分比 */}
+				<ol class="mt-6 list-none m-0 p-0 grid grid-cols-1 md:grid-cols-2 gap-x-10 border-t border-[color:var(--color-hairline)]">
+					{languageStats.map((lg, idx) => (
+						<li class="grid grid-cols-[2rem_minmax(0,9rem)_minmax(0,1fr)_3.75rem] items-center gap-x-3 py-3 border-b border-[color:var(--color-hairline)]">
+							<span class="mono-num">{pad2(idx + 1)}</span>
+							<span class="flex min-w-0 items-center gap-2">
+								<span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full" style={`background-color: ${lg.color};`}></span>
+								<span class="truncate font-[var(--font-mono)] text-[12px] text-[color:var(--color-ink-primary)]">{lg.name}</span>
+							</span>
+							<span class="meter" aria-hidden="true">
+								<span data-animate style={`width: ${lg.percent}%; background: ${lg.color};`}></span>
+							</span>
+							<span class="text-right font-[var(--font-mono)] text-[12px] tabular-nums text-[color:var(--color-ink-secondary)]">
+								{lg.percent.toFixed(1)}%
+							</span>
+						</li>
+					))}
+				</ol>
 			</div>
-		)}
-	</div>
+		</div>
+	</CvSection>
 </AppShell>
+
+<style>
+	/* 档案卡点阵只在右上角淡出 */
+	.about-profile-grid {
+		opacity: 0.55;
+		mask-image: radial-gradient(90% 70% at 100% 0%, #000 0%, transparent 60%);
+		-webkit-mask-image: radial-gradient(90% 70% at 100% 0%, #000 0%, transparent 60%);
+	}
+
+	/* Stars 巨型格:Signal 柔光,只作少量强调 */
+	.about-stats-glow {
+		background: radial-gradient(80% 60% at 0% 100%, var(--signal-soft), transparent 70%);
+	}
+
+	.about-stackbar {
+		transform-origin: left center;
+	}
+
+	/* 02 数据 / 04 色条:滚动进入视口时才开始计数与生长 */
+	@supports (animation-timeline: view()) {
+		.about-stats .count-up {
+			animation-timeline: view();
+			animation-range: entry 10% cover 35%;
+			animation-delay: 0s;
+			animation-duration: auto;
+		}
+
+		.about-stackbar {
+			animation: bar-grow linear both;
+			animation-timeline: view();
+			animation-range: entry 10% cover 35%;
+		}
+	}
+</style>

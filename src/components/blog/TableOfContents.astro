@@ -3,42 +3,21 @@
  * ============================================================================
  * TableOfContents - 博客文章目录(TOC)
  * ----------------------------------------------------------------------------
- * 视觉参考: better-auth.com 文章详情页右上 / 侧边目录
- *   - 极简 Monospace eyebrow + 虚线分割
- *   - 每条目录项前带层级缩进(H2 / H3 / H4 分三档)
- *   - 当前滚动位置对应的条目高亮(墨色 + 左侧短实线锚点)
- *   - 无圆角、无背景色,仅靠文字颜色与一条左侧锚线承担"当前态"
+ * Dossier 风格:mono 眉标 + 实线发丝;列表左侧一条细轨道,当前章节在轨道上
+ * 亮起 Signal 渐变竖条(scaleY 生长)并高亮文字。桌面端顶部额外一条阅读
+ * 进度线(CSS scroll-driven animation,不支持的浏览器直接隐藏)。
  *
- * 布局策略:
- *   桌面端 (≥ 1280px):作为文章右侧的 sticky 侧栏,独立滚动
- *   移动端 / 平板 (< 1280px):作为正文顶部的可折叠区块,默认展开
- *
- * 典型呈现(桌面):
- *   ──────────────────────
- *   在本页
- *   ──────────────────────
- *   │ 引言
- *   │   为什么要做这个        ← 当前激活(墨色 + 左锚线)
- *   │ 技术栈
- *   │   Astro 6
- *   │   Tailwind v4
- *   │ 约定
- *   ──────────────────────
+ * 布局:
+ *   桌面端 (≥ lg):文章网格右栏 sticky(sticky 与顶部让位由外层 wrapper 负责),
+ *                  高度受限、独立滚动
+ *   < lg:正文上方的可折叠卡片(默认折叠)
  *
  * 用法:
- *   <TableOfContents
- *     headings={[
- *       { depth: 2, text: "引言", slug: "intro" },
- *       { depth: 3, text: "为什么要做这个", slug: "why" },
- *       { depth: 2, text: "技术栈", slug: "stack" },
- *     ]}
- *   />
+ *   <TableOfContents headings={headings} defaultOpen />
  *
- * 设计约束:
- *   - 只展示 H2 / H3(默认);H4 可通过 maxDepth=4 选项启用
- *   - H1 通常是文章标题本身,不应出现在 TOC(渲染器也不会把 H1 放进 headings)
- *   - 当条目为 0 时整个组件自动隐藏,不占位
- *   - 滚动高亮靠 IntersectionObserver,纯客户端,不阻塞首屏渲染
+ * 约束:
+ *   - 默认 H2 / H3;maxDepth=4 可启用 H4;条目为 0 时整体不渲染
+ *   - 激活态由脚本写 <a data-toc-link> 的 data-active="true",样式只读属性
  * ============================================================================
  */
 
@@ -59,7 +38,7 @@ interface Props {
 	 *
 	 * 说明:移动端默认折叠更友好 —— 目录会把正文推到屏幕下方,
 	 * 而手机上用户通常是顺序阅读,不需要一上来就看到完整目录。
-	 * 桌面端(xl+)通过 CSS 强制展开,不受此 prop 影响。
+	 * 桌面端(lg+)通过 CSS 强制展开,不受此 prop 影响。
 	 */
 	defaultOpen?: boolean;
 	/** 额外类名 */
@@ -140,7 +119,7 @@ const shouldRender = items.length > 0;
 
 // sticky 顶部偏移:默认 = 顶部导航高度 + 一点呼吸
 const resolvedStickyTop =
-	stickyTopOffset ?? "calc(var(--layout-top-nav-height) + 1.25rem)";
+	stickyTopOffset ?? "calc(var(--layout-top-nav-height) + 1rem)";
 ---
 
 {
@@ -150,10 +129,13 @@ const resolvedStickyTop =
 			class:list={[
 				"toc",
 				"w-full",
-				// 桌面端:高度限制 + 独立滚动(sticky 定位由外部包裹 div 负责)
+				// < lg:折叠卡片
+				"max-lg:rounded-[var(--radius-lg)] max-lg:border max-lg:border-[color:var(--color-hairline)]",
+				"max-lg:bg-[color:var(--color-surface)] max-lg:px-4 max-lg:py-1.5",
+				// 桌面端:高度限制 + 独立滚动
 				"lg:max-h-[calc(100vh-var(--layout-top-nav-height)-2rem)]",
 				"lg:overflow-y-auto lg:overscroll-contain",
-				"lg:scroll-thin",
+				"scroll-thin",
 				className,
 			]}
 			style={`--toc-sticky-top: ${resolvedStickyTop};`}
@@ -167,38 +149,18 @@ const resolvedStickyTop =
 				<summary
 					class:list={[
 						"toc-summary",
-						"flex items-center justify-between",
-						"gap-3",
-						"py-2",
-						"cursor-pointer select-none",
-						"list-none",
-						// 桌面端:这个 summary 仍然可见,但不承担"折叠"语义(details 恒开)
-						"xl:cursor-default",
+						"flex items-center justify-between gap-3",
+						"py-2.5 lg:pt-0.5 lg:pb-3",
+						"cursor-pointer select-none list-none",
+						"lg:cursor-default",
 					]}
 				>
-					<span
-						class:list={[
-							"mono-label",
-							"text-[10.5px] sm:text-[11px]",
-							"leading-none",
-							"tracking-[var(--tracking-wider)]",
-							"text-[color:var(--color-ink-secondary)]",
-							"font-medium",
-						]}
-					>
+					<span class="eyebrow text-[10.5px] text-[color:var(--color-ink-secondary)]">
 						{resolvedEyebrow}
 					</span>
 
-					{/* 右侧:条目总数 + 折叠箭头(仅非桌面端显示箭头) */}
 					<span class="flex items-center gap-2">
-						<span
-							class:list={[
-								"mono-num",
-								"text-[10px]",
-								"tabular-nums",
-								"text-[color:var(--color-ink-muted)]",
-							]}
-						>
+						<span class="mono-num text-[10.5px] leading-none">
 							{String(items.length).padStart(2, "0")}
 						</span>
 						<svg
@@ -215,9 +177,7 @@ const resolvedStickyTop =
 								"toc-chevron",
 								"shrink-0",
 								"text-[color:var(--color-ink-tertiary)]",
-								"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-								// 桌面端隐藏箭头(details 默认展开,不可交互)
-								"xl:hidden",
+								"lg:hidden",
 							]}
 						>
 							<path d="m6 9 6 6 6-6" />
@@ -225,19 +185,17 @@ const resolvedStickyTop =
 					</span>
 				</summary>
 
-				{/* 分割线 */}
-				<hr
-					aria-hidden="true"
-					class="border-0 border-t border-dashed border-[color:var(--color-hairline)] my-2"
-				/>
+				{/* 分割线 + 阅读进度(桌面) */}
+				<div class="toc-rule" aria-hidden="true">
+					<span class="toc-progress"></span>
+				</div>
 
-				{/* 目录列表 */}
 				<ol
 					class:list={[
 						"toc-list",
-						"flex flex-col",
+						"relative flex flex-col",
 						"list-none m-0 p-0",
-						"py-1",
+						"mt-3 mb-2",
 					]}
 					data-toc-list
 				>
@@ -257,36 +215,19 @@ const resolvedStickyTop =
 								class:list={[
 									"toc-link",
 									"relative block",
-									"py-1.5",
-									"pr-2",
-									// 缩进靠 padding-left,通过 data attribute 区分档位
-									item.indent === 0 && "pl-3",
+									"py-[5px] pr-2",
+									item.indent === 0 && "pl-3.5",
 									item.indent === 1 && "pl-6",
-									item.indent === 2 && "pl-9",
-									"text-[12.5px] sm:text-[13px]",
-									"leading-[1.45]",
-									"tracking-[-0.005em]",
+									item.indent === 2 && "pl-8",
 									item.indent === 0
-										? "text-[color:var(--color-ink-secondary)]"
-										: "text-[color:var(--color-ink-tertiary)]",
-									"hover:text-[color:var(--color-ink-primary)]",
-									"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-									// 文本截断,避免超长标题破坏布局
+										? "text-[13px] text-[color:var(--color-ink-secondary)]"
+										: "text-[12.5px] text-[color:var(--color-ink-tertiary)]",
+									"leading-[1.45] tracking-[-0.005em]",
 									"truncate",
 								]}
 								title={item.text}
 							>
-								<span
-									aria-hidden="true"
-									class:list={[
-										"toc-link__marker",
-										"absolute",
-										"left-0 top-1/2 -translate-y-1/2",
-										"w-[2px] h-[10px]",
-										"bg-transparent",
-										"transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-									]}
-								/>
+								<span aria-hidden="true" class="toc-link__marker" />
 								{item.text}
 							</a>
 						</li>
@@ -298,122 +239,157 @@ const resolvedStickyTop =
 }
 
 <style>
-	/* ----------------------------------------------------------------------------
-	 * sticky 顶部偏移
-	 * --------------------------------------------------------------------------
-	 * 通过 CSS 变量 --toc-sticky-top 驱动,默认对齐右栏 TopNav 高度。
-	 * -------------------------------------------------------------------------- */
-
-	.toc {
-		/* sticky 定位已移至外部包裹 div;这里仅保留变量声明供外部引用 */
-	}
-
-	/* ----------------------------------------------------------------------------
-	 * <summary> 默认的三角符号隐藏 —— 我们使用自定义 chevron 图标
-	 * -------------------------------------------------------------------------- */
-
+	/* ---------- summary:隐藏原生三角 ---------- */
 	.toc-summary::-webkit-details-marker {
 		display: none;
 	}
-
 	.toc-summary::marker {
 		content: "";
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 展开态:chevron 旋转
-	 * -------------------------------------------------------------------------- */
-
+	.toc-chevron {
+		transition: transform var(--duration-base) var(--ease-out-expo);
+	}
 	.toc-details[open] .toc-chevron {
 		transform: rotate(180deg);
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 桌面端强制展开(details 在 xl 断点下忽略 open 状态,始终展开)
-	 * --------------------------------------------------------------------------
-	 * 技术细节:<details> 的折叠靠 open 属性,CSS 无法直接强制其内容展开。
-	 * 但我们可以用 ::details-content 未被广泛支持,这里采用"视觉覆盖"方案:
-	 * 当 viewport 达到 xl 时,把内容显式 display: block,
-	 * 同时把 summary 的 cursor 取消(上面已经处理)。
-	 * -------------------------------------------------------------------------- */
-
+	/* ---------- 桌面端强制展开 ----------
+	 * 新版 Chromium 把 details 内容放进 ::details-content(closed 时
+	 * content-visibility: hidden),需一并放开;两条规则分开写,避免
+	 * 不认识该伪元素的浏览器丢弃整条规则。 */
 	@media (min-width: 1024px) {
 		.toc-details > :not(.toc-summary) {
 			display: block !important;
 		}
+		.toc-details::details-content {
+			content-visibility: visible;
+			block-size: auto;
+		}
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 激活态(当前滚动到的章节)
-	 * --------------------------------------------------------------------------
-	 * 通过 JS 给命中的 <a data-toc-link="xxx"> 加 data-active="true";
-	 * 样式靠属性选择器,不依赖 JS 手动改 class。
-	 * -------------------------------------------------------------------------- */
+	/* ---------- 分割线 + 阅读进度 ---------- */
+	.toc-rule {
+		position: relative;
+		height: 1px;
+		background-color: var(--color-hairline);
+		overflow: hidden;
+	}
+	.toc-progress {
+		display: none;
+		position: absolute;
+		inset: 0;
+		background: var(--gradient-signal);
+		transform-origin: 0 50%;
+		transform: scaleX(0);
+	}
+	@supports (animation-timeline: scroll()) {
+		@media (min-width: 1024px) {
+			.toc-progress {
+				display: block;
+				animation: toc-progress linear both;
+				animation-timeline: scroll(root block);
+			}
+		}
+	}
+	@keyframes toc-progress {
+		to {
+			transform: scaleX(1);
+		}
+	}
 
-	.toc-link[data-active="true"] {
+	/* ---------- 左侧轨道 ---------- */
+	.toc-list::before {
+		content: "";
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		width: 1px;
+		background-color: var(--color-hairline);
+	}
+
+	/* ---------- 条目 ---------- */
+	.toc-link {
+		transition:
+			color var(--duration-fast) var(--ease-standard),
+			opacity var(--duration-fast) var(--ease-standard);
+	}
+	.toc-link:hover {
 		color: var(--color-ink-primary);
-		font-weight: 500;
+	}
+	.toc-link:focus-visible {
+		outline: 2px solid var(--color-signal);
+		outline-offset: -2px;
+		border-radius: var(--radius-sm);
 	}
 
-	.toc-link[data-active="true"] .toc-link__marker {
-		background-color: var(--color-ink-primary);
-	}
-
-	/* 暗色模式下,激活态的左侧锚线反相(随 --color-ink-primary 自动切换) */
-
-	/* ----------------------------------------------------------------------------
-	 * 条目缩进档位(三档:0 / 1 / 2)
-	 * --------------------------------------------------------------------------
-	 * 已经用 Tailwind utility 控制 padding-left,这里额外给最深层级
-	 * 一个额外的左侧点缀符,提高层级可读性。
-	 * -------------------------------------------------------------------------- */
-
+	/* 子层级的细刻度 */
 	.toc-item--indent-1 > .toc-link::before,
 	.toc-item--indent-2 > .toc-link::before {
 		content: "";
 		position: absolute;
 		top: 50%;
-		width: 8px;
+		width: 6px;
 		height: 1px;
 		background: var(--color-hairline-strong);
-		transform: translateY(-50%);
-		transition: background-color var(--duration-fast) var(--ease-standard);
 	}
-
 	.toc-item--indent-1 > .toc-link::before {
 		left: 12px;
 	}
-
 	.toc-item--indent-2 > .toc-link::before {
-		left: 24px;
+		left: 20px;
 	}
 
+	/* ---------- 激活态:Signal 竖条落在轨道上 + 文字高亮 ---------- */
+	.toc-link__marker {
+		position: absolute;
+		left: 0;
+		top: 3px;
+		bottom: 3px;
+		width: 2px;
+		border-radius: 2px;
+		background: linear-gradient(
+			180deg,
+			var(--color-signal),
+			var(--color-signal-2)
+		);
+		opacity: 0;
+		transform: scaleY(0.2);
+		transition:
+			transform var(--duration-slow) var(--ease-out-expo),
+			opacity var(--duration-base) var(--ease-standard);
+	}
+	.toc-link[data-active="true"] {
+		color: var(--color-ink-primary);
+	}
+	.toc-link[data-active="true"] .toc-link__marker {
+		opacity: 1;
+		transform: scaleY(1);
+	}
 	.toc-link[data-active="true"]::before {
-		background: var(--color-ink-primary);
+		background: var(--color-signal);
 	}
-
-	/* ----------------------------------------------------------------------------
-	 * 动效可访问性兜底
-	 * -------------------------------------------------------------------------- */
 
 	@media (prefers-reduced-motion: reduce) {
 		.toc-chevron,
 		.toc-link,
-		.toc-link__marker,
-		.toc-link::before {
+		.toc-link__marker {
 			transition: none !important;
+		}
+		.toc-progress {
+			display: none !important;
 		}
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 自定义细滚动条(仅 toc 内部)
-	 * -------------------------------------------------------------------------- */
-
+	/* ---------- 细滚动条(仅 toc 内部) ---------- */
 	.toc.scroll-thin {
 		scrollbar-width: thin;
+		scrollbar-color: transparent transparent;
+	}
+	.toc.scroll-thin:hover {
 		scrollbar-color: var(--color-hairline-strong) transparent;
 	}
-
 	.toc.scroll-thin::-webkit-scrollbar {
 		width: 6px;
 	}

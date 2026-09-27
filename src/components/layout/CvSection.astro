@@ -1,0 +1,145 @@
+---
+/**
+ * ============================================================================
+ * CvSection - 简历式分节
+ * ----------------------------------------------------------------------------
+ *   ────────────────────────────────────────────────────────────────── (发丝线)
+ *   01 ──                     │  可选大标题
+ *   精选作品                   │  可选描述
+ *   SELECTED WORK             │
+ *   短注记……                   │  <slot />  内容
+ *   全部项目 →                 │
+ *   (lg 起左栏吸顶)            │
+ *
+ * - 左栏 3/12:章节号(Signal)、中文/英文标题、注记、链接;lg 起 sticky
+ * - 右栏 9/12:内容;layout="full" 时标题栏横排在上方,内容跨满 12 列(宽表格用)
+ * - 顶部发丝线进入视口时从左生长(scroll-driven,渐进增强)
+ * ============================================================================
+ */
+
+interface Props {
+	/** 章节号,如 "01" */
+	index?: string;
+	/** 章节名(主语言) */
+	label: string;
+	/** 副标签(mono 大写,如英文名或计数) */
+	sublabel?: string;
+	/** 左栏短注记 */
+	note?: string;
+	/** 左栏链接 */
+	linkText?: string;
+	linkHref?: string;
+	/** 右栏顶部大标题 */
+	title?: string;
+	/** 右栏顶部描述 */
+	description?: string;
+	/** 布局:split(默认,左栏吸顶)/ full(标题在上,内容全宽) */
+	layout?: "split" | "full";
+	/** 锚点 */
+	id?: string;
+	/** 额外类名 */
+	class?: string;
+}
+
+const {
+	index,
+	label,
+	sublabel,
+	note,
+	linkText,
+	linkHref,
+	title,
+	description,
+	layout = "split",
+	id,
+	class: className = "",
+} = Astro.props;
+
+const external = typeof linkHref === "string" && /^https?:\/\//i.test(linkHref);
+const full = layout === "full";
+---
+
+<section id={id} class:list={["cv-section wrap mt-20 lg:mt-32", className]} aria-label={label}>
+	<div class="relative pt-8 lg:pt-10">
+		<span aria-hidden="true" class="cv-section__rule absolute inset-x-0 top-0 h-px bg-[color:var(--color-hairline-strong)]"></span>
+
+		<div class:list={["grid gap-x-10 gap-y-8", !full && "lg:grid-cols-12"]}>
+			<header
+				class:list={[
+					full ? "flex flex-wrap items-end justify-between gap-x-8 gap-y-4" : "lg:col-span-3 lg:sticky lg:top-[calc(var(--layout-top-nav-height)+1rem)] lg:self-start",
+				]}
+			>
+				<div>
+					{index && (
+						<div class="flex items-center gap-3 font-[var(--font-mono)] text-[11px] leading-none tabular-nums">
+							<span class="font-medium text-[color:var(--color-signal)]">{index}</span>
+							<span aria-hidden="true" class="h-px w-6 bg-[color:var(--color-hairline-strong)]"></span>
+						</div>
+					)}
+					<h2 class:list={["text-[22px] lg:text-[24px] font-semibold tracking-[-0.03em] leading-tight", index && "mt-4"]}>{label}</h2>
+					{sublabel && (
+						<p class="mt-1.5 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">{sublabel}</p>
+					)}
+					{note && (
+						<p class="mt-4 max-w-[30ch] text-[13.5px] leading-[1.65] text-[color:var(--color-ink-tertiary)]">{note}</p>
+					)}
+				</div>
+
+				{linkText && linkHref && (
+					<a
+						href={linkHref}
+						target={external ? "_blank" : undefined}
+						rel={external ? "noopener noreferrer" : undefined}
+						class:list={[
+							"group inline-flex items-center gap-2 font-[var(--font-mono)] text-[11px] uppercase tracking-[var(--tracking-wider)]",
+							"text-[color:var(--color-ink-secondary)] hover:text-[color:var(--color-ink-primary)]",
+							!full && "mt-6",
+						]}
+					>
+						<span class="link-underline">{linkText}</span>
+						<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)] group-hover:translate-x-[3px] text-[color:var(--color-signal)]">
+							{external ? (
+								<>
+									<path d="M7 17L17 7" />
+									<path d="M8 7h9v9" />
+								</>
+							) : (
+								<>
+									<path d="M5 12h14" />
+									<path d="m12 5 7 7-7 7" />
+								</>
+							)}
+						</svg>
+					</a>
+				)}
+			</header>
+
+			<div class:list={["min-w-0", !full && "lg:col-span-9"]}>
+				{(title || description) && (
+					<div class="mb-10">
+						{title && <h3 class="display text-[28px] sm:text-[34px] lg:text-[40px] max-w-[22ch]">{title}</h3>}
+						{description && <p class="mt-4 max-w-[62ch] text-[15px] leading-[1.7] text-[color:var(--color-ink-secondary)]">{description}</p>}
+					</div>
+				)}
+				<slot />
+			</div>
+		</div>
+	</div>
+</section>
+
+<style>
+	@supports (animation-timeline: view()) {
+		.cv-section__rule {
+			transform-origin: left center;
+			animation: cv-rule linear backwards;
+			animation-timeline: view();
+			animation-range: entry 0% entry 90%;
+		}
+	}
+
+	@keyframes cv-rule {
+		from {
+			transform: scaleX(0);
+		}
+	}
+</style>

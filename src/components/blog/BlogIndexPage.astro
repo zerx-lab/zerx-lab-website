@@ -8,36 +8,35 @@
  *   (blog/index、blog/page/[page]、blog/cat/[cat]/index、
  *    blog/cat/[cat]/page/[page] × 2 语言)全部复用同一套渲染逻辑,
  *   路由文件只负责用 getStaticPaths 枚举参数,再把 lang/page/categorySlug
- *   转成 props 传进来。
+ *   转成 props 传进来。纯 props 驱动(不读 Astro.url.searchParams)。
  *
- * 纯 props 驱动(不读 Astro.url.searchParams):
- *   - lang / page / categorySlug 全部由调用方(路由文件)在构建期算好传入
- *   - 分页与分类筛选因此变成"构建期已知的静态路径",不再是运行时查询参数
+ * 版式:
+ *
+ *   PageHero   超大标题 + 描述 | aside: BlogMark(写作分布)
+ *              SpecStrip: POSTS / CATEGORIES / LAST UPDATE / RSS
+ *   ─────────────────────────────────────────────────────────────
+ *   Dock       吸顶工具条(悬浮导航下方):分类分段控件 | 视图区间 | 搜索
+ *   ─────────────────────────────────────────────────────────────
+ *   01 精选    (仅第 1 页)封面式 Bento:1 张全宽 split / 2 张 7+5 / 3 张 7 + 5×2
+ *              没有精选时用最新一篇
+ *   02 履历    按月分组:左 3/12 吸顶超大月份,右 9/12 时间线行
+ *   分页       三栏翻页带
  *
  * 搜索:
- *   - 服务端不再做任何搜索相关的数据获取或高亮
  *   - 客户端搜索由 BlogSearchBox 接管:输入词后 fetch 静态索引
  *     (/search/<lang>.json),在浏览器里过滤 + 高亮,接管本组件渲染的
  *     #post-grid / #search-results / #search-empty / #blog-pagination /
  *     #blog-category-tabs 这五个固定 id 容器的可见性
+ *   - 搜索视图 .blog-search-view 自身不被脚本触碰:用 :has() 跟随
+ *     #search-results / #search-empty 的 hidden 状态显示;结果数用 CSS 计数器
  *
- * 左栏 meta 字段说明:
- *   - POSTS        全站已发布文章总数(始终显示全量,不随分类筛选变化)
- *   - CATEGORIES   分类总数(来自 loadCounts(),含尚无文章的分类)
- *   - LAST UPDATE  全站最新文章的发布日期(与当前分页/分类视图解耦)
- *   - RSS          /rss.xml 外链
- *
- * 分页:
- *   - 每页 PAGE_SIZE = 10 篇
- *   - 路径式分页:第 1 页 = 干净路径,第 N 页 = `.../page/N/`
- *     (具体拼接见 Pagination 组件,由调用方传入 basePath)
- *   - 单页时不渲染 Pagination(组件内部已处理)
+ * 分页:每页 PAGE_SIZE = 10 篇;第 1 页 = 干净路径,第 N 页 = `.../page/N/`
  * ============================================================================
  */
 
 import AppShell from "@layouts/AppShell.astro";
-
-import MetaRow from "@components/ui/MetaRow.astro";
+import PageHero from "@components/layout/PageHero.astro";
+import type { SpecItem } from "@components/layout/SpecStrip.astro";
 import PostCard from "@components/ui/PostCard.astro";
 import Pagination from "@components/ui/Pagination.astro";
 import BlogMark from "@components/ui/BlogMark.astro";
@@ -76,8 +75,7 @@ const hasCatFilter = activeCatSlug.length > 0;
  * 拉取数据
  * ----------------------------------------------------------------------------
  * 额外单独拉一次"全站第 1 页第 1 条"(不带分类筛选)只为拿到全站真实的最新
- * 发布日期 —— LAST UPDATE 是"站点属性",必须与当前分页/分类视图解耦,
- * 不能直接用 posts[0](分类筛选或翻页后 posts[0] 不是全站最新文章)。
+ * 发布日期 —— LAST UPDATE 是"站点属性",必须与当前分页/分类视图解耦。
  * -------------------------------------------------------------------------- */
 
 const [pageResult, categoryCounts, categoriesList, siteCounts, latestPageResult] =
@@ -97,37 +95,90 @@ const [pageResult, categoryCounts, categoriesList, siteCounts, latestPageResult]
 const posts: readonly PostVM[] = pageResult.items;
 
 /* ----------------------------------------------------------------------------
- * 左栏 meta 数据计算
- * ----------------------------------------------------------------------------
- * POSTS:有分类筛选时仍展示全站总数(categoryCounts.total),保持"站点属性"
- * 语义;无筛选时就是 pageResult.total(两者其实同值,写法上更直白)。
+ * 规格条数据(站点属性,不随分类筛选变化)
  * -------------------------------------------------------------------------- */
 
 const postCount = hasCatFilter ? categoryCounts.total : pageResult.total;
 const categoryCount = siteCounts.categories;
 const latestPostDate = latestPageResult.items[0]?.date ?? null;
-const lastUpdateText = latestPostDate ? formatDateCompact(latestPostDate) : "—";
+const lastUpdateText = latestPostDate
+	? formatDateCompact(latestPostDate).replaceAll("-", ".")
+	: "—";
+
+const rssHref = tp("/rss.xml");
+
+const spec: SpecItem[] = [
+	{ label: t("meta.posts"), count: postCount },
+	{ label: t("meta.categories"), count: categoryCount },
+	{ label: t("meta.lastUpdate"), value: lastUpdateText, live: latestPostDate !== null },
+	{ label: t("meta.rss"), value: "rss.xml", href: rssHref },
+];
 
 /* ----------------------------------------------------------------------------
- * 页面级文案(本页不通过 i18n 字典管理,因为是单页专属)
+ * 页面级文案
  * -------------------------------------------------------------------------- */
+
+const MONTHS_EN = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+const MONTHS_EN_LONG = [
+	"January", "February", "March", "April", "May", "June",
+	"July", "August", "September", "October", "November", "December",
+];
 
 const PAGE_COPY = {
 	zh: {
 		eyebrow: "博客",
 		title: "文章、发布与洞见",
+		titleLead: "文章、发布与",
+		titleAccent: "洞见",
 		description:
 			"记录构建过程、技术决策与开源探索。不追热点,只写能帮到明年自己的东西。",
 		empty: "还没有文章,敬请期待。",
-		sectionTitle: "BLOG",
+		featured: "精选",
+		latest: "最新",
+		spotlightNote: "值得先读的几篇。",
+		latestNote: "最近发布的一篇。",
+		archive: "写作履历",
+		archiveSub: "ARCHIVE",
+		archiveNote: "按发布时间倒序,按月归档。",
+		monthLabel: (y: string, m: number) => `${y} 年 ${m} 月`,
+		monthShort: (m: number) => `${m} 月`,
+		postsUnit: "篇",
+		viewAll: "全部",
+		viewRange: "本页",
+		searchScope: "搜索全部文章 · 忽略分类与分页",
+		results: "搜索结果",
+		resultsSub: "RESULTS",
+		resultsNote: "覆盖全部分类与页码;清空输入或按 Esc 返回列表。",
+		hits: "条命中",
+		noResults: "NO RESULTS",
 	},
 	en: {
 		eyebrow: "Blog",
 		title: "Articles, releases, and insights",
+		titleLead: "Articles, releases, and ",
+		titleAccent: "insights",
 		description:
 			"Notes on what I build, the decisions behind them, and open-source explorations. No hot takes — only things that will help future me.",
 		empty: "No posts yet. Stay tuned.",
-		sectionTitle: "BLOG",
+		featured: "Featured",
+		latest: "Latest",
+		spotlightNote: "Worth reading first.",
+		latestNote: "The most recent post.",
+		archive: "Writing log",
+		archiveSub: "ARCHIVE",
+		archiveNote: "Newest first, filed by month.",
+		monthLabel: (y: string, m: number) =>
+			`${MONTHS_EN_LONG[m - 1] ?? ""} ${y}`,
+		monthShort: (m: number) => MONTHS_EN[m - 1] ?? "",
+		postsUnit: "posts",
+		viewAll: "All",
+		viewRange: "Showing",
+		searchScope: "Searching all posts · ignores category & page",
+		results: "Search results",
+		resultsSub: "RESULTS",
+		resultsNote: "Across every category and page. Clear the input or press Esc to go back.",
+		hits: "hits",
+		noResults: "NO RESULTS",
 	},
 } as const;
 
@@ -136,38 +187,73 @@ const copy = PAGE_COPY[lang] ?? PAGE_COPY.zh;
 /* ----------------------------------------------------------------------------
  * 分组策略
  * ----------------------------------------------------------------------------
- *   - 第 1 页(无论是否有分类筛选):featured 排前,其余按日期降序
- *   - 第 2+ 页:featured 不再强调,直接按日期排(避免跨页重复置顶)
+ *   - 第 1 页:本页的精选(最多 3 篇)进 Bento;本页没有精选时用最新一篇
+ *   - 其余文章按日期降序进履历,按"年-月"分组
+ *   - 第 2+ 页:不做 Bento(避免跨页重复强调)
  * -------------------------------------------------------------------------- */
 
+const SPOTLIGHT_MAX = 3;
 const isFirstPage = pageResult.page === 1;
-const featuredPosts = isFirstPage ? posts.filter((p) => p.featured) : [];
-const regularPosts = isFirstPage ? posts.filter((p) => !p.featured) : posts;
+const featuredOnPage = isFirstPage ? posts.filter((p) => p.featured).slice(0, SPOTLIGHT_MAX) : [];
+const spotlightIsFeatured = featuredOnPage.length > 0;
+const spotlightPosts: readonly PostVM[] = isFirstPage
+	? spotlightIsFeatured
+		? featuredOnPage
+		: posts.slice(0, 1)
+	: [];
+const spotlightSlugs = new Set(spotlightPosts.map((p) => p.slug));
+const archivePosts = posts.filter((p) => !spotlightSlugs.has(p.slug));
+
+interface MonthGroup {
+	readonly key: string;
+	readonly year: string;
+	readonly month: number;
+	readonly posts: PostVM[];
+}
+
+const monthGroups: MonthGroup[] = [];
+for (const post of archivePosts) {
+	const ymd = formatDateCompact(post.date); // YYYY-MM-DD
+	const key = ymd.slice(0, 7);
+	const last = monthGroups[monthGroups.length - 1];
+	if (last && last.key === key) {
+		last.posts.push(post);
+	} else {
+		monthGroups.push({
+			key,
+			year: ymd.slice(0, 4),
+			month: Number(ymd.slice(5, 7)),
+			posts: [post],
+		});
+	}
+}
+
+const spotlightIndex = "01";
+const archiveIndex = spotlightPosts.length > 0 ? "02" : "01";
 
 /* ----------------------------------------------------------------------------
  * 路径构造
  * ----------------------------------------------------------------------------
- *   - listBase   列表页根路径("/blog" / "/en/blog"),分类 tabs 与搜索结果
- *                链接都基于它拼 `${listBase}/<slug>/`
+ *   - listBase   列表页根路径("/blog" / "/en/blog")
  *   - catBase    当前视图(可能带分类)的分页基础路径,传给 Pagination
  * -------------------------------------------------------------------------- */
 
 const listBase = tp("/blog");
 const catBase = hasCatFilter ? `${listBase}/cat/${activeCatSlug}` : listBase;
 
-/* 分类切换器需要知道每分类的计数。把 listCategoryCounts 返回的 byCategory
- * 与 ALL 计数合并成单个对象传给组件(组件用 "__all__" 特殊键取 ALL)。 */
+/* 分类切换器计数:byCategory + "__all__" 特殊键 */
 const categoryCountsForTabs: Record<string, number> = {
 	__all__: categoryCounts.total,
 	...categoryCounts.byCategory,
 };
 
+/* 当前视图区间:如 11–20 / 49 */
+const rangeStart = posts.length > 0 ? (pageResult.page - 1) * pageResult.pageSize + 1 : 0;
+const rangeEnd = posts.length > 0 ? rangeStart + posts.length - 1 : 0;
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
 /* ----------------------------------------------------------------------------
- * BlogMark 左栏装置数据
- * ----------------------------------------------------------------------------
- * 把真实分类列表和每分类计数折成 BlogMark 需要的形状:
- *   { slug, name, count }[],按 count 降序(条形图"重"的排在上面,视觉更稳)。
- * 只展示前 N 项,避免左栏被极长的分类列表撑开。
+ * BlogMark(hero aside):分类按计数降序,只展示前 N 项
  * -------------------------------------------------------------------------- */
 
 const BLOG_MARK_MAX_ROWS = 6;
@@ -182,285 +268,342 @@ const blogMarkCategories = categoriesList
 	.slice(0, BLOG_MARK_MAX_ROWS);
 ---
 
-<AppShell
-	title={copy.title}
-	description={copy.description}
-	maxContentWidth="none"
->
-	{/* ---------- 左栏:视觉装置(分类分布条形图) ----------
-	 * 博客列表页专属装置,替代首页的 LabMark。
-	 * 传入 left-visual slot 后,AppShell 走"页面自定义装置"分支,
-	 * 不再渲染默认 LabMark。
-	 * ------------------------------------------------------------ */}
-	<Fragment slot="left-visual">
-		<BlogMark
-			categories={blogMarkCategories}
-			total={categoryCounts.total}
-		/>
-	</Fragment>
+<AppShell title={copy.title} description={copy.description}>
+	<PageHero eyebrow={copy.eyebrow} description={copy.description} spec={spec}>
+		<Fragment slot="title">
+			{copy.titleLead}<span class="serif-accent">{copy.titleAccent}</span>
+		</Fragment>
+		<Fragment slot="aside">
+			<BlogMark
+				categories={blogMarkCategories}
+				total={categoryCounts.total}
+				activeSlug={activeCatSlug}
+			/>
+		</Fragment>
+	</PageHero>
 
-	{/* ---------- 左栏:社交(仅 RSS) ---------- */}
-	<Fragment slot="left-social">
-		<a
-			href={tp("/rss.xml")}
-			aria-label="RSS"
-			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
-		>
-			<svg
-				width="15"
-				height="15"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-				aria-hidden="true"
-			>
-				<path d="M4 11a9 9 0 0 1 9 9"></path>
-				<path d="M4 4a16 16 0 0 1 16 16"></path>
-				<circle cx="5" cy="19" r="1"></circle>
-			</svg>
-		</a>
-		<a
-			href="https://github.com/zerx-lab"
-			target="_blank"
-			rel="noopener noreferrer"
-			aria-label="GitHub"
-			class="transition-colors hover:text-[color:var(--color-ink-primary)]"
-		>
-			<svg
-				width="16"
-				height="16"
-				viewBox="0 0 24 24"
-				fill="currentColor"
-				aria-hidden="true"
-			>
-				<path
-					d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.1-.4-.6-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"
-				></path>
-			</svg>
-		</a>
-	</Fragment>
+	<div class="blog-index relative pb-8">
+		{/* ================= 吸顶工具条 ================= */}
+		<div class="blog-dock-bar sticky top-[var(--layout-top-nav-height)] z-30">
+			<div class="wrap">
+				<div class="blog-dock flex items-center gap-2 p-1.5">
+					<div id="blog-category-tabs" class="min-w-0 flex-1">
+						<BlogCategoryTabs
+							listBase={listBase}
+							categories={categoriesList}
+							activeSlug={activeCatSlug}
+							counts={categoryCountsForTabs}
+						/>
+					</div>
 
-	{/* ---------- 左栏:Meta ---------- */}
-	<Fragment slot="left-meta">
-		<MetaRow label={t("meta.posts")} value={String(postCount)} />
-		<MetaRow
-			label={t("meta.categories")}
-			value={String(categoryCount)}
-		/>
-		<MetaRow label={t("meta.lastUpdate")} value={lastUpdateText} />
-		<MetaRow
-			label={t("meta.rss")}
-			value={tp("/rss.xml")}
-			href={tp("/rss.xml")}
-		/>
-	</Fragment>
+					<p class="blog-dock__scope m-0 min-w-0 flex-1 truncate px-2 font-[var(--font-mono)] text-[10.5px] uppercase leading-none tracking-[var(--tracking-wide)] text-[color:var(--color-ink-tertiary)]">
+						<span aria-hidden="true" class="mr-2 inline-block h-[5px] w-[5px] rounded-[1px] bg-[color:var(--color-signal)] align-middle" />
+						{copy.searchScope}
+					</p>
 
-	{/* ================================================================
-	 *                          右栏主内容
-	 * ================================================================ */}
+					{posts.length > 0 && (
+						<span class="blog-dock__range hidden shrink-0 px-2 font-[var(--font-mono)] text-[10.5px] uppercase leading-none tracking-[var(--tracking-wide)] tabular-nums text-[color:var(--color-ink-tertiary)] lg:inline">
+							{copy.viewRange}{" "}
+							<span class="text-[color:var(--color-ink-primary)]">
+								{pad2(rangeStart)}–{pad2(rangeEnd)}
+							</span>
+							<span class="text-[color:var(--color-ink-faint)]"> / </span>
+							{pad2(pageResult.total)}
+						</span>
+					)}
 
-	{/* ---------- 顶行:eyebrow + 分类切换 + 搜索框,三段一行 ---------- */}
-	{/*
-	 * 为什么不再复用 SectionHeader 的内置顶行:
-	 *   SectionHeader 的顶行只支持 [eyebrow] — [count|link] 两段布局,
-	 *   插不进"分类切换"这种占据剩余宽度且需横向滚动的交互组件。
-	 *   这里自己写一个 3 段 flex 顶行,视觉上保留同样的虚线分隔与节奏:
-	 *
-	 *     [ BLOG · 6 ]  [ 全部 · 工程 · 发布 · 笔记 … ]  [ 🔍 ]
-	 *          ↑固定          ↑flex-1 + 横向滚动          ↑固定
-	 *
-	 *   - 左右两端 shrink-0,永不被压缩
-	 *   - 中间 min-w-0 + flex-1 + overflow-x-auto,分类过多时横向滚动,
-	 *     两端渐变蒙版暗示"此处可滚动",绝不会挤压搜索框与 count
-	 *   - 小屏(<sm)依旧是同一行;若分类极多,滚动条隐藏,手指滑动即可
-	 *
-	 *   分类 tabs 套一层 id="blog-category-tabs" 的容器,搜索态下由
-	 *   BlogSearchBox 的脚本整体隐藏(见组件内注释)。
-	 */}
-	<header class="pt-6 lg:pt-8">
-		<div class="flex items-center gap-3 sm:gap-4 mb-3">
-			{/* 左:eyebrow + count */}
-			<div class="shrink-0 flex items-baseline gap-2">
-				<span
-					class:list={[
-						"mono-label",
-						"text-[11px] sm:text-xs",
-						"leading-none",
-						"tracking-[var(--tracking-wider)]",
-						"text-[color:var(--color-ink-secondary)]",
-						"font-medium",
-					]}
-				>
-					{copy.sectionTitle}
-				</span>
-			</div>
+					<span aria-hidden="true" class="hidden h-5 w-px shrink-0 bg-[color:var(--color-hairline)] lg:block" />
 
-			{/* 中:分类切换(占据剩余宽度,超出横向滚动) */}
-			<div id="blog-category-tabs" class="flex-1 min-w-0">
-				<BlogCategoryTabs
-					listBase={listBase}
-					categories={categoriesList}
-					activeSlug={activeCatSlug}
-					counts={categoryCountsForTabs}
-				/>
-			</div>
-
-			{/* 右:搜索框 */}
-			<div class="shrink-0 flex items-center">
-				<BlogSearchBox listBase={listBase} />
+					<div class="flex shrink-0 items-center">
+						<BlogSearchBox listBase={listBase} />
+					</div>
+				</div>
 			</div>
 		</div>
 
-		{/* 虚线分割(与 SectionHeader 一致的节奏) */}
-		<hr
-			aria-hidden="true"
-			class:list={[
-				"border-0 border-t border-dashed",
-				"border-[color:var(--color-hairline)]",
-				"m-0",
-			]}
-		/>
-	</header>
+		{/* ================= 默认列表(搜索态整体隐藏) ================= */}
+		<div id="post-grid">
+			{
+				posts.length === 0 ? (
+					<div class="wrap mt-12 lg:mt-16">
+						<div class="blog-empty flex flex-col items-center justify-center px-6 py-20 text-center lg:py-28">
+							<span aria-hidden="true" class="mono-label mb-3 text-[11px] text-[color:var(--color-ink-muted)]">
+								— EMPTY —
+							</span>
+							<p class="text-[15px] leading-[1.6] text-[color:var(--color-ink-secondary)]">
+								{copy.empty}
+							</p>
+						</div>
+					</div>
+				) : (
+					<>
+						{/* ---------- 01 精选 / 最新:封面式 Bento ---------- */}
+						{spotlightPosts.length > 0 && (
+							<section
+								aria-labelledby="blog-spotlight-title"
+								class="wrap mt-12 lg:mt-16"
+							>
+								<div class="mb-6 flex flex-wrap items-end justify-between gap-x-8 gap-y-2 lg:mb-8">
+									<div>
+										<div class="flex items-center gap-3 font-[var(--font-mono)] text-[11px] leading-none tabular-nums">
+											<span class="font-medium text-[color:var(--color-signal)]">{spotlightIndex}</span>
+											<span aria-hidden="true" class="h-px w-6 bg-[color:var(--color-hairline-strong)]" />
+											<span class="uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">
+												{spotlightIsFeatured ? "FEATURED" : "LATEST"}
+											</span>
+										</div>
+										<h2 id="blog-spotlight-title" class="mt-3 text-[22px] font-semibold leading-tight tracking-[-0.03em] lg:text-[24px]">
+											{spotlightIsFeatured ? copy.featured : copy.latest}
+										</h2>
+									</div>
+									<p class="m-0 text-[13.5px] leading-[1.6] text-[color:var(--color-ink-tertiary)]">
+										{spotlightIsFeatured ? copy.spotlightNote : copy.latestNote}
+									</p>
+								</div>
 
-	{/* ---------- 文章列表(id="post-grid" 供客户端搜索脚本整体接管隐藏) ---------- */}
-	<div id="post-grid">
-		{
-			posts.length === 0 ? (
+								<div class="grid gap-4 lg:grid-cols-12 lg:gap-5">
+									{spotlightPosts.map((post, i) => {
+										const n = spotlightPosts.length;
+										const span =
+											n === 1
+												? "lg:col-span-12"
+												: i === 0
+													? n === 3
+														? "lg:col-span-7 lg:row-span-2"
+														: "lg:col-span-7"
+													: "lg:col-span-5";
+										return (
+											<PostCard
+												variant="feature"
+												layout={n === 1 ? "split" : "stack"}
+												href={tp(`/blog/${post.slug}/`)}
+												title={post.title}
+												excerpt={post.excerpt}
+												cover={post.cover}
+												coverLabel={post.coverLabel}
+												authorName={post.authorName ?? undefined}
+												categoryName={post.categoryName ?? undefined}
+												date={post.date}
+												tags={post.tags}
+												readingTime={post.readingTime}
+												badge={spotlightIsFeatured ? t("blog.featured") : copy.latest}
+												badgeSignal={spotlightIsFeatured}
+												class={`reveal ${span}`}
+												style={`--i: ${i + 7}`}
+											/>
+										);
+									})}
+								</div>
+							</section>
+						)}
+
+						{/* ---------- 02 写作履历:按月分组时间线 ---------- */}
+						{monthGroups.length > 0 && (
+							<section
+								aria-labelledby="blog-archive-title"
+								class:list={["wrap", spotlightPosts.length > 0 ? "mt-20 lg:mt-28" : "mt-12 lg:mt-16"]}
+							>
+								<div class="mb-6 flex flex-wrap items-end justify-between gap-x-8 gap-y-2 lg:mb-8">
+									<div>
+										<div class="flex items-center gap-3 font-[var(--font-mono)] text-[11px] leading-none tabular-nums">
+											<span class="font-medium text-[color:var(--color-signal)]">{archiveIndex}</span>
+											<span aria-hidden="true" class="h-px w-6 bg-[color:var(--color-hairline-strong)]" />
+											<span class="uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">
+												{copy.archiveSub} · {pad2(archivePosts.length)}
+											</span>
+										</div>
+										<h2 id="blog-archive-title" class="mt-3 text-[22px] font-semibold leading-tight tracking-[-0.03em] lg:text-[24px]">
+											{copy.archive}
+										</h2>
+									</div>
+									<p class="m-0 text-[13.5px] leading-[1.6] text-[color:var(--color-ink-tertiary)]">
+										{copy.archiveNote}
+									</p>
+								</div>
+
+								<div class="flex flex-col">
+									{monthGroups.map((group) => {
+										const headingId = `blog-month-${group.key}`;
+										return (
+											<section
+												aria-labelledby={headingId}
+												class="blog-month grid border-t border-[color:var(--color-hairline-strong)] lg:grid-cols-12 lg:gap-x-10"
+											>
+												<header class="blog-month__head flex items-end gap-4 pt-6 pb-2 lg:col-span-3 lg:block lg:self-start lg:pt-8 lg:pb-8">
+													<h3 id={headingId} class="m-0">
+														<span class="sr-only">{copy.monthLabel(group.year, group.month)}</span>
+														<span aria-hidden="true" class="blog-month__num block tabular-nums">
+															{pad2(group.month)}
+														</span>
+													</h3>
+													<div aria-hidden="true" class="flex flex-col gap-1.5 pb-1 font-[var(--font-mono)] text-[10.5px] uppercase leading-none tracking-[var(--tracking-wider)] lg:mt-4 lg:pb-0">
+														<span class="text-[color:var(--color-ink-secondary)]">
+															{group.year} · {copy.monthShort(group.month)}
+														</span>
+														<span class="tabular-nums text-[color:var(--color-ink-muted)]">
+															{pad2(group.posts.length)} {copy.postsUnit}
+														</span>
+													</div>
+												</header>
+
+												<ol class="m-0 list-none divide-y divide-[color:var(--color-hairline)] p-0 lg:col-span-9">
+													{group.posts.map((post) => (
+														<li>
+															<PostCard
+																href={tp(`/blog/${post.slug}/`)}
+																title={post.title}
+																excerpt={post.excerpt}
+																categoryName={post.categoryName ?? undefined}
+																date={post.date}
+																tags={post.tags}
+																readingTime={post.readingTime}
+																class="reveal-scroll"
+															/>
+														</li>
+													))}
+												</ol>
+											</section>
+										);
+									})}
+								</div>
+							</section>
+						)}
+					</>
+				)
+			}
+		</div>
+
+		{/* ================= 搜索视图(跟随 #search-results / #search-empty 显隐) ================= */}
+		<section aria-labelledby="blog-results-title" class="blog-search-view wrap mt-12 lg:mt-16">
+			<div class="grid border-t border-[color:var(--color-hairline-strong)] lg:grid-cols-12 lg:gap-x-10">
+				{/* 结果容器(脚本写入 .search-result-card);DOM 在结果栏之前,以便计数器累加 */}
 				<div
-					class:list={[
-						"mt-8 lg:mt-10 mb-16",
-						"flex flex-col items-center justify-center",
-						"py-16 lg:py-20",
-						"border border-dashed border-[color:var(--color-hairline)]",
-						"text-center",
-					]}
+					id="search-results"
+					class="divide-y divide-[color:var(--color-hairline)] lg:col-span-9 lg:col-start-4 lg:row-start-1"
+					hidden
+				/>
+
+				<div
+					id="search-empty"
+					class="lg:col-span-9 lg:col-start-4 lg:row-start-1 lg:py-8"
+					hidden
 				>
-					<span
-						aria-hidden="true"
-						class:list={[
-							"mono-label",
-							"text-[11px]",
-							"text-[color:var(--color-ink-muted)]",
-							"mb-3",
-						]}
-					>
-						— EMPTY —
-					</span>
-					<p
-						class:list={[
-							"text-[color:var(--color-ink-secondary)]",
-							"text-[14px]",
-							"leading-[1.6]",
-						]}
-					>
-						{copy.empty}
-					</p>
+					<div class="blog-empty flex flex-col items-center justify-center px-6 py-20 text-center">
+						<span aria-hidden="true" class="mono-label mb-3 text-[11px] text-[color:var(--color-ink-muted)]">
+							— {copy.noResults} —
+						</span>
+						<p class="text-[15px] leading-[1.6] text-[color:var(--color-ink-secondary)]">
+							{t("search.empty")}
+						</p>
+					</div>
 				</div>
-			) : (
-				<div
-					class:list={[
-						"mt-6 lg:mt-8 mb-8",
-						// 整个列表包在一个虚线边框里,每篇文章用虚线分隔
-						"border border-dashed border-[color:var(--color-hairline)]",
-						"divide-y divide-dashed divide-[color:var(--color-hairline)]",
-					]}
-				>
-					{/* Featured 优先(仅第 1 页) */}
-					{featuredPosts.map((post) => (
-						<PostCard
-							href={tp(`/blog/${post.slug}/`)}
-							title={post.title}
-							excerpt={post.excerpt}
-							cover={post.cover}
-							coverLabel={post.coverLabel}
-							authorName={post.authorName ?? undefined}
-							categoryName={post.categoryName ?? undefined}
-							date={post.date}
-							tags={post.tags}
-							readingTime={post.readingTime}
-							featured
-						/>
-					))}
 
-					{/* 其余按日期降序 */}
-					{regularPosts.map((post) => (
-						<PostCard
-							href={tp(`/blog/${post.slug}/`)}
-							title={post.title}
-							excerpt={post.excerpt}
-							cover={post.cover}
-							coverLabel={post.coverLabel}
-							authorName={post.authorName ?? undefined}
-							categoryName={post.categoryName ?? undefined}
-							date={post.date}
-							tags={post.tags}
-							readingTime={post.readingTime}
-						/>
-					))}
+				<header class="blog-search-view__head order-first pt-6 pb-2 lg:order-none lg:col-span-3 lg:col-start-1 lg:row-start-1 lg:self-start lg:pt-8">
+					<div class="flex items-center gap-3 font-[var(--font-mono)] text-[11px] leading-none">
+						<span class="font-medium text-[color:var(--color-signal)]">Q</span>
+						<span aria-hidden="true" class="h-px w-6 bg-[color:var(--color-hairline-strong)]" />
+						<span class="uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">
+							{copy.resultsSub}
+						</span>
+					</div>
+					<h2 id="blog-results-title" class="mt-3 text-[22px] font-semibold leading-tight tracking-[-0.03em] lg:text-[24px]">
+						{copy.results}
+					</h2>
+					<p aria-hidden="true" class="mt-4 flex items-baseline gap-2">
+						<span class="blog-search-view__hits text-[48px] font-semibold leading-none tracking-[-0.045em] tabular-nums lg:text-[64px]" />
+						<span class="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">
+							{copy.hits}
+						</span>
+					</p>
+					<p class="mt-4 max-w-[30ch] text-[13.5px] leading-[1.65] text-[color:var(--color-ink-tertiary)]">
+						{copy.resultsNote}
+					</p>
+				</header>
+			</div>
+		</section>
+
+		{/* ================= 分页(搜索态整体隐藏) ================= */}
+		{
+			pageResult.totalPages > 1 && (
+				<div id="blog-pagination" class="wrap mt-16 lg:mt-24">
+					<Pagination
+						currentPage={pageResult.page}
+						totalPages={pageResult.totalPages}
+						totalItems={pageResult.total}
+						basePath={catBase}
+					/>
 				</div>
 			)
 		}
 	</div>
-
-	{/* ---------- 客户端搜索结果容器(默认隐藏,由 BlogSearchBox 的脚本接管) ---------- */}
-	<div
-		id="search-results"
-		class:list={[
-			"mt-6 lg:mt-8 mb-8",
-			"border border-dashed border-[color:var(--color-hairline)]",
-			"divide-y divide-dashed divide-[color:var(--color-hairline)]",
-		]}
-		hidden
-	/>
-
-	{/* ---------- 客户端搜索"无结果"提示(默认隐藏) ---------- */}
-	<div
-		id="search-empty"
-		class:list={[
-			"mt-8 lg:mt-10 mb-16",
-			"flex flex-col items-center justify-center",
-			"py-16 lg:py-20",
-			"border border-dashed border-[color:var(--color-hairline)]",
-			"text-center",
-		]}
-		hidden
-	>
-		<span
-			aria-hidden="true"
-			class:list={[
-				"mono-label",
-				"text-[11px]",
-				"text-[color:var(--color-ink-muted)]",
-				"mb-3",
-			]}
-		>
-			— NO RESULTS —
-		</span>
-		<p
-			class:list={[
-				"text-[color:var(--color-ink-secondary)]",
-				"text-[14px]",
-				"leading-[1.6]",
-			]}
-		>
-			{t("search.empty")}
-		</p>
-	</div>
-
-	{/* ---------- 分页(id="blog-pagination" 供客户端搜索脚本整体接管隐藏) ---------- */}
-	{
-		pageResult.totalPages > 1 && (
-			<div id="blog-pagination" class="mb-16">
-				<Pagination
-					currentPage={pageResult.page}
-					totalPages={pageResult.totalPages}
-					totalItems={pageResult.total}
-					basePath={catBase}
-				/>
-			</div>
-		)
-	}
 </AppShell>
+
+<style>
+	.blog-index {
+		/* 吸顶 dock 的实际占高(p-1.5 + 34px 控件 + 边框),供月份栏让位 */
+		--blog-dock-h: 2.9rem;
+	}
+
+	/* ---------------- 吸顶工具条 ---------------- */
+	.blog-dock {
+		border: 1px solid var(--color-hairline);
+		border-radius: 14px;
+		background-color: color-mix(in oklab, var(--color-surface) 82%, transparent);
+		backdrop-filter: saturate(1.4) blur(14px);
+		-webkit-backdrop-filter: saturate(1.4) blur(14px);
+		box-shadow: var(--shadow-card);
+	}
+
+	/* 搜索态(tabs 被脚本隐藏):显示"搜索全部文章"说明,隐藏视图区间 */
+	.blog-dock__scope {
+		display: none;
+	}
+	.blog-dock:has(#blog-category-tabs[hidden]) .blog-dock__scope {
+		display: block;
+	}
+	.blog-dock:has(#blog-category-tabs[hidden]) .blog-dock__range {
+		display: none;
+	}
+
+	/* ---------------- 月份分组 ---------------- */
+	.blog-month__num {
+		font-size: 56px;
+		font-weight: 600;
+		line-height: 0.85;
+		letter-spacing: -0.06em;
+		color: var(--color-ink-primary);
+	}
+	@media (min-width: 1024px) {
+		.blog-month__num {
+			font-size: 96px;
+		}
+		.blog-month__head,
+		.blog-search-view__head {
+			position: sticky;
+			top: calc(var(--layout-top-nav-height) + var(--blog-dock-h) + 1.5rem);
+		}
+	}
+	.blog-month:first-child .blog-month__num {
+		background-image: var(--gradient-signal);
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+	}
+
+	/* ---------------- 空状态(dashed 仅用于空/占位语义) ---------------- */
+	.blog-empty {
+		border: 1px dashed var(--color-hairline-strong);
+		border-radius: 12px;
+	}
+
+	/* ---------------- 搜索视图 ---------------- */
+	.blog-search-view {
+		counter-reset: search-hits;
+	}
+	.blog-search-view:not(:has(#search-results:not([hidden]))):not(:has(#search-empty:not([hidden]))) {
+		display: none;
+	}
+	.blog-search-view__hits::after {
+		content: counter(search-hits, decimal-leading-zero);
+	}
+</style>

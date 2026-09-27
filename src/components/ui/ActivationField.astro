@@ -1,0 +1,202 @@
+---
+/**
+ * ============================================================================
+ * ActivationField - 「激活场」点阵画布(填满父容器)
+ * ----------------------------------------------------------------------------
+ * 一张缓慢流动的点阵激活图,像神经网络某层的激活热力图:低激活是淡灰小点,
+ * 高激活放大并点亮为 Signal 色;指针经过时激起一圈扰动。用作首页 Hero 背景。
+ *
+ * 性能:
+ *   - Canvas 2D 方点,按 4 档颜色分桶批量 fillRect,每帧 4 次 fillStyle 切换
+ *   - ~30fps 节流;离开视口 / 标签页隐藏时停止;DPR 上限 2
+ *   - prefers-reduced-motion:只绘制一帧静态图
+ *   - 颜色读 CSS 变量,主题切换(html.class 变化)时重新取色
+ * ============================================================================
+ */
+
+interface Props {
+	/** 点阵间距(CSS px) */
+	step?: number;
+	/** 额外类名(定位 / 遮罩由调用方决定) */
+	class?: string;
+}
+
+const { step = 16, class: className = "" } = Astro.props;
+---
+
+<canvas data-activation-field data-step={step} aria-hidden="true" class:list={["block h-full w-full", className]}></canvas>
+
+<script>
+	interface Palette {
+		faint: string;
+		muted: string;
+		ink: string;
+		signal: string;
+	}
+
+	const FRAME_MS = 1000 / 30;
+
+	function readPalette(): Palette {
+		const css = getComputedStyle(document.documentElement);
+		const v = (name: string): string => css.getPropertyValue(name).trim();
+		return {
+			faint: v("--color-ink-faint"),
+			muted: v("--color-ink-muted"),
+			ink: v("--color-ink-secondary"),
+			signal: v("--color-signal"),
+		};
+	}
+
+	function mount(canvas: HTMLCanvasElement): void {
+		if (canvas.dataset.bound === "true") return;
+		canvas.dataset.bound = "true";
+
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return;
+
+		const step = Number(canvas.dataset.step) || 16;
+		const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		let palette = readPalette();
+		let width = 0;
+		let height = 0;
+		let cols = 0;
+		let rows = 0;
+		let visible = true;
+		let raf = 0;
+		let last = 0;
+		let t = Math.random() * 100;
+
+		// 指针扰动:目标位置 + 平滑跟随位置 + 强度(像素坐标,相对画布)
+		const pointer = { x: 0, y: 0, cx: 0, cy: 0, power: 0, target: 0 };
+		const buckets: number[][] = [[], [], [], []];
+
+		const resize = (): void => {
+			const rect = canvas.getBoundingClientRect();
+			const dpr = Math.min(window.devicePixelRatio || 1, 2);
+			width = rect.width;
+			height = rect.height;
+			canvas.width = Math.round(width * dpr);
+			canvas.height = Math.round(height * dpr);
+			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+			cols = Math.floor(width / step);
+			rows = Math.floor(height / step);
+		};
+
+		const draw = (): void => {
+			ctx.clearRect(0, 0, width, height);
+			for (const b of buckets) b.length = 0;
+
+			const ox = (width - (cols - 1) * step) / 2;
+			const oy = (height - (rows - 1) * step) / 2;
+			pointer.cx += (pointer.x - pointer.cx) * 0.12;
+			pointer.cy += (pointer.y - pointer.cy) * 0.12;
+			pointer.power += (pointer.target - pointer.power) * 0.06;
+			const px = pointer.cx;
+			const py = pointer.cy;
+			const hot = pointer.power > 0.01;
+
+			for (let j = 0; j < rows; j++) {
+				const y = oy + j * step;
+				for (let i = 0; i < cols; i++) {
+					const x = ox + i * step;
+					// 两组正弦叠加的流场 + 一道从右上扩散的环形波,归一化到约 0..1
+					let v =
+						Math.sin(i * 0.19 + t * 0.9) * Math.cos(j * 0.25 - t * 0.7) * 0.5 +
+						Math.sin((i + j) * 0.09 + t * 0.55) * 0.35 +
+						Math.sin(Math.hypot(i - cols * 0.78, j - rows * 0.18) * 0.3 - t * 1.4) * 0.25;
+					v = (v + 1.1) / 2.2;
+
+					if (hot) {
+						const dx = x - px;
+						const dy = y - py;
+						const d2 = dx * dx + dy * dy;
+						if (d2 < 40000) {
+							const d = Math.sqrt(d2);
+							v += pointer.power * Math.exp(-d2 / 5200) * (0.75 + 0.25 * Math.sin(d * 0.1 - t * 6));
+						}
+					}
+
+					const level = v > 0.86 ? 3 : v > 0.66 ? 2 : v > 0.42 ? 1 : 0;
+					const size = level === 3 ? 3.6 : level === 2 ? 2.5 : level === 1 ? 1.8 : 1.2;
+					buckets[level].push(x - size / 2, y - size / 2, size);
+				}
+			}
+
+			const colors = [palette.faint, palette.muted, palette.ink, palette.signal];
+			for (let level = 0; level < 4; level++) {
+				const b = buckets[level];
+				ctx.fillStyle = colors[level];
+				for (let k = 0; k < b.length; k += 3) ctx.fillRect(b[k], b[k + 1], b[k + 2], b[k + 2]);
+			}
+		};
+
+		const loop = (now: number): void => {
+			raf = requestAnimationFrame(loop);
+			if (now - last < FRAME_MS) return;
+			const dt = Math.min(now - last, 100) / 1000;
+			last = now;
+			t += dt * 0.9;
+			draw();
+		};
+
+		const start = (): void => {
+			if (reduceMotion || raf || !visible || document.hidden) return;
+			last = performance.now();
+			raf = requestAnimationFrame(loop);
+		};
+
+		const stop = (): void => {
+			cancelAnimationFrame(raf);
+			raf = 0;
+		};
+
+		resize();
+		draw();
+
+		new ResizeObserver(() => {
+			resize();
+			draw();
+		}).observe(canvas);
+
+		new IntersectionObserver(([entry]) => {
+			visible = entry.isIntersecting;
+			visible ? start() : stop();
+		}).observe(canvas);
+
+		document.addEventListener("visibilitychange", () => (document.hidden ? stop() : start()));
+
+		new MutationObserver(() => {
+			palette = readPalette();
+			draw();
+		}).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+
+		// 画布常被正文覆盖,所以在 document 上监听,按画布矩形换算
+		if (!reduceMotion && window.matchMedia("(pointer: fine)").matches) {
+			document.addEventListener(
+				"pointermove",
+				(e) => {
+					if (!visible) return;
+					const rect = canvas.getBoundingClientRect();
+					const x = e.clientX - rect.left;
+					const y = e.clientY - rect.top;
+					const inside = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height;
+					pointer.target = inside ? 1 : 0;
+					if (inside) {
+						pointer.x = x;
+						pointer.y = y;
+					}
+				},
+				{ passive: true },
+			);
+		}
+
+		start();
+	}
+
+	function init(): void {
+		document.querySelectorAll<HTMLCanvasElement>("[data-activation-field]").forEach(mount);
+	}
+
+	init();
+	document.addEventListener("astro:after-swap", init);
+</script>

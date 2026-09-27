@@ -1,0 +1,400 @@
+---
+/**
+ * ============================================================================
+ * HomePage - 首页(中英文共用,语言由 URL 推断)
+ * ----------------------------------------------------------------------------
+ *   Hero(满屏):右侧全幅「激活场」画布作背景;超大定位语跨满版心;
+ *               概述 + whoami 终端并排;底部 SpecStrip 关键数字
+ *   01 精选作品   Bento 网格(GitHub 实时 star 排序)
+ *   02 能力       三项能力的大号编号列表 + 语言构成条
+ *   03 模型信号   LiveBench 前五(与 /benchmarks 同一快照与默认筛选)
+ *   04 写作       最近文章时间线
+ *   联系          由全站页脚承担
+ *
+ * 数据全部来自构建期:site.json / language-stats.json / livebench.json /
+ * 文章集合 / GitHub 实时清单(失败回落快照)。
+ * ============================================================================
+ */
+
+import AppShell from "@layouts/AppShell.astro";
+import PageHero from "@components/layout/PageHero.astro";
+import CvSection from "@components/layout/CvSection.astro";
+import ActivationField from "@components/ui/ActivationField.astro";
+import ProjectShowcase from "@components/home/ProjectShowcase.astro";
+import { loadLanguageStats, loadSite, pickLang } from "@lib/content";
+import { loadLiveCounts } from "@lib/queries/projects";
+import { listPostsPaged } from "@lib/queries/posts";
+import { defaultFilters, visibleModels, type Model } from "@components/benchmarks/filters";
+import snapshot from "../../content/data/livebench.json";
+import { formatDateCompact, getLangFromUrl, useTranslations, useTranslatedPath } from "@i18n/utils";
+
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+const tp = useTranslatedPath(lang);
+
+const [site, counts, languageStats, latest] = await Promise.all([
+	loadSite(),
+	loadLiveCounts(),
+	loadLanguageStats(),
+	listPostsPaged({ lang, page: 1, pageSize: 6 }),
+]);
+
+const topModels = visibleModels(snapshot.models as Model[], defaultFilters()).slice(0, 5);
+const topScore = topModels[0]?.overall ?? 100;
+
+const C =
+	lang === "zh"
+		? {
+				eyebrow: `开源实验室 · 始于 ${site.establishedYear}`,
+				summary: [
+					"ZerxLab 是一个关注全栈工程、性能优化与开发者工具的开源实验室。主要技术栈为 Go、Rust、TypeScript。",
+					"代表项目包括 WordZero(Go 实现的 Word 文档引擎,对比 Python 方案有 21× 的性能差异)、PenBridge(跨平台博客发布工具)与 rmx(基于 Rust 的并行目录删除工具)。全部以开源协议发布,并在 AUR 同步维护软件包。",
+				],
+				stats: { projects: "开源仓库", stars: "GitHub 星标", posts: "文章", aur: "AUR 包", since: "始于", status: "状态" },
+				work: { label: "精选作品", sub: "Selected work", note: "按 GitHub star 实时排序,构建时拉取。", link: "全部项目" },
+				caps: { label: "能力", sub: "Capabilities", note: "三条主线,都有可验证的产出。" },
+				capItems: [
+					{
+						title: "系统与性能",
+						body: "用 Go 与 Rust 写零依赖的库和工具,以基准数据说话 —— WordZero 比 Python 方案快 21×,rmx 并行删除目录。",
+						tags: ["Go", "Rust", "Benchmark"],
+					},
+					{
+						title: "开发者工具",
+						body: "跨平台桌面应用、命令行工具与 Arch Linux AUR 软件包,把「一分钟完成」的小体验打磨到极致。",
+						tags: ["Tauri", "CLI", "AUR"],
+					},
+					{
+						title: "AI 原生工作流",
+						body: "Claude Code + GitHub Actions 每日自动撰写、交叉验证并发布双语技术资讯;LiveBench 模型榜单持续同步。",
+						tags: ["Claude Code", "Actions", "LiveBench"],
+					},
+				],
+				languages: "语言构成",
+				signals: { label: "模型信号", sub: "Model signals", note: `LiveBench ${snapshot.release} 综合得分前五;已折叠变体、隐藏微调。`, link: "完整榜单" },
+				openWeights: "开放权重",
+				writing: { label: "写作", sub: "Writing", note: "工程笔记、版本发布,以及每日 AI 技术资讯。", link: "全部文章" },
+				minutes: "分钟",
+				cta: "开始探索",
+			}
+		: {
+				eyebrow: `Open-source lab · est. ${site.establishedYear}`,
+				summary: [
+					"ZerxLab is an open-source laboratory focused on full-stack engineering, performance, and developer tools. Core stack: Go, Rust, TypeScript.",
+					"Representative projects include WordZero (a Go Word document engine, 21× faster than the Python path), PenBridge (cross-platform blog publisher), and rmx (a Rust parallel directory remover). Everything ships open source, with packages mirrored on the AUR.",
+				],
+				stats: { projects: "Repositories", stars: "GitHub stars", posts: "Posts", aur: "AUR packages", since: "Since", status: "Status" },
+				work: { label: "Selected work", sub: "精选作品", note: "Ranked live by GitHub stars at build time.", link: "All projects" },
+				caps: { label: "Capabilities", sub: "能力", note: "Three threads, each with shipped, verifiable output." },
+				capItems: [
+					{
+						title: "Systems & performance",
+						body: "Zero-dependency libraries and tools in Go and Rust, argued with benchmarks — WordZero runs 21× faster than the Python path; rmx deletes directories in parallel.",
+						tags: ["Go", "Rust", "Benchmark"],
+					},
+					{
+						title: "Developer tooling",
+						body: "Cross-platform desktop apps, command-line tools, and Arch Linux AUR packages — polishing the one-minute experience until it shines.",
+						tags: ["Tauri", "CLI", "AUR"],
+					},
+					{
+						title: "AI-native workflows",
+						body: "Claude Code + GitHub Actions write, cross-verify, and publish a bilingual tech digest every day; the LiveBench model board stays in sync.",
+						tags: ["Claude Code", "Actions", "LiveBench"],
+					},
+				],
+				languages: "Language mix",
+				signals: { label: "Model signals", sub: "模型信号", note: `LiveBench ${snapshot.release}, top 5 overall; variants folded, fine-tunes hidden.`, link: "Full board" },
+				openWeights: "Open weights",
+				writing: { label: "Writing", sub: "写作", note: "Engineering notes, releases, and a daily AI tech digest.", link: "All posts" },
+				minutes: "min",
+				cta: "Start exploring",
+			};
+
+const spec = [
+	{ label: C.stats.projects, count: counts.projects, href: tp("/projects") },
+	{ label: C.stats.stars, count: counts.totalStars },
+	{ label: C.stats.posts, count: counts.posts, href: tp("/blog") },
+	{ label: C.stats.aur, count: counts.aurPackages, href: tp("/aur") },
+	{ label: C.stats.since, value: String(site.establishedYear) },
+	{ label: C.stats.status, value: t("meta.status.active"), live: true },
+];
+---
+
+<AppShell title={site.siteName} description={pickLang(site.description, lang)}>
+	<PageHero size="xl" eyebrow={C.eyebrow} spec={spec} class="home-hero lg:min-h-[100svh] flex flex-col justify-end">
+		<Fragment slot="background">
+			<div class="home-hero__field">
+				<ActivationField step={17} />
+			</div>
+		</Fragment>
+
+		<Fragment slot="title">
+			{lang === "zh" ? (
+				<>
+					<span class="block">为智能时代,</span>
+					<span class="block">构建<span class="text-signal">快速、开放</span>的</span>
+					<span class="block">工程工具。</span>
+				</>
+			) : (
+				<>
+					<span class="block">Fast, open tools</span>
+					<span class="block">for the <span class="serif-accent text-signal pr-[0.05em]">intelligent</span></span>
+					<span class="block">era of engineering.</span>
+				</>
+			)}
+		</Fragment>
+
+		<Fragment slot="actions">
+			<a href={tp("/projects")} class="btn btn-primary">
+				{C.cta}
+				<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+					<path d="M5 12h14" />
+					<path d="m12 5 7 7-7 7" />
+				</svg>
+			</a>
+			<a href={tp("/blog")} class="btn btn-ghost">{t("nav.blog")}</a>
+			<a href={tp("/benchmarks")} class="btn btn-ghost">{t("nav.benchmarks")}</a>
+		</Fragment>
+
+		{/* 概述 + whoami 终端 */}
+		<div class="grid gap-8 lg:grid-cols-12 lg:gap-12 items-end">
+			<div class="lg:col-span-7 space-y-4 text-[15.5px] lg:text-[17px] leading-[1.75] text-[color:var(--color-ink-secondary)] max-w-[60ch]">
+				{C.summary.map((p) => <p>{p}</p>)}
+			</div>
+
+			<div class="lg:col-span-5 terminal surface-card overflow-hidden">
+				<div class="flex items-center gap-1.5 h-9 px-3.5 border-b border-[color:var(--color-hairline)]">
+					<span class="h-2.5 w-2.5 rounded-full bg-[color:var(--color-ink-faint)]" aria-hidden="true"></span>
+					<span class="h-2.5 w-2.5 rounded-full bg-[color:var(--color-ink-faint)]" aria-hidden="true"></span>
+					<span class="h-2.5 w-2.5 rounded-full bg-[color:var(--color-ink-faint)]" aria-hidden="true"></span>
+					<span class="ml-auto font-[var(--font-mono)] text-[10px] uppercase tracking-[var(--tracking-wider)] text-[color:var(--color-ink-muted)]">zsh — zerx</span>
+				</div>
+				<div class="px-4 py-4 font-[var(--font-mono)] text-[12.5px] leading-[1.9]">
+					<div class="flex items-center gap-2">
+						<span aria-hidden="true" class="text-[color:var(--color-signal)]">❯</span>
+						<span class="terminal__typed text-[color:var(--color-ink-primary)]">whoami</span>
+					</div>
+					<div class="terminal__out">
+						<div class="text-[color:var(--color-ink-primary)]">zerx-lab</div>
+						<div class="text-[color:var(--color-ink-tertiary)]"><span class="text-[color:var(--color-ink-muted)]">focus </span>{site.focus.toLowerCase()}</div>
+						<div class="text-[color:var(--color-ink-tertiary)]"><span class="text-[color:var(--color-ink-muted)]">where </span>{pickLang(site.location, lang)}</div>
+						<div class="text-[color:var(--color-ink-tertiary)]">
+							<span class="text-[color:var(--color-ink-muted)]">home  </span>
+							<a href={site.socialGithub} target="_blank" rel="noopener noreferrer" class="link-underline text-[color:var(--color-ink-secondary)] hover:text-[color:var(--color-signal)]">github.com/zerx-lab</a>
+						</div>
+						<div class="flex items-center gap-2">
+							<span aria-hidden="true" class="text-[color:var(--color-signal)]">❯</span>
+							<span aria-hidden="true" class="inline-block h-[14px] w-[7px] bg-[color:var(--color-ink-primary)] animate-[var(--animate-blink)]"></span>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</PageHero>
+
+	{/* ============================ 01 精选作品 ============================ */}
+	<CvSection index="01" label={C.work.label} sublabel={C.work.sub} note={C.work.note} linkText={C.work.link} linkHref={tp("/projects")}>
+		<ProjectShowcase lang={lang} />
+	</CvSection>
+
+	{/* ============================ 02 能力 ============================ */}
+	<CvSection index="02" label={C.caps.label} sublabel={C.caps.sub} note={C.caps.note}>
+		<ol class="list-none m-0 p-0">
+			{C.capItems.map((cap, i) => (
+				<li class="cap reveal-scroll group grid gap-x-8 gap-y-3 py-8 first:pt-0 border-b border-[color:var(--color-hairline)]">
+					<span class="cap__num font-semibold leading-none tracking-[-0.06em] tabular-nums text-[color:var(--color-ink-faint)] transition-colors duration-[var(--duration-slow)] group-hover:text-[color:var(--color-signal)]">
+						{String(i + 1).padStart(2, "0")}
+					</span>
+					<div>
+						<h3 class="text-[22px] lg:text-[26px] font-semibold tracking-[-0.03em]">{cap.title}</h3>
+						<p class="mt-3 max-w-[58ch] text-[15px] leading-[1.7] text-[color:var(--color-ink-secondary)]">{cap.body}</p>
+						<div class="mt-4 flex flex-wrap gap-1.5">
+							{cap.tags.map((tag) => <span class="chip">{tag}</span>)}
+						</div>
+					</div>
+				</li>
+			))}
+		</ol>
+
+		<div class="mt-10 reveal-scroll">
+			<div class="flex items-baseline justify-between gap-4">
+				<span class="mono-label text-[10.5px]">{C.languages}</span>
+				<span class="font-[var(--font-mono)] text-[10.5px] text-[color:var(--color-ink-muted)]">GitHub linguist</span>
+			</div>
+			<div class="mt-3 flex h-3 w-full gap-[3px] overflow-hidden rounded-full" role="img" aria-label={languageStats.map((s) => `${s.name} ${s.percent}%`).join(", ")}>
+				{languageStats.map((s, i) => (
+					<span class="lang-seg h-full" style={`flex: ${s.percent} 0 0; background-color: ${s.color}; --i: ${i}`}></span>
+				))}
+			</div>
+			<ul class="mt-4 list-none m-0 p-0 flex flex-wrap gap-x-5 gap-y-2 font-[var(--font-mono)] text-[11px]">
+				{languageStats.map((s) => (
+					<li class="inline-flex items-center gap-1.5 text-[color:var(--color-ink-secondary)]">
+						<span aria-hidden="true" class="h-2 w-2 rounded-full" style={`background-color: ${s.color}`}></span>
+						{s.name}
+						<span class="tabular-nums text-[color:var(--color-ink-muted)]">{s.percent}%</span>
+					</li>
+				))}
+			</ul>
+		</div>
+	</CvSection>
+
+	{/* ============================ 03 模型信号 ============================ */}
+	<CvSection index="03" label={C.signals.label} sublabel={C.signals.sub} note={C.signals.note} linkText={C.signals.link} linkHref={tp("/benchmarks")}>
+		<ol class="list-none m-0 p-0 surface-card overflow-hidden">
+			{topModels.map((m, i) => (
+				<li class="signal-row reveal-scroll grid items-center gap-x-5 gap-y-2 px-5 sm:px-7 py-5 border-b border-[color:var(--color-hairline)] last:border-b-0">
+					<span class:list={[
+						"font-semibold leading-none tracking-[-0.05em] tabular-nums text-[28px]",
+						i === 0 ? "text-signal" : "text-[color:var(--color-ink-faint)]",
+					]}>
+						{String(i + 1).padStart(2, "0")}
+					</span>
+					<div class="min-w-0">
+						<div class="flex flex-wrap items-center gap-2">
+							<span class="truncate text-[15.5px] font-semibold tracking-[-0.015em]">{m.name}</span>
+							{m.openWeights && <span class="chip chip-signal">{C.openWeights}</span>}
+						</div>
+						<span class="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[var(--tracking-wide)] text-[color:var(--color-ink-tertiary)]">{m.organization}</span>
+					</div>
+					<div class="signal-row__meter meter">
+						<span data-animate style={`width: ${((m.overall / topScore) * 100).toFixed(1)}%`}></span>
+					</div>
+					<span class="font-[var(--font-mono)] text-[15px] tabular-nums font-medium text-right">{m.overall.toFixed(2)}</span>
+				</li>
+			))}
+		</ol>
+	</CvSection>
+
+	{/* ============================ 04 写作 ============================ */}
+	<CvSection index="04" label={C.writing.label} sublabel={C.writing.sub} note={C.writing.note} linkText={C.writing.link} linkHref={tp("/blog")}>
+		<ol class="list-none m-0 p-0 border-t border-[color:var(--color-hairline)]">
+			{latest.items.map((post) => (
+				<li class="reveal-scroll">
+					<a href={tp(`/blog/${post.slug}`)} class="post-row group grid gap-x-8 gap-y-1.5 py-6 border-b border-[color:var(--color-hairline)]">
+						<div class="flex sm:flex-col gap-3 sm:gap-1.5 font-[var(--font-mono)] text-[11px] tabular-nums">
+							<time datetime={post.date} class="text-[color:var(--color-ink-secondary)]">{formatDateCompact(post.date).replaceAll("-", ".")}</time>
+							{post.categoryName && <span class="uppercase tracking-[var(--tracking-wide)] text-[color:var(--color-ink-muted)]">{post.categoryName}</span>}
+						</div>
+						<div class="min-w-0">
+							<h3 class="text-[18px] lg:text-[19px] font-semibold tracking-[-0.02em] leading-snug transition-colors duration-[var(--duration-fast)] group-hover:text-[color:var(--color-signal)]">{post.title}</h3>
+							{post.excerpt && <p class="mt-2 text-[14px] leading-[1.65] text-[color:var(--color-ink-tertiary)] line-clamp-2 max-w-[68ch]">{post.excerpt}</p>}
+						</div>
+						<span class="hidden sm:flex items-start justify-end gap-2 font-[var(--font-mono)] text-[11px] tabular-nums text-[color:var(--color-ink-muted)] whitespace-nowrap">
+							{post.readingTime} {C.minutes}
+							<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="mt-px -translate-x-1 opacity-0 transition-all duration-[var(--duration-slow)] ease-[var(--ease-out-expo)] group-hover:translate-x-0 group-hover:opacity-100 text-[color:var(--color-signal)]">
+								<path d="M5 12h14" />
+								<path d="m12 5 7 7-7 7" />
+							</svg>
+						</span>
+					</a>
+				</li>
+			))}
+		</ol>
+	</CvSection>
+</AppShell>
+
+<style>
+	/* ---------- Hero 背景画布:右侧大面积,向左 / 向下淡出 ---------- */
+	.home-hero__field {
+		position: absolute;
+		inset: 0;
+		opacity: 0.55;
+		mask-image: linear-gradient(to bottom, #000 40%, transparent 92%);
+		-webkit-mask-image: linear-gradient(to bottom, #000 40%, transparent 92%);
+	}
+
+	@media (min-width: 1024px) {
+		.home-hero__field {
+			left: 30%;
+			opacity: 1;
+			mask-image:
+				linear-gradient(to right, transparent 0%, #000 38%),
+				linear-gradient(to bottom, #000 45%, transparent 95%);
+			-webkit-mask-image:
+				linear-gradient(to right, transparent 0%, #000 38%),
+				linear-gradient(to bottom, #000 45%, transparent 95%);
+			mask-composite: intersect;
+			-webkit-mask-composite: source-in;
+		}
+	}
+
+	/* whoami:命令逐字打出,输出随后出现 */
+	.terminal {
+		background-color: color-mix(in oklab, var(--color-surface) 86%, transparent);
+	}
+	.terminal__typed {
+		display: inline-block;
+		overflow: hidden;
+		white-space: nowrap;
+		width: 6ch;
+		animation: type-in 0.9s steps(6) 1s backwards;
+	}
+	.terminal__out {
+		animation: fade-in 0.4s var(--ease-standard) 2s backwards;
+	}
+	@keyframes type-in {
+		from {
+			width: 0;
+		}
+	}
+
+	/* ---------- 能力:超大编号 ---------- */
+	.cap {
+		grid-template-columns: 1fr;
+	}
+	.cap__num {
+		font-size: 56px;
+	}
+	@media (min-width: 640px) {
+		.cap {
+			grid-template-columns: 7rem minmax(0, 1fr);
+		}
+		.cap__num {
+			font-size: 72px;
+		}
+	}
+
+	/* 语言条:各段依次展开 */
+	.lang-seg {
+		transform-origin: left center;
+		animation: bar-grow 0.9s var(--ease-out-expo) backwards;
+		animation-delay: calc(var(--i) * 60ms);
+	}
+	@supports (animation-timeline: view()) {
+		.lang-seg {
+			animation-timeline: view();
+			animation-range: entry 20% cover 40%;
+			animation-timing-function: linear;
+			animation-delay: 0s;
+		}
+	}
+
+	/* ---------- 模型信号 ---------- */
+	.signal-row {
+		grid-template-columns: 3rem minmax(0, 1fr) auto;
+	}
+	.signal-row__meter {
+		grid-column: 2 / -1;
+		grid-row: 2;
+	}
+	@media (min-width: 640px) {
+		.signal-row {
+			grid-template-columns: 3.5rem minmax(0, 1fr) minmax(8rem, 13rem) 4.5rem;
+		}
+		.signal-row__meter {
+			grid-column: auto;
+			grid-row: auto;
+		}
+	}
+
+	/* ---------- 写作 ---------- */
+	.post-row {
+		grid-template-columns: 1fr;
+	}
+	@media (min-width: 640px) {
+		.post-row {
+			grid-template-columns: 7rem minmax(0, 1fr) auto;
+		}
+	}
+</style>

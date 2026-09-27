@@ -11,7 +11,7 @@
 | 层       | 选型                                                                    |
 | :------- | :---------------------------------------------------------------------- |
 | 框架     | [Astro 6](https://astro.build/) (`output: "static"`，全站构建期预渲染) |
-| UI       | Tailwind CSS v4 (CSS-first) + 少量 React 19 交互岛                      |
+| UI       | Tailwind CSS v4 (CSS-first) + 少量原生 TS 交互脚本;字体经 @fontsource 自托管(Geist / Geist Mono / Instrument Serif) |
 | 内容源   | 仓库内 Markdown（Astro Content Collections，见 `src/content/`）          |
 | Markdown | Astro 内置 remark/rehype + Shiki（双主题 github-light / github-dark-dimmed） |
 | 包管理   | Bun                                                                      |
@@ -24,8 +24,9 @@
 - **双语路由**：`/` 中文（默认无前缀）、`/en/` 英文，目录即路由，不依赖 Astro 内建 i18n
 - **全静态预渲染**：构建期一次性读完 `src/content/**` 生成全部页面，产物是纯静态文件，运行时零外部依赖、零服务端进程
 - **博客能力**：分页与分类走路径而非查询参数（`/blog/page/2`、`/blog/cat/news`）、客户端搜索（构建期产出 `/search/<lang>.json` 静态索引，输入即过滤并高亮命中词）、TOC 目录、代码高亮、阅读时长、按语言拆分的 RSS feed、giscus 评论（未配置时静默跳过）
-- **移动端完整适配**：`< md` 汉堡菜单，`< lg` 双栏塌陷，TOC 默认展开
+- **移动端完整适配**：`< lg` 导航收为胶囊 + 全屏抽屉，简历分节塌陷为单列，TOC 默认展开
 - **SEO**：sitemap 带 `hreflang`、canonical URL、双语 RSS feed、OG 图
+- **设计系统 "Dossier"**：悬浮胶囊导航 + 全宽页头(超大标题 + 横向规格条)+ 简历式分节(左侧吸顶章节栏 / 右侧内容)+ 大页脚(全站唯一联系入口)。tokens 与组件类集中在 `src/styles/global.css`，布局原语在 `src/components/layout/`(`PageHero` / `SpecStrip` / `CvSection` / `SiteHeader` / `SiteFooter`);动效只动 transform/opacity,滚动驱动动画与跨文档 View Transitions 均为渐进增强，尊重 `prefers-reduced-motion`
 
 ---
 
@@ -47,8 +48,9 @@ zerx-lab-website/
 │   │   ├── en/                 # 英文镜像路由
 │   │   ├── about.astro / aur.astro / projects.astro / 404.astro
 │   │   └── rss.xml.ts          # 按语言拆分的 RSS
-│   ├── components/             # 布局 / blog（含评论区 Comments.astro）/ home / projects / ui
-│   │   └── home/ProjectShowcase.astro  # 首页项目九宫格：构建期按 GitHub star 降序动态生成
+│   ├── components/             # layout(外壳与布局原语)/ blog（含评论区 Comments.astro）/ home / projects / ui
+│   │   ├── home/HomePage.astro         # 首页(中英共用):Hero 激活场、精选作品、能力、模型信号、写作
+│   │   └── home/ProjectShowcase.astro  # 首页精选作品 Bento:构建期按 GitHub star 降序动态生成
 │   ├── layouts/
 │   ├── lib/
 │   │   ├── content.ts          # 内容访问层：双语字段解包、data/* 读取

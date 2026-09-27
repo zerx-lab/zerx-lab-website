@@ -206,7 +206,7 @@ async function buildLiveProjects(
  * 全站计数,其中 projects / totalStars / totalForks 用 GitHub 实时清单覆盖。
  *
  * 为什么不直接改 @lib/content 的 loadCounts:那是纯内容层,不该依赖网络;
- * 而首页 meta、关于页 "IN NUMBERS" 与 /projects 左栏必须报同一个数,
+ * 而首页规格条、关于页数据分节与 /projects 页头必须报同一个数,
  * 所以在查询层做这一次合并,三处共用。
  */
 export async function loadLiveCounts(): Promise<ContentCounts> {

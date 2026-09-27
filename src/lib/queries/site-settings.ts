@@ -17,7 +17,7 @@ import type { Lang } from "@/i18n/ui";
  * 站点设置 ViewModel(已按当前语言解包)。
  *
  *   - focus             关注方向,如 "FULL-STACK / RUST / GO",不翻译
- *   - establishedYear   建立年份,用于左栏 "ESTABLISHED" meta
+ *   - establishedYear   建立年份,用于页头规格条 / 页脚
  *   - contributors      贡献者数量(手填)
  *   - totalStars        全部项目 star 汇总
  *   - ogImage           OG 分享图路径;未配置为 null

@@ -1,0 +1,274 @@
+---
+/**
+ * ============================================================================
+ * ParticleWordmark - 粒子字标
+ * ----------------------------------------------------------------------------
+ * 把一行文字栅格化后按网格采样成粒子:
+ *   - 进入视口时粒子从四散状态聚合成字形(弹簧 + 阻尼)
+ *   - 指针靠近时粒子被推开,离开后回位
+ *   - 全部粒子静止且无指针干扰时停止 rAF,不占 CPU
+ *   - 单一线性渐变 fillStyle(Signal 靛紫 → 青),每帧只切换一次填充
+ *   - prefers-reduced-motion:直接绘制成形后的静态字标
+ *   - 字号按容器宽度自适应,完整显示不裁切
+ * ============================================================================
+ */
+
+interface Props {
+	/** 字标文字 */
+	text: string;
+	/** 额外类名(控制尺寸 / 外边距) */
+	class?: string;
+}
+
+const { text, class: className = "" } = Astro.props;
+---
+
+<div class:list={["particle-wordmark relative w-full aspect-[5/1]", className]} aria-hidden="true">
+	<canvas data-particle-wordmark data-text={text} class="absolute inset-0 h-full w-full"></canvas>
+</div>
+
+<script>
+	const FONT_FAMILY = '"Geist Variable", "Geist", system-ui, sans-serif';
+	const SPRING = 0.055;
+	const DAMPING = 0.84;
+	const REPEL_RADIUS = 110;
+	const REPEL_FORCE = 7;
+
+	function mount(canvas: HTMLCanvasElement): void {
+		if (canvas.dataset.bound === "true") return;
+		canvas.dataset.bound = "true";
+
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return;
+
+		const text = canvas.dataset.text ?? "";
+		const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+		let width = 0;
+		let height = 0;
+		let size = 3;
+		// 结构化数组:x, y, vx, vy, tx, ty —— 连续内存,避免对象分配
+		let data = new Float32Array(0);
+		let count = 0;
+		let raf = 0;
+		let visible = false;
+		let assembled = false;
+		let gradient: CanvasGradient | string = "#888";
+		const pointer = { x: -9999, y: -9999, active: false };
+
+		const buildGradient = (): void => {
+			const css = getComputedStyle(document.documentElement);
+			const a = css.getPropertyValue("--color-signal").trim() || "#4f46e5";
+			const b = css.getPropertyValue("--color-signal-2").trim() || "#0891b2";
+			const g = ctx.createLinearGradient(0, 0, width, 0);
+			g.addColorStop(0, a);
+			g.addColorStop(1, b);
+			gradient = g;
+		};
+
+		/** 栅格化文字并采样目标点 */
+		const sample = (): void => {
+			const rect = canvas.getBoundingClientRect();
+			const dpr = Math.min(window.devicePixelRatio || 1, 2);
+			width = rect.width;
+			height = rect.height;
+			canvas.width = Math.round(width * dpr);
+			canvas.height = Math.round(height * dpr);
+			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+			// 离屏画布上按容器尺寸找能完整放下的最大字号
+			const off = document.createElement("canvas");
+			off.width = Math.max(1, Math.round(width));
+			off.height = Math.max(1, Math.round(height));
+			const octx = off.getContext("2d", { willReadFrequently: true });
+			if (!octx) return;
+
+			let fontSize = height * 0.9;
+			octx.font = `700 ${fontSize}px ${FONT_FAMILY}`;
+			const measured = octx.measureText(text).width;
+			if (measured > width * 0.98) fontSize *= (width * 0.98) / measured;
+			octx.font = `700 ${fontSize}px ${FONT_FAMILY}`;
+			octx.textAlign = "center";
+			octx.textBaseline = "middle";
+			octx.fillStyle = "#000";
+			octx.fillText(text, off.width / 2, off.height / 2 + fontSize * 0.04);
+
+			const step = Math.max(3, Math.round(fontSize / 34));
+			size = Math.max(1.6, step * 0.62);
+			const pixels = octx.getImageData(0, 0, off.width, off.height).data;
+
+			const points: number[] = [];
+			for (let y = 0; y < off.height; y += step) {
+				for (let x = 0; x < off.width; x += step) {
+					if (pixels[(y * off.width + x) * 4 + 3] > 128) points.push(x, y);
+				}
+			}
+
+			const previous = data;
+			const previousCount = count;
+			count = points.length / 2;
+			data = new Float32Array(count * 6);
+			for (let i = 0; i < count; i++) {
+				const o = i * 6;
+				const tx = points[i * 2];
+				const ty = points[i * 2 + 1];
+				data[o + 4] = tx;
+				data[o + 5] = ty;
+				if (assembled || reduceMotion) {
+					// 重采样(resize)时不重播聚合动画:沿用旧位置或直接落位
+					const po = i < previousCount ? i * 6 : -1;
+					data[o] = po >= 0 ? previous[po] : tx;
+					data[o + 1] = po >= 0 ? previous[po + 1] : ty;
+				} else {
+					// 初始:散布在画布四周,进入视口后聚合
+					const angle = Math.random() * Math.PI * 2;
+					const radius = Math.max(width, height) * (0.35 + Math.random() * 0.45);
+					data[o] = width / 2 + Math.cos(angle) * radius;
+					data[o + 1] = height / 2 + Math.sin(angle) * radius * 0.6;
+				}
+			}
+
+			buildGradient();
+		};
+
+		const draw = (): void => {
+			ctx.clearRect(0, 0, width, height);
+			ctx.fillStyle = gradient;
+			ctx.beginPath();
+			for (let i = 0; i < count; i++) {
+				const o = i * 6;
+				ctx.rect(data[o] - size / 2, data[o + 1] - size / 2, size, size);
+			}
+			ctx.fill();
+		};
+
+		/** 推进一步物理;返回是否仍在运动 */
+		const step = (): boolean => {
+			let moving = false;
+			const r2 = REPEL_RADIUS * REPEL_RADIUS;
+			for (let i = 0; i < count; i++) {
+				const o = i * 6;
+				let x = data[o];
+				let y = data[o + 1];
+				let vx = data[o + 2];
+				let vy = data[o + 3];
+
+				vx += (data[o + 4] - x) * SPRING;
+				vy += (data[o + 5] - y) * SPRING;
+
+				if (pointer.active) {
+					const dx = x - pointer.x;
+					const dy = y - pointer.y;
+					const d2 = dx * dx + dy * dy;
+					if (d2 < r2 && d2 > 0.01) {
+						const d = Math.sqrt(d2);
+						const f = (1 - d / REPEL_RADIUS) * REPEL_FORCE;
+						vx += (dx / d) * f;
+						vy += (dy / d) * f;
+					}
+				}
+
+				vx *= DAMPING;
+				vy *= DAMPING;
+				x += vx;
+				y += vy;
+
+				data[o] = x;
+				data[o + 1] = y;
+				data[o + 2] = vx;
+				data[o + 3] = vy;
+
+				if (!moving && (Math.abs(vx) > 0.02 || Math.abs(vy) > 0.02 || Math.abs(data[o + 4] - x) > 0.3)) {
+					moving = true;
+				}
+			}
+			return moving || pointer.active;
+		};
+
+		const loop = (): void => {
+			const moving = step();
+			draw();
+			raf = moving && visible ? requestAnimationFrame(loop) : 0;
+		};
+
+		const wake = (): void => {
+			if (reduceMotion || raf || !visible) return;
+			raf = requestAnimationFrame(loop);
+		};
+
+		const settleInstantly = (): void => {
+			for (let i = 0; i < count; i++) {
+				const o = i * 6;
+				data[o] = data[o + 4];
+				data[o + 1] = data[o + 5];
+				data[o + 2] = 0;
+				data[o + 3] = 0;
+			}
+			draw();
+		};
+
+		const start = async (): Promise<void> => {
+			// 等字体就绪再采样,否则会采到回落字体的字形
+			try {
+				await document.fonts.load(`700 100px ${FONT_FAMILY}`);
+			} catch {
+				// 字体加载失败时用回落字体继续
+			}
+			sample();
+			if (reduceMotion) {
+				settleInstantly();
+				return;
+			}
+			draw();
+
+			new IntersectionObserver(
+				([entry]) => {
+					visible = entry.isIntersecting;
+					if (visible) {
+						assembled = true;
+						wake();
+					}
+				},
+				{ threshold: 0.15 },
+			).observe(canvas);
+
+			let resizeTimer = 0;
+			new ResizeObserver(() => {
+				window.clearTimeout(resizeTimer);
+				resizeTimer = window.setTimeout(() => {
+					sample();
+					draw();
+					wake();
+				}, 120);
+			}).observe(canvas);
+
+			new MutationObserver(() => {
+				buildGradient();
+				draw();
+			}).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+
+			if (window.matchMedia("(pointer: fine)").matches) {
+				canvas.parentElement?.addEventListener("pointermove", (e) => {
+					const rect = canvas.getBoundingClientRect();
+					pointer.x = e.clientX - rect.left;
+					pointer.y = e.clientY - rect.top;
+					pointer.active = true;
+					wake();
+				});
+				canvas.parentElement?.addEventListener("pointerleave", () => {
+					pointer.active = false;
+					wake();
+				});
+			}
+		};
+
+		void start();
+	}
+
+	function init(): void {
+		document.querySelectorAll<HTMLCanvasElement>("[data-particle-wordmark]").forEach(mount);
+	}
+
+	init();
+	document.addEventListener("astro:after-swap", init);
+</script>

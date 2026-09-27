@@ -1,128 +1,51 @@
 ---
 /**
  * ============================================================================
- * AppShell - 主布局(左固定 / 右滚动双栏骨架)
+ * AppShell - 全站外壳
  * ----------------------------------------------------------------------------
- * 视觉参考: better-auth.com 的整体布局
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │        ( Logo   首页 项目 榜单 AUR 博客 关于   ZH ☼ GH )     │ ← SiteHeader:悬浮胶囊,fixed
+ *   │                                                            │
+ *   │   <slot />   页面自行组合:                                   │
+ *   │     PageHero   全宽大标题 + SpecStrip 横向规格条              │
+ *   │     CvSection  简历分节:左侧吸顶章节栏 / 右侧内容             │
+ *   │                                                            │
+ *   │   SiteFooter   联系 CTA + 站点地图 + 超大描边字标              │
+ *   └────────────────────────────────────────────────────────────┘
  *
- *   桌面端 (≥ 1024px):
- *   ┌──────────────────────┬────────────────────────────────────────┐
- *   │                      │ [TopNav - sticky]                      │
- *   │   LeftPane           │ ─────────────────────────────────────  │
- *   │   (position: fixed)  │                                        │
- *   │                      │   <slot />  (RightPane 独立滚动)       │
- *   │   - Logo             │                                        │
- *   │   - Page eyebrow     │   ...内容区                            │
- *   │   - 大标题            │                                        │
- *   │   - 描述             │                                        │
- *   │   - Meta 元信息栏    │                                        │
- *   │                      │                                        │
- *   └──────────────────────┴────────────────────────────────────────┘
- *
- *   移动端 (< 1024px):
- *   ┌────────────────────────┐
- *   │ [TopNav - sticky]      │
- *   │ ────────────────────── │
- *   │   LeftPane (普通流)     │  ← 在上
- *   │   (Logo/标题/描述)      │
- *   │ ────────────────────── │
- *   │   RightPane 内容        │  ← 在下
- *   │                        │
- *   └────────────────────────┘
- *
- * 实现策略:
- *   1. 外层 flex 容器,桌面端 row / 移动端 column
- *   2. LeftPane 桌面端用 position: fixed + 宽度 ≈ 38%,
- *      不用 sticky 是因为 TopNav 只在右栏顶部 sticky,而不是全局
- *   3. RightPane 桌面端左 margin 等于 LeftPane 宽度,占满剩余空间
- *      顶部放 TopNav (sticky),下方是主内容
- *   4. body 保留噪点背景,AppShell 本身透明
- *
- * Props 直接透传给 LeftPane 的 eyebrow/title/description/meta/social/actions,
- * 页面层用起来非常直观:
- *
- *   <AppShell title="News, releases, and insights" eyebrow="Blog">
- *     <Fragment slot="left-meta">
- *       <MetaRow label="POSTS" value="12" />
- *     </Fragment>
- *
- *     <!-- 右栏内容 -->
- *     <SectionHeader eyebrow="BLOG" />
- *     ...
- *   </AppShell>
- *
- * 进阶:需要完全自定义左栏时,使用 left slot 覆盖:
- *   <AppShell>
- *     <div slot="left">...完全自定义...</div>
- *     <!-- 右栏内容 -->
- *     ...
- *   </AppShell>
+ * 没有全局侧栏:版心由 `.wrap`(global.css)统一控制,页面按需全宽。
+ * 背景环境光层固定在视口顶部,只做 transform 动画。
  * ============================================================================
  */
 
 import BaseHead from "@components/layout/BaseHead.astro";
-import TopNav from "@components/layout/TopNav.astro";
-import LeftPane from "@components/layout/LeftPane.astro";
-import LabMark from "@components/ui/LabMark.astro";
+import SiteHeader from "@components/layout/SiteHeader.astro";
+import SiteFooter from "@components/layout/SiteFooter.astro";
 import { getLangFromUrl } from "@i18n/utils";
 import { languageTags } from "@i18n/ui";
 import "@styles/global.css";
 
 interface Props {
-	// ---------- SEO / Head ----------
 	/** 页面 title(不含品牌后缀,BaseHead 会拼接) */
 	title?: string;
 	/** 页面 meta description */
 	description?: string;
-	/** OG 分享图 URL;未配置传 null 或不传,BaseHead 会跳过 og:image 标签 */
+	/** OG 分享图 URL;未配置传 null 或不传 */
 	ogImage?: string | null;
 	/** OG 类型 */
 	ogType?: "website" | "article";
-	/** 文章类型专用:发布时间 */
+	/** 文章专用:发布时间 */
 	articlePublishedTime?: string;
-	/** 文章类型专用:修改时间 */
+	/** 文章专用:修改时间 */
 	articleModifiedTime?: string;
-	/** 文章类型专用:作者 */
+	/** 文章专用:作者 */
 	articleAuthor?: string;
 	/** 是否 noindex */
 	noindex?: boolean;
-
-	// ---------- LeftPane 内容 ----------
-	/** 左栏小眉标签(mono label,如 "Blog" / "Projects") */
-	eyebrow?: string;
-	/** 眉标前的小图标(一般是 emoji) */
-	eyebrowIcon?: string;
-	/** 左栏大标题 */
-	leftTitle?: string;
-	/** 左栏描述段落 */
-	leftDescription?: string;
-	/**
-	 * 是否在左栏默认显示 LabMark 视觉装置(ASCII 几何矩阵 + 宣言)
-	 * ----------------------------------------------------------------------
-	 * 设计决策(2026-04):
-	 *   - 最初 LabMark 作为 `left-visual` slot 的 fallback,所有页面未自定义
-	 *     时都会显示。但实际品牌诉求是:LabMark 是"实验室主视觉宣言装置",
-	 *     只应在首页出现,作为品牌入口;其它页面(项目/AUR/博客/关于)应
-	 *     聚焦该页自身的 meta 信息,不重复品牌装置。
-	 *   - 因此改为显式 opt-in:默认 false,首页显式传 showLabMark={true},
-	 *     其它页面(或传入自定义 `left-visual` slot)则不显示。
-	 *
-	 * 优先级:
-	 *   1. 如果页面传了 `left-visual` slot → 用页面自定义内容(最高优先级)
-	 *   2. 如果未传且 showLabMark=true → 渲染 <LabMark />
-	 *   3. 其它情况 → 左栏不渲染任何视觉装置(md 以上的空间让给正文)
-	 */
-	showLabMark?: boolean;
-
-	// ---------- 杂项 ----------
-	/** 右栏主内容容器是否启用默认左右内边距(默认 true;完全自定义布局可设为 false) */
-	padded?: boolean;
-	/** 右栏最大宽度(CSS 值或 'none');默认跟随设计 token */
-	maxContentWidth?: string;
+	/** 是否渲染页脚(404 等极简页可关闭) */
+	footer?: boolean;
 	/** 额外传给 <body> 的类名 */
 	bodyClass?: string;
-	/** 额外传给右栏内容容器的类名 */
-	contentClass?: string;
 }
 
 const {
@@ -134,37 +57,12 @@ const {
 	articleModifiedTime,
 	articleAuthor,
 	noindex,
-
-	eyebrow,
-	eyebrowIcon,
-	leftTitle,
-	leftDescription,
-	showLabMark = false,
-
-	padded = true,
-	maxContentWidth,
+	footer = true,
 	bodyClass = "",
-	contentClass = "",
 } = Astro.props;
 
 const lang = getLangFromUrl(Astro.url);
 const htmlLang = languageTags[lang];
-
-// 检测外部是否传了 left slot(允许完全自定义左栏)
-const hasCustomLeft = Astro.slots.has("left");
-// 检测左栏内部各 slot
-const hasLeftMeta = Astro.slots.has("left-meta");
-// 是否由页面层自定义了 left-visual slot(覆盖默认装置)
-const hasLeftVisual = Astro.slots.has("left-visual");
-// ----------------------------------------------------------------------------
-// 注意:不再使用 `Astro.slots.has()` + `{flag && <Fragment slot="xxx">...}` 的
-// 条件透传模式。原因:当 flag=false 时,表达式返回 false 会被 Astro 作为
-// default slot 的内容传给子组件,污染子组件的 Astro.slots.has("default"),
-// 导致子组件里"是否外部自定义 default"的判断错误。
-//
-// 改为无条件透传 <slot name="xxx" slot="xxx" />。当父级页面没有传入该具名 slot 时,
-// 这些透传在子组件内也不会渲染任何内容,由子组件自己的默认兜底/条件控制。
-// ----------------------------------------------------------------------------
 ---
 
 <!doctype html>
@@ -185,233 +83,117 @@ const hasLeftVisual = Astro.slots.has("left-visual");
 
 	<body
 		class:list={[
-			"app-shell-body",
-			"min-h-screen",
-			"bg-[color:var(--color-paper)]",
-			"text-[color:var(--color-ink-primary)]",
-			"antialiased",
+			"app-body min-h-screen antialiased",
+			"bg-[color:var(--color-paper)] text-[color:var(--color-ink-primary)]",
 			bodyClass,
 		]}
 	>
-		{/* ----------------------------------------------------------------
-		 * 外层 Shell:桌面端两栏,移动端单栏
-		 * ---------------------------------------------------------------- */}
-		<div class="app-shell">
-			{/* -------- 左栏 -------- */}
-			<aside class="app-shell__left" aria-label={lang === "zh" ? "侧边信息栏" : "Sidebar"}>
-				{hasCustomLeft ? (
-					<slot name="left" />
-				) : (
-					<LeftPane
-						eyebrow={eyebrow}
-						eyebrowIcon={eyebrowIcon}
-						title={leftTitle}
-						description={leftDescription}
-					>
-						<slot name="left-body" />
-						{/*
-						 * 视觉装置透传 + fallback:
-						 * 使用 <slot> 原生的 fallback 机制 —— 当页面层没有传
-						 * `left-visual` slot 时,<slot> 内部的 <LabMark /> 作为默认
-						 * 内容被透传进 LeftPane 的 visual slot。
-						 *
-						 * 关键细节:在 LeftPane 内部,visual slot 必须是"被实际填充的"
-						 * 才会渲染。因此这里用了双层保险:
-                          *   1. <slot name="left-visual"> fallback </slot> 先解析外层
-                          *   2. 解析结果(页面传的内容或 fallback LabMark)再通过
-                          *      slot="visual" 属性透传给 LeftPane 的命名 slot
-						 *
-						 * 这样页面只需选择性地传入 left-visual,未传则自动显示 LabMark,
-						 * 完全避免了 Astro.slots.has() 的 false 值污染问题。
-						 */}
-						{/*
-						 * 视觉装置槽位(重构后):
-						 *   - 页面传了 left-visual slot → 透传页面自定义内容
-						 *   - 未传 + showLabMark=true(如首页)→ 渲染默认 LabMark
-						 *   - 未传 + showLabMark=false(默认)→ 不渲染任何内容,
-						 *     LeftPane 的 visual slot 为空,md+ 的装置区自然折叠
-						 *
-						 * 注意:只有在 visual slot 被"实际填充"时才给 LeftPane
-						 * 传内容。如果两个条件都不满足,完全不写 slot="visual",
-						 * 避免 Astro 把空 Fragment 当作"已填充"导致空白块占位。
-						 */}
-						{hasLeftVisual ? (
-							<Fragment slot="visual">
-								<slot name="left-visual" />
-							</Fragment>
-						) : showLabMark ? (
-							<Fragment slot="visual">
-								<LabMark />
-							</Fragment>
-						) : null}
-						<slot name="left-actions" slot="actions" />
-						<slot name="left-social" slot="social" />
-						<slot name="left-meta" slot="meta" />
-					</LeftPane>
-				)}
-			</aside>
-
-			{/* -------- 右栏(含 TopNav + 主内容) -------- */}
-			<main class="app-shell__right" id="main-content">
-				{/* 顶部导航:sticky 到右栏顶 */}
-				<div class="app-shell__nav">
-					<TopNav />
-				</div>
-
-				{/* 主内容容器 */}
-				<div
-					class:list={[
-						"app-shell__content",
-						padded && "px-5 sm:px-8 md:px-10 lg:px-12 xl:px-16",
-						padded && "py-6 sm:py-8 lg:py-10",
-						contentClass,
-					]}
-					style={maxContentWidth
-						? `--content-max: ${maxContentWidth};`
-						: undefined}
-				>
-					<slot />
-				</div>
-
-				{/* 页脚区,页面可通过 footer slot 附加;默认空 */}
-				<slot name="footer" />
-			</main>
-		</div>
-
-		{/* ----------------------------------------------------------------
-		 * 跳到主内容的可达性锚点(屏幕阅读器 / 键盘用户友好)
-		 * ---------------------------------------------------------------- */}
 		<a href="#main-content" class="skip-link">
 			{lang === "zh" ? "跳转到主内容" : "Skip to main content"}
 		</a>
+
+		<div class="ambient" aria-hidden="true">
+			<div class="ambient__glow ambient__glow--a"></div>
+			<div class="ambient__glow ambient__glow--b"></div>
+		</div>
+
+		<SiteHeader />
+
+		<main id="main-content" tabindex="-1" class="relative z-[1] outline-none">
+			<slot />
+		</main>
+
+		{footer && <SiteFooter />}
+
+		<script>
+			/**
+			 * 鼠标聚光:给 [data-spotlight] 写入指针相对坐标 --mx / --my,
+			 * 由 .spotlight::after 消费。单个委托监听,仅精确指针设备,每帧最多一次。
+			 */
+			if (window.matchMedia("(pointer: fine)").matches) {
+				let frame = 0;
+				let lastEvent: PointerEvent | null = null;
+
+				const flush = (): void => {
+					frame = 0;
+					const e = lastEvent;
+					if (!e) return;
+					const target = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-spotlight]") : null;
+					if (!target) return;
+					const rect = target.getBoundingClientRect();
+					target.style.setProperty("--mx", `${e.clientX - rect.left}px`);
+					target.style.setProperty("--my", `${e.clientY - rect.top}px`);
+				};
+
+				document.addEventListener(
+					"pointermove",
+					(e) => {
+						lastEvent = e;
+						if (!frame) frame = requestAnimationFrame(flush);
+					},
+					{ passive: true },
+				);
+			}
+		</script>
 	</body>
 </html>
 
 <style>
-	/* ----------------------------------------------------------------------------
-	 * Shell 布局骨架
-	 * --------------------------------------------------------------------------
-	 * 关键实现要点:
-	 *   - 桌面端:LeftPane 用 position: fixed,宽度 = --layout-left-pane
-	 *            RightPane 用 margin-left 避开左栏,最小高度 100vh
-	 *   - 移动端:两栏变为普通文档流,LeftPane 在上,RightPane 在下
-	 *   - 避免用 grid: 因为我们需要 left 真正"不动"(脱离文档流),
-	 *     而 grid 的 sticky 会随父容器滚动,体验不一致
-	 * -------------------------------------------------------------------------- */
-
-	.app-shell {
-		display: flex;
-		flex-direction: column;
-		min-height: 100vh;
-		min-height: 100dvh;
+	.ambient {
+		position: fixed;
+		inset: 0;
+		z-index: 0;
+		pointer-events: none;
+		overflow: hidden;
+		contain: strict;
 	}
 
-	/* ---------- 左栏 ---------- */
-
-	.app-shell__left {
-		/* 移动端:普通块级元素,在上方 */
-		width: 100%;
-		border-bottom: 1px dashed var(--color-hairline);
+	.ambient__glow {
+		position: absolute;
+		border-radius: 50%;
+		will-change: transform;
+		animation: ambient-drift 38s ease-in-out infinite;
 	}
 
-	/* ---------- 右栏 ---------- */
-
-	.app-shell__right {
-		display: flex;
-		flex-direction: column;
-		flex: 1 1 auto;
-		min-width: 0;
-		/* 给右栏一个独立的堆叠上下文,方便 TopNav sticky 不被左栏 fixed 遮盖 */
-		position: relative;
-		z-index: 1;
+	.ambient__glow--a {
+		width: 70vmax;
+		height: 70vmax;
+		top: -46vmax;
+		left: 50%;
+		margin-left: -35vmax;
+		background: radial-gradient(
+			closest-side,
+			color-mix(in oklab, var(--color-signal) 12%, transparent),
+			transparent
+		);
 	}
 
-	.app-shell__nav {
-		position: sticky;
-		top: 0;
-		z-index: 20;
-		/* 确保背景不透,避免下方内容透出来 */
-		background-color: var(--color-paper);
+	.ambient__glow--b {
+		width: 46vmax;
+		height: 46vmax;
+		top: -18vmax;
+		right: -20vmax;
+		background: radial-gradient(
+			closest-side,
+			color-mix(in oklab, var(--color-signal-2) 9%, transparent),
+			transparent
+		);
+		animation-duration: 46s;
+		animation-direction: reverse;
 	}
 
-	.app-shell__content {
-		flex: 1 1 auto;
-		width: 100%;
-		max-width: var(--content-max, var(--layout-right-pane-max));
-		margin-inline: auto;
+	:global(:root.dark) .ambient__glow--a {
+		background: radial-gradient(
+			closest-side,
+			color-mix(in oklab, var(--color-signal) 17%, transparent),
+			transparent
+		);
 	}
-
-	/* ---------- 桌面端:双栏 ---------- */
-
-	@media (min-width: 1024px) {
-		.app-shell {
-			display: block;
-			/* 不再用 flex,改为依赖 fixed 定位 */
-		}
-
-		.app-shell__left {
-			position: fixed;
-			top: 0;
-			left: 0;
-			bottom: 0;
-			width: var(--layout-left-pane);
-			max-width: var(--layout-left-pane-max);
-			/* 左栏独立滚动:当内容超长时,左栏自己滚,不影响右栏 */
-			overflow-y: auto;
-			overscroll-behavior: contain;
-			/* 右侧竖虚线由 LeftPane 自身处理 */
-			border-bottom: 0;
-			/* 细款滚动条 */
-			scrollbar-width: thin;
-			scrollbar-color: var(--color-hairline-strong) transparent;
-			z-index: 10;
-			background-color: var(--color-paper);
-		}
-
-		.app-shell__left::-webkit-scrollbar {
-			width: 6px;
-		}
-		.app-shell__left::-webkit-scrollbar-track {
-			background: transparent;
-		}
-		.app-shell__left::-webkit-scrollbar-thumb {
-			background-color: transparent;
-			border-radius: 3px;
-			transition: background-color 200ms;
-		}
-		.app-shell__left:hover::-webkit-scrollbar-thumb {
-			background-color: var(--color-hairline-strong);
-		}
-
-		.app-shell__right {
-			/* 避开左栏,主文档流滚动 */
-			margin-left: var(--layout-left-pane);
-			min-height: 100vh;
-			min-height: 100dvh;
-		}
-
-		/* 当屏幕非常宽时,左栏被 max-width 限制后,右栏 margin 也要跟上 */
-		@supports (width: min(1px, 1%)) {
-			.app-shell__right {
-				margin-left: min(
-					var(--layout-left-pane),
-					var(--layout-left-pane-max)
-				);
-			}
-		}
-	}
-
-	/* ----------------------------------------------------------------------------
-	 * 跳转链接(可达性)
-	 * --------------------------------------------------------------------------
-	 * 默认隐藏,仅在被 Tab 聚焦时浮现在左上角。
-	 * 屏幕阅读器和键盘用户可直接跳到主内容,跳过导航。
-	 * -------------------------------------------------------------------------- */
 
 	.skip-link {
 		position: fixed;
-		top: 0;
-		left: 0;
+		top: 0.75rem;
+		left: 0.75rem;
 		z-index: 1000;
 		padding: 0.5rem 0.875rem;
 		background-color: var(--color-ink-primary);
@@ -420,22 +202,23 @@ const hasLeftVisual = Astro.slots.has("left-visual");
 		font-size: var(--text-xs);
 		letter-spacing: var(--tracking-wider);
 		text-transform: uppercase;
-		border-radius: 0 0 var(--radius-sm) 0;
-		transform: translateY(-120%);
-		transition: transform 160ms var(--ease-standard);
+		border-radius: var(--radius-md);
+		transform: translateY(-160%);
+		transition: transform var(--duration-base) var(--ease-out-expo);
 	}
 
 	.skip-link:focus-visible {
 		transform: translateY(0);
-		outline: 2px solid var(--color-paper);
-		outline-offset: -4px;
+		color: var(--color-paper);
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 防止 body 出现横向滚动(布局误差兜底)
-	 * -------------------------------------------------------------------------- */
+	.app-body {
+		overflow-x: clip;
+	}
 
-	.app-shell-body {
-		overflow-x: hidden;
+	@media (prefers-reduced-motion: reduce) {
+		.ambient__glow {
+			animation: none;
+		}
 	}
 </style>

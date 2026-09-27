@@ -4,35 +4,22 @@
  * BlogSearchBox - 博客列表页搜索入口(客户端搜索)
  * ----------------------------------------------------------------------------
  * 交互:
- *   - 默认态:一个放大镜小图标(与 SectionHeader 右上角 count 对齐)
- *   - 点击 / 聚焦:展开为输入框,自动聚焦
+ *   - 默认态:紧凑的"搜索"触发按钮(放大镜 + mono 标签)
+ *   - 点击:展开为输入框(从右向左 scaleX 淡入),自动聚焦;空输入时右侧
+ *     显示 `.kbd` Esc 提示(Esc 确实可折叠 / 清空,见脚本)
  *   - 输入 ≥ 1 字符:接管页面 —— 隐藏 #post-grid / #blog-pagination /
  *     #blog-category-tabs,把匹配结果渲染进 #search-results(0 命中则显示
- *     #search-empty),这四个容器都由 BlogIndexPage 渲染,本组件只负责按 id 接管
- *   - 清空输入(点击 ✕ / 手动删空 / Esc):恢复默认列表视图
- *   - 按 Esc:输入非空先清空,输入为空则折叠图标
- *   - 点击空白处(outside click):折叠(仅当输入为空)
+ *     #search-empty);结果条目分段淡入上浮,命中词用 Signal 柔色底高亮
+ *   - 清空输入(✕ / 删空 / Esc):恢复默认列表视图
+ *   - Esc:输入非空先清空,输入为空则折叠;外部点击(输入为空时)折叠
  *
- * 架构选择(全站切到纯静态构建后,不再有 SSR 可以按 ?q= 重新渲染):
- *   - 搜索索引在构建期由 src/pages/search/[lang].json.ts 产出静态 JSON
- *     (/search/zh.json、/search/en.json),覆盖当前语言下的全部已发布文章
- *   - 首次输入时才 fetch 对应语言的索引,结果缓存在模块作用域(indexCache),
- *     同一语言的索引只下载一次,后续按键仅在内存里过滤
- *   - 搜索不再影响 URL / 不再分页 / 不再受当前分类筛选影响 —— 客户端搜索
- *     覆盖全站该语言下的所有文章,体验上更像"站内检索"而非"列表过滤"
- *   - 高亮复用 @lib/highlight 的 highlight():该函数已完成 HTML 转义,
- *     结果用 innerHTML 写入是安全的;其余字段(分类名、日期等)一律用
- *     textContent 写入,双重保险防 XSS
+ * 架构:
+ *   - 索引由 src/pages/search/[lang].json.ts 构建期产出(/search/<lang>.json),
+ *     首次输入时才 fetch,按语言缓存在模块作用域
+ *   - 搜索覆盖该语言全部文章,不影响 URL / 分页 / 分类筛选
+ *   - 高亮复用 @lib/highlight(已转义,可安全 innerHTML);其余字段一律 textContent
  *
- * a11y:
- *   - 放大镜按钮有 aria-label 与 aria-expanded
- *   - 输入框有 aria-label;图标用 aria-hidden
- *   - role="search" 标注整个交互区域
- *
- * 视觉约束:
- *   - 编辑派风格:无圆角,1px 发丝边框,展开动画仅宽度过渡
- *   - 与 SectionHeader 的 eyebrow / count 同一基线(11px mono)
- *   - 折叠态图标大小 = 右侧 count 的字号约束,保证不冲击标题行视觉节奏
+ * a11y:触发按钮 aria-label + aria-expanded;输入框 aria-label;role="search"
  * ============================================================================
  */
 
@@ -61,6 +48,7 @@ const LABELS = {
 		inputLabel: "搜索文章",
 		clearLabel: "清空搜索",
 		placeholder: "搜索标题或内容…",
+		triggerText: "搜索",
 	},
 	en: {
 		openLabel: "Open search",
@@ -68,6 +56,7 @@ const LABELS = {
 		inputLabel: "Search posts",
 		clearLabel: "Clear search",
 		placeholder: "Search title or content…",
+		triggerText: "Search",
 	},
 } as const;
 
@@ -81,74 +70,24 @@ const L = LABELS[lang] ?? LABELS.zh;
 	data-list-base={listBase}
 	class:list={["blog-search", "relative inline-flex items-center", className]}
 >
-	{/* ------------------------------------------------------------------
-	 *  放大镜按钮(折叠态的视觉主体;展开态隐藏)
-	 * ------------------------------------------------------------------ */}
+	{/* 折叠态:触发按钮 */}
 	<button
 		type="button"
 		data-blog-search-toggle
 		aria-label={L.openLabel}
 		aria-expanded="false"
-		class:list={[
-			"blog-search__toggle",
-			"inline-flex items-center justify-center",
-			"h-7 w-7",
-			"text-[color:var(--color-ink-tertiary)]",
-			"hover:text-[color:var(--color-ink-primary)]",
-			"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-			"cursor-pointer",
-			"bg-transparent",
-			"border-0",
-			"p-0",
-			"focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-ink-primary)]",
-		]}
+		class="blog-search__toggle"
 	>
-		<svg
-			aria-hidden="true"
-			width="14"
-			height="14"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="2"
-			stroke-linecap="round"
-			stroke-linejoin="round"
-		>
+		<svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 			<circle cx="11" cy="11" r="7"></circle>
 			<line x1="21" y1="21" x2="16.65" y2="16.65"></line>
 		</svg>
+		<span aria-hidden="true" class="hidden sm:inline">{L.triggerText}</span>
 	</button>
 
-	{/* ------------------------------------------------------------------
-	 *  输入框容器(展开态的视觉主体;折叠态隐藏)
-	 *  ------------------------------------------------------------------
-	 *  结构:[小放大镜图标(纯装饰,不再是提交按钮)] [input] [可选的清空 ✕]
-	 * ------------------------------------------------------------------ */}
-	<div
-		data-blog-search-panel
-		class:list={[
-			"blog-search__panel",
-			"relative inline-flex items-center",
-			"h-7",
-			"border border-[color:var(--color-hairline)]",
-			"bg-[color:var(--color-paper)]",
-			"pl-2 pr-1",
-			"gap-1",
-			"transition-[width,opacity] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-		]}
-	>
-		<svg
-			aria-hidden="true"
-			width="12"
-			height="12"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="2"
-			stroke-linecap="round"
-			stroke-linejoin="round"
-			class="shrink-0 text-[color:var(--color-ink-tertiary)]"
-		>
+	{/* 展开态:[放大镜] [input] [Esc 提示 | 清空 ✕] */}
+	<div data-blog-search-panel class="blog-search__panel">
+		<svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="blog-search__icon">
 			<circle cx="11" cy="11" r="7"></circle>
 			<line x1="21" y1="21" x2="16.65" y2="16.65"></line>
 		</svg>
@@ -165,48 +104,26 @@ const L = LABELS[lang] ?? LABELS.zh;
 			data-blog-search-input
 			class:list={[
 				"blog-search__input",
-				"h-full",
-				// 展开态的实际可输入宽度,JS 会在展开时给父级加 data-expanded
-				"w-[160px] sm:w-[200px] lg:w-[220px]",
-				"bg-transparent",
-				"border-0",
-				"p-0",
-				"font-[var(--font-sans)]",
-				"text-[12px]",
-				"leading-none",
+				"h-full min-w-0 w-[150px] sm:w-[200px] lg:w-[220px]",
+				"border-0 bg-transparent p-0",
+				"font-[var(--font-sans)] text-[13px] leading-none",
 				"text-[color:var(--color-ink-primary)]",
 				"placeholder:text-[color:var(--color-ink-muted)]",
 				"focus:outline-none",
 			]}
 		/>
 
-		{/* 清空按钮:输入为空时隐藏,由 JS 按 input 值动态切换 */}
+		<kbd aria-hidden="true" class="kbd blog-search__esc">Esc</kbd>
+
+		{/* 清空按钮:输入为空时隐藏,由 JS 按 input 值切换 */}
 		<button
 			type="button"
 			data-blog-search-clear
 			aria-label={L.clearLabel}
 			hidden
-			class:list={[
-				"inline-flex items-center justify-center",
-				"h-5 w-5 shrink-0",
-				"text-[color:var(--color-ink-muted)]",
-				"hover:text-[color:var(--color-ink-primary)]",
-				"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-				"bg-transparent border-0 p-0 cursor-pointer",
-				"focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-ink-primary)]",
-			]}
+			class="blog-search__clear"
 		>
-			<svg
-				aria-hidden="true"
-				width="11"
-				height="11"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2.2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
+			<svg aria-hidden="true" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
 				<line x1="18" y1="6" x2="6" y2="18"></line>
 				<line x1="6" y1="6" x2="18" y2="18"></line>
 			</svg>
@@ -224,7 +141,7 @@ const L = LABELS[lang] ?? LABELS.zh;
  * ==================================================================== */}
 <script>
 	import { highlight } from "@lib/highlight";
-	import { formatDate } from "@i18n/utils";
+	import { formatDateCompact } from "@i18n/utils";
 	import { ui, type Lang } from "@i18n/ui";
 
 	/** src/pages/search/[lang].json.ts 产出的静态索引单条形状 */
@@ -256,71 +173,59 @@ const L = LABELS[lang] ?? LABELS.zh;
 		return promise;
 	}
 
-	function dotSeparator(): HTMLSpanElement {
-		const span = document.createElement("span");
-		span.setAttribute("aria-hidden", "true");
-		span.className = "text-[color:var(--color-ink-muted)]";
-		span.textContent = "·";
-		return span;
-	}
-
-	/** 视觉贴近 PostCard 文字区(标题 + 摘要 + 分类/日期/时长),无封面 */
+	/** 结构与样式对齐 PostCard 时间线行:左窄列完整日期 + 分类(搜索结果不分月),右侧标题 / 摘要 / 时长 */
 	function buildResultCard(
 		item: SearchIndexItem,
 		query: string,
 		listBase: string,
 		lang: Lang,
+		index: number,
 	): HTMLAnchorElement {
 		const card = document.createElement("a");
 		card.href = `${listBase}/${item.slug}/`;
-		card.className =
-			"search-result-card group relative flex flex-col gap-2 " +
-			"px-4 sm:px-5 lg:px-6 py-5 lg:py-6 bg-transparent " +
-			"hover:bg-[color:var(--color-paper-muted)]/60 " +
-			"transition-colors duration-[var(--duration-base)] ease-[var(--ease-standard)] " +
-			"no-underline cursor-pointer";
+		card.className = "search-result-card";
+		card.style.setProperty("--i", String(Math.min(index, 8)));
 
-		const title = document.createElement("h3");
-		title.className =
-			"font-medium text-[color:var(--color-ink-primary)] tracking-[-0.015em] " +
-			"leading-[1.35] text-[17px] sm:text-[18px] lg:text-[19px] line-clamp-2";
-		title.innerHTML = highlight(item.title, query);
-
-		const excerpt = document.createElement("p");
-		excerpt.className =
-			"text-[color:var(--color-ink-secondary)] text-[13.5px] sm:text-[14px] " +
-			"leading-[1.6] line-clamp-2 max-w-[72ch]";
-		excerpt.innerHTML = highlight(item.excerpt, query);
-
-		const meta = document.createElement("div");
-		meta.className =
-			"flex items-center gap-2 flex-wrap font-[var(--font-mono)] " +
-			"text-[10.5px] sm:text-[11px] leading-none tracking-[var(--tracking-wide)] " +
-			"text-[color:var(--color-ink-tertiary)] tabular-nums";
-
-		if (item.categoryName) {
-			const cat = document.createElement("span");
-			cat.className = "uppercase text-[color:var(--color-ink-secondary)]";
-			cat.textContent = item.categoryName;
-			meta.append(cat, dotSeparator());
-		}
+		const side = document.createElement("div");
+		side.className = "search-result-card__side";
 
 		const time = document.createElement("time");
+		time.className = "search-result-card__date";
 		const dateObj = new Date(item.date);
 		if (!Number.isNaN(dateObj.getTime())) {
 			time.dateTime = dateObj.toISOString();
 		}
-		time.textContent = formatDate(item.date, lang);
-		meta.append(time);
+		time.textContent = formatDateCompact(item.date).replaceAll("-", ".");
+		side.append(time);
+
+		if (item.categoryName) {
+			const cat = document.createElement("span");
+			cat.className = "search-result-card__cat";
+			cat.textContent = item.categoryName;
+			side.append(cat);
+		}
+
+		const body = document.createElement("div");
+		body.className = "search-result-card__body";
+
+		const title = document.createElement("h3");
+		title.className = "search-result-card__title";
+		title.innerHTML = highlight(item.title, query);
+
+		const excerpt = document.createElement("p");
+		excerpt.className = "search-result-card__excerpt";
+		excerpt.innerHTML = highlight(item.excerpt, query);
+
+		body.append(title, excerpt);
 
 		if (item.readingTime > 0) {
 			const rt = document.createElement("span");
-			rt.className = "uppercase";
+			rt.className = "search-result-card__meta";
 			rt.textContent = `${item.readingTime} ${ui[lang]["blog.minutes"]}`;
-			meta.append(dotSeparator(), rt);
+			body.append(rt);
 		}
 
-		card.append(title, excerpt, meta);
+		card.append(side, body);
 		return card;
 	}
 
@@ -396,7 +301,7 @@ const L = LABELS[lang] ?? LABELS.zh;
 			const matches = items.filter((item) => item.text.includes(needle));
 
 			resultsContainer.replaceChildren(
-				...matches.map((item) => buildResultCard(item, query, listBase, lang)),
+				...matches.map((item, i) => buildResultCard(item, query, listBase, lang, i)),
 			);
 
 			if (matches.length === 0) {
@@ -473,55 +378,248 @@ const L = LABELS[lang] ?? LABELS.zh;
 </script>
 
 <style>
-	/* ------------------------------------------------------------------
-	 *  展开 / 折叠状态切换
-	 *  ------------------------------------------------------------------
-	 *  通过根元素上的 data-expanded 属性,让子元素按状态显隐 / 调整宽度。
-	 *  CSS 里完成切换意味着 JS 只需翻转一个属性,无需手动增删 class。
-	 *  首屏(JS 还没跑)默认折叠 —— 搜索不再由 URL 驱动初始状态。
-	 * ------------------------------------------------------------------ */
-
-	/* 折叠态(含首屏无 JS 时):只显示放大镜按钮,panel 隐藏且不占空间 */
+	/* ---------------- 折叠 / 展开(JS 只翻转根元素 data-expanded) ---------------- */
 	[data-blog-search]:not([data-expanded="true"]) .blog-search__panel {
 		display: none;
 	}
-
-	/* 展开态:隐藏放大镜按钮,显示输入面板 */
 	[data-blog-search][data-expanded="true"] .blog-search__toggle {
 		display: none;
 	}
 
-	/* 输入框聚焦时,容器边框加深,提供清晰反馈 */
-	.blog-search__panel:focus-within {
-		border-color: var(--color-ink-primary);
+	.blog-search__toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		height: 2.125rem;
+		min-width: 2.125rem;
+		justify-content: center;
+		padding-inline: 0.625rem;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		font-weight: 500;
+		line-height: 1;
+		text-transform: uppercase;
+		letter-spacing: var(--tracking-wide);
+		color: var(--color-ink-secondary);
+		background-color: color-mix(in oklab, var(--color-surface) 60%, transparent);
+		border: 1px solid var(--color-hairline-strong);
+		border-radius: var(--radius-md);
+		cursor: pointer;
+		transition:
+			color var(--duration-fast) var(--ease-standard),
+			border-color var(--duration-fast) var(--ease-standard),
+			background-color var(--duration-fast) var(--ease-standard);
+	}
+	.blog-search__toggle:hover {
+		color: var(--color-ink-primary);
+		border-color: var(--color-ink-muted);
+		background-color: var(--color-surface-raised);
 	}
 
-	/* 关闭 input[type=search] 在 Chrome 下自带的 x 清除按钮,
-	   使用我们自己的 ✕,风格与站点一致 */
+	.blog-search__panel {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		height: 2.125rem;
+		padding-inline: 0.625rem 0.375rem;
+		background-color: var(--color-surface-raised);
+		border: 1px solid var(--color-hairline-strong);
+		border-radius: var(--radius-md);
+		transform-origin: right center;
+		animation: search-open var(--duration-slow) var(--ease-out-expo) both;
+		transition:
+			border-color var(--duration-fast) var(--ease-standard),
+			box-shadow var(--duration-base) var(--ease-standard);
+	}
+	.blog-search__panel:focus-within {
+		border-color: var(--signal-line);
+		box-shadow: 0 0 0 3px var(--signal-soft);
+	}
+	.blog-search__icon {
+		flex-shrink: 0;
+		color: var(--color-ink-tertiary);
+		transition: color var(--duration-fast) var(--ease-standard);
+	}
+	.blog-search__panel:focus-within .blog-search__icon {
+		color: var(--color-signal);
+	}
+
+	@keyframes search-open {
+		from {
+			opacity: 0;
+			transform: scaleX(0.9);
+		}
+	}
+
+	/* Esc 提示:仅在输入为空时显示,输入后让位给清空按钮 */
+	.blog-search__esc {
+		flex-shrink: 0;
+		transition: opacity var(--duration-fast) var(--ease-standard);
+	}
+	.blog-search__panel:has(.blog-search__input:not(:placeholder-shown)) .blog-search__esc {
+		display: none;
+	}
+
+	.blog-search__clear {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		width: 1.25rem;
+		height: 1.25rem;
+		padding: 0;
+		color: var(--color-ink-tertiary);
+		background-color: var(--color-paper-muted);
+		border: 0;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		animation: search-pop var(--duration-base) var(--ease-spring) both;
+		transition: color var(--duration-fast) var(--ease-standard);
+	}
+	.blog-search__clear[hidden] {
+		display: none;
+	}
+	.blog-search__clear:hover {
+		color: var(--color-ink-primary);
+	}
+
+	@keyframes search-pop {
+		from {
+			opacity: 0;
+			transform: scale(0.6);
+		}
+	}
+
+	/* 关闭浏览器自带的 search 清除按钮,使用自己的 ✕ */
 	.blog-search__input::-webkit-search-cancel-button,
 	.blog-search__input::-webkit-search-decoration {
 		-webkit-appearance: none;
 		appearance: none;
 	}
 
-	/* ------------------------------------------------------------------
-	 *  搜索高亮 <mark class="search-hit">
-	 *  ------------------------------------------------------------------
-	 *  由 @lib/highlight 的 highlight() 产出,通过 JS innerHTML 写入
-	 *  #search-results 里的结果卡片(不经过 PostCard,故这里不能依赖
-	 *  PostCard 的 scoped 样式,需要一份 :global() 规则兜底)。
-	 *  颜色 / 阴影与 PostCard 里的搜索高亮保持一致。
-	 * ------------------------------------------------------------------ */
-	:global(mark.search-hit) {
-		background-color: rgba(250, 204, 21, 0.32); /* amber-400 / ~32% */
-		color: inherit;
-		padding: 0 1px;
-		border-radius: 1px;
-		box-shadow: inset 0 -1px 0 rgba(202, 138, 4, 0.45);
+	/* ---------------- 搜索结果条目(JS 生成,需 :global) ----------------
+	 * 与 PostCard 时间线行同一套尺度:行距、标题字号、hover 底色外扩一致;
+	 * 结果不按月分组,因此左列放完整日期。counter-increment 供 BlogIndexPage
+	 * 的结果栏用 CSS 计数器显示命中数(纯展示,不影响脚本)。 */
+	:global(.search-result-card) {
+		position: relative;
+		isolation: isolate;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 0.625rem 2rem;
+		padding-block: 1.5rem;
+		counter-increment: search-hits;
+		animation: search-result-in var(--duration-slow) var(--ease-out-expo) backwards;
+		animation-delay: calc(var(--i, 0) * 40ms);
+	}
+	@media (min-width: 640px) {
+		:global(.search-result-card) {
+			grid-template-columns: 7rem minmax(0, 1fr);
+		}
+	}
+	@media (min-width: 1024px) {
+		:global(.search-result-card) {
+			padding-block: 1.75rem;
+		}
+	}
+	:global(.search-result-card)::before {
+		content: "";
+		position: absolute;
+		inset: 0.375rem -0.875rem;
+		z-index: -1;
+		border-radius: var(--radius-md);
+		background-color: var(--color-surface);
+		box-shadow: 0 0 0 1px var(--color-hairline);
+		opacity: 0;
+		transition: opacity var(--duration-base) var(--ease-standard);
+	}
+	:global(.search-result-card:hover)::before,
+	:global(.search-result-card:focus-visible)::before {
+		opacity: 1;
+	}
+	:global(.search-result-card__side) {
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem 0.75rem;
+	}
+	@media (min-width: 640px) {
+		:global(.search-result-card__side) {
+			flex-direction: column;
+			align-items: flex-start;
+			padding-top: 3px;
+		}
+	}
+	:global(.search-result-card__date) {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		line-height: 1;
+		letter-spacing: 0.02em;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-ink-secondary);
+		transition: color var(--duration-fast) var(--ease-standard);
+	}
+	:global(.search-result-card:hover .search-result-card__date) {
+		color: var(--color-signal);
+	}
+	:global(.search-result-card__cat),
+	:global(.search-result-card__meta) {
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		line-height: 1;
+		text-transform: uppercase;
+		letter-spacing: var(--tracking-wide);
+		color: var(--color-ink-muted);
+	}
+	:global(.search-result-card__meta) {
+		margin-top: 0.375rem;
+		color: var(--color-ink-tertiary);
+	}
+	:global(.search-result-card__body) {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	:global(.search-result-card__title),
+	:global(.search-result-card__excerpt) {
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		overflow: hidden;
+	}
+	:global(.search-result-card__title) {
+		font-size: 18px;
+		font-weight: 600;
+		line-height: 1.3;
+		letter-spacing: -0.022em;
+		color: var(--color-ink-primary);
+	}
+	@media (min-width: 1024px) {
+		:global(.search-result-card__title) {
+			font-size: 20px;
+		}
+	}
+	:global(.search-result-card__excerpt) {
+		max-width: 68ch;
+		font-size: 14px;
+		line-height: 1.6;
+		color: var(--color-ink-tertiary);
 	}
 
-	:global(:root.dark mark.search-hit) {
-		background-color: rgba(250, 204, 21, 0.22);
-		box-shadow: inset 0 -1px 0 rgba(250, 204, 21, 0.35);
+	@keyframes search-result-in {
+		from {
+			opacity: 0;
+			transform: translate3d(0, 8px, 0);
+		}
+	}
+
+	/* ---------------- 命中高亮:Signal 柔色底 ---------------- */
+	:global(mark.search-hit) {
+		color: inherit;
+		background-color: color-mix(in oklab, var(--color-signal) 16%, transparent);
+		box-shadow: inset 0 -1px 0 var(--signal-line);
+		border-radius: 2px;
+		padding: 0 1px;
 	}
 </style>

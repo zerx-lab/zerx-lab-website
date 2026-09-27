@@ -3,42 +3,27 @@
  * ============================================================================
  * Pagination - 通用分页组件
  * ----------------------------------------------------------------------------
- * 视觉参考: better-auth.com 的编辑派风格
- *   - 虚线发丝分割 + Monospace 编号
- *   - "上一页 / 下一页"作为主操作,中间是页码
- *   - 当前页黑底白字,其他页淡灰,hover 时变墨色
- *   - 省略号用 · · · 而不是 ... (编辑派细节)
+ * 履历末尾的"翻页带":三栏
  *
- * 典型呈现:
- *   ← Previous    01 · 02 · [03] · 04 · · · 12    Next →
- *    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
- *    Page 3 of 12 · 84 items                   ↑ 底部元信息
+ *   ┌──────────────────┬───────────────────────────┬──────────────────┐
+ *   │ ← 上一页          │  01 02 [03] … 12          │          下一页 → │
+ *   │ PREV · 02        │  PAGE 03 / 12 · 118 POSTS │        NEXT · 04 │
+ *   └──────────────────┴───────────────────────────┴──────────────────┘
  *
- * 用法:
- *   <Pagination
- *     currentPage={3}
- *     totalPages={12}
- *     totalItems={84}
- *     basePath="/blog"
- *   />
+ * 前后页是大号可点区块(触控友好),中间 mono 页码,当前页 ink 实底(带
+ * view-transition-name,跨页时实底块"滑"到新页码)。移动端页码行在上、
+ * 前后页并排在下。
  *
- *   分类页同理,basePath 带上分类段即可:
- *   <Pagination ... basePath="/blog/cat/news" />
- *
- * URL 约定(全站分页路由路径化,不再使用 ?page= 查询参数):
+ * URL 约定(路径式分页):
  *   - 第 1 页  → `${basePath}/`
  *   - 第 N 页  → `${basePath}/page/${N}/`
- *   调用方传入的 basePath 不带结尾斜杠(如 "/blog" / "/en/blog/cat/news")。
+ *   basePath 不带结尾斜杠(如 "/blog" / "/en/blog/cat/news")。
  *
- * 设计约束:
- *   - 纯 Astro 静态组件,无 JS,所有链接都是真实的 <a href>
- *   - 总页数 ≤ 7 时显示全部页码,否则智能省略(首尾 + 当前页邻近)
- *   - 单页时自动不渲染(返回 null)
- *   - 完全双语感知,通过 i18n 字典驱动所有 label
+ * 纯静态,无 JS;单页时不渲染;总页数 ≤ 7 全部展开,否则首尾 + 邻近页省略。
  * ============================================================================
  */
 
-import { getLangFromUrl, useTranslations } from "@i18n/utils";
+import { getLangFromUrl } from "@i18n/utils";
 
 interface Props {
 	/** 当前页码(1-indexed) */
@@ -56,7 +41,7 @@ interface Props {
 	boundaryCount?: number;
 	/** 当前页两侧的邻近页数,默认 1(总共 1 + 1 + 1 = 3 个紧邻页) */
 	siblingCount?: number;
-	/** 是否显示底部元信息行(Page X of Y) */
+	/** 是否显示页码下方的元信息行(Page X of Y) */
 	showMeta?: boolean;
 	/** 额外类名 */
 	class?: string;
@@ -84,7 +69,6 @@ const shouldRender = totalPages > 1 && currentPage >= 1 && currentPage <= totalP
 // ----------------------------------------------------------------------------
 
 const lang = getLangFromUrl(Astro.url);
-const t = useTranslations(lang);
 
 // 本组件专用的短语(不放在全局字典,避免污染)
 const LABELS = {
@@ -93,22 +77,26 @@ const LABELS = {
 		next: "下一页",
 		pageOf: "第 {current} 页,共 {total} 页",
 		items: "篇",
+		page: "页码",
 		ellipsis: "更多页",
-		currentPage: "当前页",
+		currentPage: "当前页,第 {n} 页",
 		gotoPage: "跳转到第 {n} 页",
-		firstPage: "第一页",
-		lastPage: "最后一页",
+		prevShort: "PREV",
+		nextShort: "NEXT",
+		none: "没有了",
 	},
 	en: {
 		previous: "Previous",
 		next: "Next",
 		pageOf: "Page {current} of {total}",
-		items: "items",
+		items: "posts",
+		page: "Page",
 		ellipsis: "More pages",
-		currentPage: "Current page",
+		currentPage: "Current page, page {n}",
 		gotoPage: "Go to page {n}",
-		firstPage: "First page",
-		lastPage: "Last page",
+		prevShort: "PREV",
+		nextShort: "NEXT",
+		none: "End",
 	},
 } as const;
 
@@ -220,11 +208,7 @@ const metaText = L.pageOf
 	.replace("{total}", String(totalPages));
 
 const itemsText =
-	typeof totalItems === "number"
-		? lang === "zh"
-			? `${totalItems} ${L.items}`
-			: `${totalItems} ${L.items}`
-		: null;
+	typeof totalItems === "number" ? `${totalItems} ${L.items}` : null;
 
 // 格式化页码(两位零填充:01/02/.../99,超过 99 保持原样)
 function formatPageNumber(n: number): string {
@@ -238,125 +222,60 @@ function formatPageNumber(n: number): string {
 			aria-label={lang === "zh" ? "分页导航" : "Pagination"}
 			class:list={[
 				"pagination",
-				"w-full",
-				"flex flex-col gap-3",
+				"grid grid-cols-2 border-t border-[color:var(--color-hairline-strong)]",
+				"lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]",
 				className,
 			]}
 		>
-			{/* ---------- 主分页行 ---------- */}
-			<div
-				class:list={[
-					"flex items-center justify-between gap-3",
-					"flex-wrap sm:flex-nowrap",
-					"py-4",
-					"border-t border-dashed border-[color:var(--color-hairline)]",
-					"border-b border-dashed border-[color:var(--color-hairline)]",
-				]}
+			{/* 上一页 */}
+			<a
+				href={previousUrl ?? undefined}
+				aria-disabled={hasPrevious ? undefined : "true"}
+				aria-label={L.previous}
+				tabindex={hasPrevious ? undefined : -1}
+				class="pager-block pager-block--prev group order-2 lg:order-none"
 			>
-				{/* 上一页按钮 */}
-				<a
-					href={previousUrl ?? undefined}
-					aria-disabled={hasPrevious ? undefined : "true"}
-					aria-label={L.previous}
-					tabindex={hasPrevious ? undefined : -1}
-					class:list={[
-						"pager-btn",
-						"group inline-flex items-center gap-2",
-						"px-3 sm:px-4 py-2",
-						"mono-label",
-						"text-[11px] sm:text-[12px]",
-						"leading-none",
-						"tracking-[var(--tracking-wider)]",
-						"select-none",
-						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-						hasPrevious
-							? "text-[color:var(--color-ink-secondary)] hover:text-[color:var(--color-ink-primary)] cursor-pointer"
-							: "text-[color:var(--color-ink-muted)]/50 cursor-not-allowed pointer-events-none",
-					]}
-				>
-					<svg
-						aria-hidden="true"
-						width="12"
-						height="12"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2.5"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						class:list={[
-							"shrink-0",
-							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-							hasPrevious && "group-hover:-translate-x-[2px]",
-						]}
-					>
+				<span class="pager-block__title">
+					<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="pager-block__icon">
 						<path d="m12 19-7-7 7-7" />
 						<path d="M19 12H5" />
 					</svg>
-					<span class="whitespace-nowrap">{L.previous}</span>
-				</a>
+					{L.previous}
+				</span>
+				<span aria-hidden="true" class="pager-block__meta">
+					{L.prevShort} · {hasPrevious ? formatPageNumber(currentPage - 1) : L.none}
+				</span>
+			</a>
 
-				{/* 页码列表 */}
-				<ol
-					class:list={[
-						"flex items-center",
-						"list-none m-0 p-0",
-						"gap-0.5 sm:gap-1",
-					]}
-				>
-					{pageItems.map((item, idx) => {
+			{/* 页码 + 进度 */}
+			<div class="col-span-2 order-1 flex flex-col items-center justify-center gap-3 border-b border-[color:var(--color-hairline)] px-4 py-6 lg:col-span-1 lg:order-none lg:border-b-0 lg:border-x lg:px-10">
+				<ol class="m-0 flex list-none flex-wrap items-center justify-center gap-1 p-0">
+					{pageItems.map((item) => {
 						if (item === "ellipsis-left" || item === "ellipsis-right") {
 							return (
 								<li
 									aria-hidden="true"
-									class:list={[
-										"inline-flex items-center justify-center",
-										"px-2 sm:px-2.5",
-										"font-[var(--font-mono)]",
-										"text-[11px] sm:text-[12px]",
-										"leading-none",
-										"text-[color:var(--color-ink-muted)]",
-										"select-none",
-										"tabular-nums",
-										"tracking-[var(--tracking-wider)]",
-									]}
 									title={L.ellipsis}
+									class="inline-flex h-9 min-w-6 select-none items-center justify-center font-[var(--font-mono)] text-[11px] text-[color:var(--color-ink-muted)]"
 								>
-									· · ·
+									…
 								</li>
 							);
 						}
 
 						const isCurrent = item === currentPage;
-						const href = urlForPage(item);
-						const gotoLabel = L.gotoPage.replace("{n}", String(item));
-
 						return (
 							<li class="inline-flex">
 								<a
-									href={isCurrent ? undefined : href}
+									href={isCurrent ? undefined : urlForPage(item)}
 									aria-current={isCurrent ? "page" : undefined}
-									aria-label={isCurrent ? L.currentPage : gotoLabel}
-									tabindex={isCurrent ? -1 : undefined}
-									class:list={[
-										"page-item",
-										"inline-flex items-center justify-center",
-										"min-w-[32px] sm:min-w-[36px] h-7 sm:h-8",
-										"px-2",
-										"font-[var(--font-mono)]",
-										"text-[11px] sm:text-[12px]",
-										"leading-none",
-										"tabular-nums",
-										"tracking-[var(--tracking-wide)]",
-										"rounded-[var(--radius-sm)]",
-										"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-										"select-none",
+									aria-label={
 										isCurrent
-											? // 当前页:黑底白字,贴合 better-auth 的"SIGN-IN 黑块"质感
-												"bg-[color:var(--color-ink-primary)] text-[color:var(--color-paper)] font-semibold cursor-default"
-											: // 非当前页:淡灰,hover 时变墨色 + 轻微背景
-												"text-[color:var(--color-ink-tertiary)] hover:text-[color:var(--color-ink-primary)] hover:bg-[color:var(--color-paper-muted)]/60 cursor-pointer",
-									]}
+											? L.currentPage.replace("{n}", String(item))
+											: L.gotoPage.replace("{n}", String(item))
+									}
+									tabindex={isCurrent ? -1 : undefined}
+									class="page-item"
 								>
 									{formatPageNumber(item)}
 								</a>
@@ -365,108 +284,166 @@ function formatPageNumber(n: number): string {
 					})}
 				</ol>
 
-				{/* 下一页按钮 */}
-				<a
-					href={nextUrl ?? undefined}
-					aria-disabled={hasNext ? undefined : "true"}
-					aria-label={L.next}
-					tabindex={hasNext ? undefined : -1}
-					class:list={[
-						"pager-btn",
-						"group inline-flex items-center gap-2",
-						"px-3 sm:px-4 py-2",
-						"mono-label",
-						"text-[11px] sm:text-[12px]",
-						"leading-none",
-						"tracking-[var(--tracking-wider)]",
-						"select-none",
-						"transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-						hasNext
-							? "text-[color:var(--color-ink-secondary)] hover:text-[color:var(--color-ink-primary)] cursor-pointer"
-							: "text-[color:var(--color-ink-muted)]/50 cursor-not-allowed pointer-events-none",
-					]}
-				>
-					<span class="whitespace-nowrap">{L.next}</span>
-					<svg
-						aria-hidden="true"
-						width="12"
-						height="12"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2.5"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						class:list={[
-							"shrink-0",
-							"transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-							hasNext && "group-hover:translate-x-[2px]",
-						]}
-					>
+				{showMeta && (
+					<p class="m-0 font-[var(--font-mono)] text-[10.5px] uppercase leading-none tracking-[var(--tracking-wide)] tabular-nums text-[color:var(--color-ink-tertiary)]">
+						<span class="sr-only">
+							{metaText}
+							{itemsText && `, ${itemsText}`}
+						</span>
+						<span aria-hidden="true" class="inline-flex items-center gap-2">
+							<span>{L.page}</span>
+							<span>
+								<span class="text-[color:var(--color-ink-primary)]">
+									{formatPageNumber(currentPage)}
+								</span>
+								<span class="text-[color:var(--color-ink-faint)]"> / </span>
+								{formatPageNumber(totalPages)}
+							</span>
+							{itemsText && (
+								<>
+									<span class="text-[color:var(--color-ink-faint)]">·</span>
+									<span>{itemsText}</span>
+								</>
+							)}
+						</span>
+					</p>
+				)}
+			</div>
+
+			{/* 下一页 */}
+			<a
+				href={nextUrl ?? undefined}
+				aria-disabled={hasNext ? undefined : "true"}
+				aria-label={L.next}
+				tabindex={hasNext ? undefined : -1}
+				class="pager-block pager-block--next group order-3 lg:order-none"
+			>
+				<span class="pager-block__title">
+					{L.next}
+					<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="pager-block__icon">
 						<path d="M5 12h14" />
 						<path d="m12 5 7 7-7 7" />
 					</svg>
-				</a>
-			</div>
-
-			{/* ---------- 底部元信息行 ---------- */}
-			{
-				showMeta && (
-					<div
-						class:list={[
-							"flex items-center justify-between gap-3",
-							"flex-wrap",
-							"font-[var(--font-mono)]",
-							"text-[10px] sm:text-[11px]",
-							"leading-none",
-							"tracking-[var(--tracking-wide)]",
-							"text-[color:var(--color-ink-tertiary)]",
-						]}
-					>
-						<span class="tabular-nums">{metaText}</span>
-						{itemsText && (
-							<span class="tabular-nums uppercase">
-								{itemsText}
-							</span>
-						)}
-					</div>
-				)
-			}
+				</span>
+				<span aria-hidden="true" class="pager-block__meta">
+					{L.nextShort} · {hasNext ? formatPageNumber(currentPage + 1) : L.none}
+				</span>
+			</a>
 		</nav>
 	)
 }
 
 <style>
-	/* ----------------------------------------------------------------------------
-	 * 禁用态的视觉约束
-	 * --------------------------------------------------------------------------
-	 * aria-disabled 的链接仍然可见但不可点击;用 pointer-events-none 兜底,
-	 * 防止用户意外触达。tabindex="-1" 让键盘也跳过。
-	 * -------------------------------------------------------------------------- */
+	/* ---------------- 前 / 后页区块 ---------------- */
+	.pager-block {
+		position: relative;
+		isolation: isolate;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		gap: 0.625rem;
+		min-height: 6.5rem;
+		padding: 1.5rem 0.25rem;
+		user-select: none;
+	}
+	.pager-block--next {
+		align-items: flex-end;
+		text-align: right;
+	}
+	.pager-block::before {
+		content: "";
+		position: absolute;
+		inset: 0.5rem 0.5rem 0.5rem -0.875rem;
+		z-index: -1;
+		border-radius: var(--radius-md);
+		background-color: var(--color-surface);
+		box-shadow: 0 0 0 1px var(--color-hairline);
+		opacity: 0;
+		transition: opacity var(--duration-base) var(--ease-standard);
+	}
+	.pager-block--next::before {
+		inset: 0.5rem -0.875rem 0.5rem 0.5rem;
+	}
+	.pager-block:hover::before,
+	.pager-block:focus-visible::before {
+		opacity: 1;
+	}
 
-	.pager-btn[aria-disabled="true"] {
+	.pager-block__title {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.625rem;
+		font-size: 20px;
+		font-weight: 600;
+		line-height: 1;
+		letter-spacing: -0.03em;
+		color: var(--color-ink-primary);
+	}
+	@media (min-width: 1024px) {
+		.pager-block__title {
+			font-size: 24px;
+		}
+	}
+	.pager-block__meta {
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		line-height: 1;
+		text-transform: uppercase;
+		letter-spacing: var(--tracking-wider);
+		font-variant-numeric: tabular-nums;
+		color: var(--color-ink-muted);
+	}
+
+	.pager-block__icon {
+		flex-shrink: 0;
+		color: var(--color-signal);
+		transition: transform var(--duration-base) var(--ease-out-expo);
+	}
+	.pager-block--prev:hover .pager-block__icon {
+		transform: translate3d(-4px, 0, 0);
+	}
+	.pager-block--next:hover .pager-block__icon {
+		transform: translate3d(4px, 0, 0);
+	}
+
+	.pager-block[aria-disabled="true"] {
 		pointer-events: none;
 	}
-
-	/* ----------------------------------------------------------------------------
-	 * 当前页按钮的细节
-	 * --------------------------------------------------------------------------
-	 * 暗色模式下,黑底白字需要反相:用 var 自动切换
-	 * -------------------------------------------------------------------------- */
-
-	:global(:root.dark) .page-item[aria-current="page"] {
-		/* 暗色模式下,白纸色的"黑块"反相为墨色前景;
-		   依赖 global.css 里 --color-ink-primary 和 --color-paper 的 dark 映射 */
+	.pager-block[aria-disabled="true"] .pager-block__title,
+	.pager-block[aria-disabled="true"] .pager-block__icon {
+		color: var(--color-ink-faint);
 	}
 
-	/* ----------------------------------------------------------------------------
-	 * 焦点态:编辑派的一根实线描边,与全局 :focus-visible 一致
-	 * -------------------------------------------------------------------------- */
-
-	.page-item:focus-visible,
-	.pager-btn:focus-visible {
-		outline: 2px solid var(--color-ink-primary);
-		outline-offset: 2px;
+	/* ---------------- 页码 ---------------- */
+	.page-item {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 2.25rem;
+		height: 2.25rem;
+		padding-inline: 0.375rem;
+		font-family: var(--font-mono);
+		font-size: 12px;
+		line-height: 1;
+		letter-spacing: var(--tracking-wide);
+		font-variant-numeric: tabular-nums;
+		color: var(--color-ink-tertiary);
 		border-radius: var(--radius-sm);
+		user-select: none;
+		transition:
+			color var(--duration-fast) var(--ease-standard),
+			background-color var(--duration-fast) var(--ease-standard);
+	}
+	.page-item:not([aria-current="page"]):hover {
+		color: var(--color-ink-primary);
+		background-color: var(--color-paper-muted);
+	}
+	.page-item[aria-current="page"] {
+		color: var(--color-paper);
+		background-color: var(--color-ink-primary);
+		font-weight: 600;
+		cursor: default;
+		/* 跨文档 View Transition:当前页实底块在翻页间形变移动 */
+		view-transition-name: vt-page-current;
 	}
 </style>
