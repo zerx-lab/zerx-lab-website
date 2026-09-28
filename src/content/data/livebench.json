@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "sourceSha": "f5a30ad752ac9aa27cdba45b57892820554e9287",
-  "sourceFingerprint": "8a6797e2e139e413addf525ecc4e25eb617ebc1dfb63042ee45a1825614a1c9c",
-  "syncedAt": "2026-09-28T19:17:59.488Z",
+  "sourceSha": "ff70f7b29e5972e9656843a81eb8c5c055e21d10",
+  "sourceFingerprint": "45fbe434dddc35d9f7c156664dfdddcfcc2896af763f84fc9f26c562d577f80b",
+  "syncedAt": "2026-09-28T19:30:47.017Z",
   "release": "2026-06-25",
   "sourceUrl": "https://github.com/LiveBench/new-livebench",
   "unofficial": true,
@@ -911,6 +911,50 @@
       "variantGroup": "gpt-5.6-terra-max"
     },
     {
+      "id": "claude-sonnet-5-5-xhigh-effort",
+      "name": "Claude Sonnet 5.5 xHigh Effort",
+      "organization": "Anthropic",
+      "overall": 77.75,
+      "scores": {
+        "Reasoning": 86.80775,
+        "Coding": 88.87049999999999,
+        "Agentic Coding": 39.34366666666667,
+        "Mathematics": 96.69475,
+        "Data Analysis": 78.62,
+        "Language": 83.42966666666666,
+        "IF": 70.51650000000001
+      },
+      "subtasks": {
+        "theory_of_mind": 69.231,
+        "zebra_puzzle": 100,
+        "spatial": 98,
+        "logic_with_navigation": 80,
+        "code_generation": 92.958,
+        "code_completion": 84.783,
+        "javascript": 36.364,
+        "typescript": 46.667,
+        "python": 35,
+        "AMPS_Hard": 98,
+        "integrals_with_game": 100,
+        "math_comp": 97.059,
+        "olympiad": 91.72,
+        "consecutive_events": 90.936,
+        "tablejoin": 46.885,
+        "tablereformat": 98.039,
+        "connections": 98.5,
+        "plot_unscrambling": 67.789,
+        "typos": 84,
+        "paraphrase": 62.283,
+        "simplify": 72.367,
+        "story_generation": 77.083,
+        "summarize": 70.333
+      },
+      "openWeights": false,
+      "finetune": false,
+      "baseId": null,
+      "variantGroup": "claude-sonnet-5-5-xhigh-effort"
+    },
+    {
       "id": "deepseek-v4-pro-0813",
       "name": "DeepSeek V4 Pro 0813",
       "organization": "DeepSeek",
@@ -1524,7 +1568,7 @@
       "openWeights": false,
       "finetune": false,
       "baseId": null,
-      "variantGroup": "claude-sonnet-5-5-max-effort"
+      "variantGroup": "claude-sonnet-5-5-xhigh-effort"
     },
     {
       "id": "muse-spark-1.1-xhigh",
