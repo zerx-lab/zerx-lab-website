@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "sourceSha": "bd95b51ffc6a3348d8c1ca3c7d13b2b56ca4c5ac",
-  "sourceFingerprint": "e1b0dd3ac1c18b583579cf7f2bf940eb5bd80755c563c5316ce804dffb09dc63",
-  "syncedAt": "2026-09-28T18:28:17.970Z",
+  "sourceSha": "f5a30ad752ac9aa27cdba45b57892820554e9287",
+  "sourceFingerprint": "8a6797e2e139e413addf525ecc4e25eb617ebc1dfb63042ee45a1825614a1c9c",
+  "syncedAt": "2026-09-28T19:17:59.488Z",
   "release": "2026-06-25",
   "sourceUrl": "https://github.com/LiveBench/new-livebench",
   "unofficial": true,
@@ -736,7 +736,7 @@
     },
     {
       "id": "grok-4.6",
-      "name": "Grok 4.6",
+      "name": "Grok 4.6 xHigh",
       "organization": "xAI",
       "overall": 78.04,
       "scores": {
