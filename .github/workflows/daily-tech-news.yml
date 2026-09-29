@@ -110,6 +110,9 @@ jobs:
       # ------------------------------------------------------------------
       - name: Run Claude Code (collect news + write markdown files)
         id: claude
+        # 轮数超过 --max-turns 时 action 会在事后判失败，但文件可能已写好;
+        # 是否合格交给下面的 Verify step 判定，避免丢稿
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -176,7 +179,7 @@ jobs:
 
           claude_args: |
             --allowedTools "WebSearch,WebFetch,Read,Write,Edit,Glob,Grep,Bash(ls:*),Bash(cat:*),Bash(wc:*),Bash(date:*)"
-            --max-turns 60
+            --max-turns 100
 
       # ------------------------------------------------------------------
       # 4. Verify: 纯 shell 校验产物,不合格直接 fail,后面的提交 / 发信
