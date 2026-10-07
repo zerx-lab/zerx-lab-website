@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "sourceSha": "5ea2c65d05ebf97a540365438b9e9146120fbed6",
-  "sourceFingerprint": "e2fdd616366f033c6cdca58fd3968a93875721429b9c47688bcf171680153af9",
-  "syncedAt": "2026-10-07T03:03:14.492Z",
+  "sourceSha": "fcbcb2a73cb28165596a91a0e76d890877e765c3",
+  "sourceFingerprint": "d9caa779138cd4c0e6cc563fe8d1adc2ff9bb57a14925a97d0666ccab3eadbb1",
+  "syncedAt": "2026-10-07T03:31:25.676Z",
   "release": "2026-06-25",
   "sourceUrl": "https://github.com/LiveBench/new-livebench",
   "unofficial": true,
@@ -2408,7 +2408,7 @@
     },
     {
       "id": "mistral-large-4-high",
-      "name": "Mistral Large 4",
+      "name": "Mistral Large 4 High",
       "organization": "Mistral AI",
       "overall": 70.54,
       "scores": {
