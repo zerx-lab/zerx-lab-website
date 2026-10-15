@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "sourceSha": "76025434edeac9ba5b905765ca01a779101ecbce",
-  "sourceFingerprint": "613eaeae2222f400f80bfd2daa56b8df335d2dbb4fe806fceba38145452f6304",
-  "syncedAt": "2026-10-12T23:19:32.141Z",
+  "sourceSha": "90f8d44da9650d4bf4a8454157947d7b8432551e",
+  "sourceFingerprint": "8d4b1c5936af4b0e510247c091a281e2f61002b7b4394d1fce99c581efb76c13",
+  "syncedAt": "2026-10-15T06:17:26.380Z",
   "release": "2026-06-25",
   "sourceUrl": "https://github.com/LiveBench/new-livebench",
   "unofficial": true,
@@ -3065,6 +3065,50 @@
       "finetune": false,
       "baseId": null,
       "variantGroup": "grok-4.3"
+    },
+    {
+      "id": "nemotron-3.5-lightning-30b-a3b",
+      "name": "Nemotron 3.5 Lightning 30B A3B",
+      "organization": "NVIDIA",
+      "overall": 44.49,
+      "scores": {
+        "Reasoning": 42.87025,
+        "Coding": 45.759499999999996,
+        "Agentic Coding": 19.949666666666666,
+        "Mathematics": 66.54925,
+        "Data Analysis": 43.08733333333333,
+        "Language": 38.289,
+        "IF": 54.94175
+      },
+      "subtasks": {
+        "theory_of_mind": 44.231,
+        "zebra_puzzle": 17.25,
+        "spatial": 92,
+        "logic_with_navigation": 18,
+        "code_generation": 67.606,
+        "code_completion": 23.913,
+        "javascript": 18.182,
+        "typescript": 6.667,
+        "python": 35,
+        "AMPS_Hard": 97,
+        "integrals_with_game": 24,
+        "math_comp": 86.275,
+        "olympiad": 58.922,
+        "consecutive_events": 2.506,
+        "tablejoin": 40.481,
+        "tablereformat": 86.275,
+        "connections": 34,
+        "plot_unscrambling": 22.867,
+        "typos": 58,
+        "paraphrase": 57.317,
+        "simplify": 52.683,
+        "story_generation": 59.35,
+        "summarize": 50.417
+      },
+      "openWeights": true,
+      "finetune": false,
+      "baseId": null,
+      "variantGroup": "nemotron-3.5-lightning-30b-a3b"
     }
   ]
 }
